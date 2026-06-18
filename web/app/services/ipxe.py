@@ -32,6 +32,7 @@ colour --rgb 0x00d2ff 4 || goto styled
 cpair --foreground 7 --background 4 1 || goto styled
 cpair --foreground 6 --background 0 0 || goto styled
 :styled
+console || true
 """
 
 

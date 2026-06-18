@@ -33,6 +33,8 @@ KERNEL_PATTERNS = [
     r".*/bzimage",
 ]
 XEN_PATTERNS = [r"boot/xen\.gz"]
+# XCP-NG UEFI clients chainload this; iPXE's EFI build can't multiboot Xen itself.
+GRUB_EFI_PATTERNS = [r"EFI/xenserver/grubx64\.efi", r".*/grubx64\.efi"]
 INITRD_PATTERNS = [
     r"casper/initrd.*",
     r"live/initrd.*",
@@ -177,8 +179,10 @@ def process_image(image_id: int) -> None:
 
         needs_nfs, guessed_args = _netboot_plan(entries, img.filename, img.id)
 
-        # XCP-NG / XenServer: Xen hypervisor must be loaded via multiboot2.
-        # Extract xen.gz alongside vmlinuz so ipxe.py can reference it.
+        # XCP-NG / XenServer boots the Xen hypervisor via Multiboot2.  iPXE only
+        # supports multiboot in its BIOS build, so BIOS clients multiboot xen.gz
+        # directly while UEFI clients chainload the ISO's grubx64.efi (GRUB does
+        # Multiboot2 under EFI).  Extract both here so ipxe.py can reference them.
         if "install.img" in " ".join(e.lower() for e in entries):
             img.os_family = "xcpng"
             xen = _match(entries, XEN_PATTERNS)
@@ -188,6 +192,19 @@ def process_image(image_id: int) -> None:
                 except subprocess.CalledProcessError as e:
                     img.status = "error"
                     img.message = f"Extraction failed (xen.gz): {e.stderr or e}"
+                    db.commit()
+                    return
+            grub = _match(entries, GRUB_EFI_PATTERNS)
+            if grub:
+                # Shared across XCP-NG images (same bootloader); GRUB's embedded
+                # prefix makes it read /EFI/xenserver/grub.cfg from the same HTTP
+                # root, which ipxe.render() generates.
+                try:
+                    _extract_one(iso, grub,
+                                 config.BOOTROOT_DIR / "EFI" / "xenserver" / "grubx64.efi")
+                except subprocess.CalledProcessError as e:
+                    img.status = "error"
+                    img.message = f"Extraction failed (grubx64.efi): {e.stderr or e}"
                     db.commit()
                     return
 

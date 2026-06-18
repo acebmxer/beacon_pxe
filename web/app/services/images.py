@@ -124,7 +124,10 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
         return False, f"inst.repo={iso_url} ip=dhcp"
     if "install.img" in joined:  # XCP-NG / XenServer — extract ISO tree so installer finds PACKAGES/ over NFS
-        return True, f"xencons=hvc console=hvc0 install nfs:{nfsroot}"
+        # console=tty0 last so the installer TUI renders on the physical VGA
+        # monitor (hvc0 is the Xen hypervisor console, paired with console=vga
+        # on the xen.gz line in ipxe.py).
+        return True, f"xencons=hvc console=hvc0 console=tty0 install nfs:{nfsroot}"
     return False, "ip=dhcp"
 
 

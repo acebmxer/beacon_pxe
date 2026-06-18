@@ -83,7 +83,7 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
                 # iPXE auto-detects multiboot from the image header; there is no
                 # --multiboot2 flag, and module has no --noinit flag.  Passing
                 # either makes the command error out and fall back to the menu.
-                f"kernel {xen} dom0_mem=2048M,max:2048M || goto start\n"
+                f"kernel {xen} dom0_max_vcpus=1-2 dom0_mem=2048M,max:2048M console=vga || goto start\n"
                 f"module {vmlinuz} {args} || goto start\n"
                 f"module {initrd} || goto start\n"
                 f"boot || goto start\n"

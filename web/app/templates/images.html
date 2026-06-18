@@ -69,6 +69,9 @@
             <form class="inline-form" method="post" action="/images/{{ img.id }}/toggle">
               <button class="btn ghost sm" type="submit">{{ 'Hide' if img.enabled else 'Show' }}</button>
             </form>
+            <form class="inline-form" method="post" action="/images/{{ img.id }}/retry">
+              <button class="btn ghost sm" type="submit">Reprocess</button>
+            </form>
             {% endif %}
             {% if img.status in ('error', 'pending') %}
             <form class="inline-form" method="post" action="/images/{{ img.id }}/retry">

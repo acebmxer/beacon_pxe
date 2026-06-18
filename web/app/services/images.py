@@ -32,6 +32,7 @@ KERNEL_PATTERNS = [
     r".*/vmlinuz.*",
     r".*/bzimage",
 ]
+XEN_PATTERNS = [r"boot/xen\.gz"]
 INITRD_PATTERNS = [
     r"casper/initrd.*",
     r"live/initrd.*",
@@ -172,6 +173,21 @@ def process_image(image_id: int) -> None:
             return
 
         needs_nfs, guessed_args = _netboot_plan(entries, img.filename, img.id)
+
+        # XCP-NG / XenServer: Xen hypervisor must be loaded via multiboot2.
+        # Extract xen.gz alongside vmlinuz so ipxe.py can reference it.
+        if "install.img" in " ".join(e.lower() for e in entries):
+            img.os_family = "xcpng"
+            xen = _match(entries, XEN_PATTERNS)
+            if xen:
+                try:
+                    _extract_one(iso, xen, dest_dir / "xen.gz")
+                except subprocess.CalledProcessError as e:
+                    img.status = "error"
+                    img.message = f"Extraction failed (xen.gz): {e.stderr or e}"
+                    db.commit()
+                    return
+
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.
             try:

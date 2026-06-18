@@ -68,16 +68,34 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
     for img in images:
         tag = f"os_{img.id}"
         items.append(f"item {tag}        {img.name}")
-        kernel = f"${{boot-url}}/{img.kernel_path}"
-        initrd = f"${{boot-url}}/{img.initrd_path}"
+        base_url = "${boot-url}"
         args = img.boot_args or ""
-        labels.append(
-            f":{tag}\n"
-            f"echo Booting {img.name} ...\n"
-            f"kernel {kernel} {args}\n"
-            f"initrd {initrd}\n"
-            f"boot || goto start\n"
-        )
+        if img.os_family == "xcpng":
+            # XCP-NG/XenServer boots via Xen multiboot2: xen.gz is the hypervisor,
+            # vmlinuz and install.img are multiboot modules.  boot_args (e.g.
+            # "install nfs:...") go on the vmlinuz module line, not xen.gz.
+            xen_dir = img.kernel_path.rsplit("/", 1)[0]
+            xen = f"{base_url}/{xen_dir}/xen.gz"
+            vmlinuz = f"{base_url}/{img.kernel_path}"
+            initrd = f"{base_url}/{img.initrd_path}"
+            labels.append(
+                f":{tag}\n"
+                f"echo Booting {img.name} ...\n"
+                f"kernel --multiboot2 {xen} dom0_mem=2048M,max:2048M\n"
+                f"module --noinit {vmlinuz} {args}\n"
+                f"module --noinit {initrd}\n"
+                f"boot || goto start\n"
+            )
+        else:
+            kernel = f"{base_url}/{img.kernel_path}"
+            initrd = f"{base_url}/{img.initrd_path}"
+            labels.append(
+                f":{tag}\n"
+                f"echo Booting {img.name} ...\n"
+                f"kernel {kernel} {args}\n"
+                f"initrd {initrd}\n"
+                f"boot || goto start\n"
+            )
     return "\n".join(items), "\n".join(labels)
 
 

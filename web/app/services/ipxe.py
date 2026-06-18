@@ -25,14 +25,13 @@ set boot-url {host_url}
 set server-ip {host}
 set menu-title {title}
 
-# --- Modern look: background image + colour scheme (all best-effort) -------
-console --picture {host_url}/background.png || goto styled
-colour --rgb 0x1a1d29 0 || goto styled
-colour --rgb 0x00d2ff 4 || goto styled
-cpair --foreground 7 --background 4 1 || goto styled
-cpair --foreground 6 --background 0 0 || goto styled
-:styled
-console || true
+# --- Colour scheme (always applied; || true so a missing feature doesn't abort)
+colour --rgb 0x1a1d29 0 || true
+colour --rgb 0x00d2ff 4 || true
+cpair --foreground 7 --background 4 1 || true
+cpair --foreground 6 --background 0 0 || true
+# Background image is best-effort; if unsupported fall back to plain console.
+console --picture {host_url}/background.png || console
 """
 
 

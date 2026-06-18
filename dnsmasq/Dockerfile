@@ -18,6 +18,8 @@ RUN git clone https://github.com/ipxe/ipxe.git /ipxe \
     && git -C /ipxe checkout "$IPXE_REF"
 WORKDIR /ipxe/src
 RUN printf '#!ipxe\ndhcp || dhcp\nchain http://${next-server}/boot.ipxe || shell\n' > chain.ipxe
+# Enable multiboot2 protocol (required for XCP-NG/XenServer Xen hypervisor booting).
+RUN mkdir -p config/local && printf '#define MULTIBOOT2_PROTOCOL\n' > config/local/general.h
 RUN make -j"$(nproc)" EMBED=chain.ipxe bin/undionly.kpxe bin-x86_64-efi/ipxe.efi
 
 # ---------------------------------------------------------------------------

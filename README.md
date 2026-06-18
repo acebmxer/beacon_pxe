@@ -31,19 +31,22 @@ Runs as a small Docker Compose stack.
 
 ## Quick start
 
+Prebuilt images are published to GitHub Container Registry, so you don't need to
+clone the repo or build anything — just grab the compose file and an `.env`:
+
 ```bash
-git clone <this repo> beacon && cd beacon
-./setup.sh
+mkdir beacon && cd beacon
+curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
+curl -o .env https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/.env.example
+# edit .env: set SERVER_IP, BOOT_INTERFACE, ADMIN_PASSWORD (or leave blank), etc.
+docker compose up -d
 ```
 
-`setup.sh` will:
-1. create `.env` (auto-generating the admin password + session secret, and
-   detecting your server IP),
-2. download the iPXE binaries into `tftp/`,
-3. build and start the containers.
+The iPXE binaries, nginx config, and reload script are all baked into the
+images, so the two files above are everything you need.
 
-It prints the admin credentials. If you let the password auto-generate, you can
-also retrieve it later:
+If you left `ADMIN_PASSWORD` blank, a strong password is generated and printed to
+the logs on first start:
 
 ```bash
 docker compose logs web | grep -i "admin password"
@@ -52,25 +55,41 @@ docker compose logs web | grep -i "admin password"
 Then open **http://&lt;server-ip&gt;:8080**, log in, and complete the first-run
 wizard (confirms server IP, interface, DHCP mode).
 
-### Manual start (instead of setup.sh)
+### Cloning the repo instead
+
+If you'd rather clone, `setup.sh` generates `.env` for you (auto-generating the
+admin password + session secret and detecting your server IP), then pulls the
+images and starts the stack:
 
 ```bash
-cp .env.example .env        # edit ADMIN_PASSWORD, IMAGE_PATH, SERVER_IP, etc.
-bash tftp/fetch-ipxe.sh     # download iPXE binaries
-docker compose up -d --build
+git clone https://github.com/acebmxer/beacon_pxe beacon && cd beacon
+./setup.sh
+```
+
+### Building from source (development)
+
+To build the images locally instead of pulling them, use the dev override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
 ---
 
 ## Architecture
 
-| Service   | Image/build | Role | Network |
-|-----------|-------------|------|---------|
-| `web`     | `./web` (FastAPI) | Management UI + API; renders boot configs | port 8080 |
-| `nginx`   | `nginx:alpine`    | Serves boot files to iPXE (`/boot.ipxe`, kernels, initrds, ISOs) | port 80 |
-| `dnsmasq` | `./dnsmasq` (alpine) | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
-| `nfs`     | `./nfs` (alpine)    | Exports each image's live filesystem (read-only) so clients mount it instead of downloading the whole ISO into RAM | **host**, privileged |
-| `reload`  | `docker:cli`      | Restarts dnsmasq when its config is regenerated | host |
+| Service   | Image | Role | Network |
+|-----------|-------|------|---------|
+| `web`     | `beacon-web` (FastAPI) | Management UI + API; renders boot configs | port 8080 |
+| `nginx`   | `beacon-nginx` (nginx:alpine + config) | Serves boot files to iPXE (`/boot.ipxe`, kernels, initrds, ISOs) | port 80 |
+| `dnsmasq` | `beacon-dnsmasq` (alpine + iPXE binaries) | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
+| `nfs`     | `beacon-nfs` (alpine) | Exports each image's live filesystem (read-only) so clients mount it instead of downloading the whole ISO into RAM | **host**, privileged |
+| `reload`  | `beacon-reload` (docker:cli + watch script) | Restarts dnsmasq when its config is regenerated | host |
+
+Images are published to `ghcr.io/acebmxer/beacon-<service>`. The iPXE boot
+binaries (built from source with an embedded chain script), the nginx config,
+and the reload script are baked into their images — nothing is bind-mounted from
+the repo, which is why the stack runs from just `docker-compose.yml` + `.env`.
 
 `dnsmasq` uses **host networking** because DHCP/PXE relies on layer-2 broadcasts
 that don't traverse Docker's bridge network. This is the standard requirement for
@@ -216,9 +235,12 @@ to the real network.)
      covers all guests at once).
   2. **Give the VM an emulated NIC** (e1000/rtl8139) instead of the PV netfront
      device — avoids netback entirely, per-VM.
-  3. **Try an older iPXE** that may not re-trigger the second connect:
-     `IPXE_REF=v1.21.1 bash tftp/build-ipxe.sh` (delete the existing binaries in
-     `tftp/` first). Not guaranteed, since the bug is host-side.
+  3. **Try an older iPXE** that may not re-trigger the second connect. The
+     binaries are built into the `dnsmasq` image from the `IPXE_REF` build arg
+     (default `master`); rebuild it pinned to an older ref:
+     `docker compose -f docker-compose.yml -f docker-compose.dev.yml build --build-arg IPXE_REF=v1.21.1 dnsmasq`
+     then `docker compose up -d dnsmasq`. Not guaranteed, since the bug is
+     host-side.
 
 ## Updating / tearing down
 

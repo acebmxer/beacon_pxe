@@ -2,13 +2,6 @@
 /data/
 .env
 
-# iPXE binaries are fetched by setup.sh / tftp/fetch-ipxe.sh
-/tftp/*.kpxe
-/tftp/*.efi
-
-# Generated at runtime by the web app (contains this host's IP + interface)
-/dnsmasq/dnsmasq.conf
-
 # Python
 __pycache__/
 *.pyc

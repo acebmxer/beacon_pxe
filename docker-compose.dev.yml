@@ -1,0 +1,19 @@
+# Development override: build every image from source instead of pulling from
+# GHCR. Use alongside the main compose file:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Each service keeps the image: tag from docker-compose.yml, so the freshly built
+# image is tagged the same and used in place of the published one.
+
+services:
+  web:
+    build: ./web
+  nginx:
+    build: ./http
+  dnsmasq:
+    build: ./dnsmasq
+  nfs:
+    build: ./nfs
+  reload:
+    build: ./reload

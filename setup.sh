@@ -43,11 +43,9 @@ fi
 
 mkdir -p data data/images
 
-echo "Building iPXE boot binaries (BIOS + UEFI) ..."
-bash tftp/build-ipxe.sh
-
-echo "Building and starting containers ..."
-docker compose up -d --build
+echo "Pulling images and starting containers ..."
+docker compose pull
+docker compose up -d
 
 echo
 echo -e "${GREEN}Done.${NC} Web UI:  http://$(grep '^SERVER_IP=' .env | cut -d= -f2 || echo localhost):$(grep '^WEB_PORT=' .env | cut -d= -f2 || echo 8080)"

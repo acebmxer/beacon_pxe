@@ -26,7 +26,7 @@ set server-ip {host}
 set menu-title {title}
 
 # --- Modern look: background image + colour scheme (all best-effort) -------
-console --picture {host_url}/background.png --left 60 --right 30 --top 40 --bottom 60 || goto styled
+console --picture {host_url}/background.png || goto styled
 colour --rgb 0x1a1d29 0 || goto styled
 colour --rgb 0x00d2ff 4 || goto styled
 cpair --foreground 7 --background 4 1 || goto styled

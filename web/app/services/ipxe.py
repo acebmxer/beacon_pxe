@@ -30,8 +30,8 @@ colour --rgb 0x1a1d29 0 || true
 colour --rgb 0x00d2ff 4 || true
 cpair --foreground 7 --background 4 1 || true
 cpair --foreground 6 --background 0 0 || true
-# Background image is best-effort; if unsupported fall back to plain console.
-console --picture {host_url}/background.png || console
+# Background image is best-effort; failure must not abort the script.
+console --picture {host_url}/background.png || true
 """
 
 
@@ -80,9 +80,9 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
             labels.append(
                 f":{tag}\n"
                 f"echo Booting {img.name} ...\n"
-                f"kernel --multiboot2 {xen} dom0_mem=2048M,max:2048M\n"
-                f"module --noinit {vmlinuz} {args}\n"
-                f"module --noinit {initrd}\n"
+                f"kernel --multiboot2 {xen} dom0_mem=2048M,max:2048M || goto start\n"
+                f"module --noinit {vmlinuz} {args} || goto start\n"
+                f"module --noinit {initrd} || goto start\n"
                 f"boot || goto start\n"
             )
         else:
@@ -91,8 +91,8 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
             labels.append(
                 f":{tag}\n"
                 f"echo Booting {img.name} ...\n"
-                f"kernel {kernel} {args}\n"
-                f"initrd {initrd}\n"
+                f"kernel {kernel} {args} || goto start\n"
+                f"initrd {initrd} || goto start\n"
                 f"boot || goto start\n"
             )
     return "\n".join(items), "\n".join(labels)

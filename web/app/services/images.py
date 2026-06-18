@@ -34,7 +34,11 @@ KERNEL_PATTERNS = [
 ]
 XEN_PATTERNS = [r"boot/xen\.gz"]
 # XCP-NG UEFI clients chainload this; iPXE's EFI build can't multiboot Xen itself.
-GRUB_EFI_PATTERNS = [r"EFI/xenserver/grubx64\.efi", r".*/grubx64\.efi"]
+# (;N) tolerates the ISO9660 version suffix bsdtar may surface, as install.img does.
+GRUB_EFI_PATTERNS = [
+    r"EFI/xenserver/grubx64\.efi(;[0-9]+)?",
+    r".*/grubx64\.efi(;[0-9]+)?",
+]
 INITRD_PATTERNS = [
     r"casper/initrd.*",
     r"live/initrd.*",
@@ -207,6 +211,14 @@ def process_image(image_id: int) -> None:
                     img.message = f"Extraction failed (grubx64.efi): {e.stderr or e}"
                     db.commit()
                     return
+            else:
+                # Without it, UEFI clients can't boot XCP-NG (they chainload it).
+                # Surface this instead of silently producing a dead EFI entry.
+                img.status = "error"
+                img.message = ("Could not find grubx64.efi in the ISO (looked for "
+                               "EFI/xenserver/grubx64.efi). UEFI XCP-NG boot needs it.")
+                db.commit()
+                return
 
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.

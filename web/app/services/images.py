@@ -40,7 +40,7 @@ INITRD_PATTERNS = [
     r"arch/boot/x86_64/initramfs.*",
     r"boot/initramfs.*",
     r"boot/initrd.*",
-    r"boot/install\.img",  # XCP-NG / XenServer installer
+    r"install\.img(;[0-9]+)?",  # XCP-NG / XenServer — root-level, ISO9660 ;1 suffix optional
     r".*/initrd.*",
     r".*/initramfs.*",
 ]
@@ -122,7 +122,7 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
         return True, f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
         return False, f"inst.repo={iso_url} ip=dhcp"
-    if "packages.main/" in joined:  # XCP-NG / XenServer — packages served from extracted NFS tree
+    if "install.img" in joined:  # XCP-NG / XenServer — extract ISO tree so installer finds PACKAGES/ over NFS
         return True, f"install nfs:{nfsroot}"
     return False, "ip=dhcp"
 

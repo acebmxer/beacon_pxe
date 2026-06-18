@@ -80,9 +80,12 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
             labels.append(
                 f":{tag}\n"
                 f"echo Booting {img.name} ...\n"
-                f"kernel --multiboot2 {xen} dom0_mem=2048M,max:2048M || goto start\n"
-                f"module --noinit {vmlinuz} {args} || goto start\n"
-                f"module --noinit {initrd} || goto start\n"
+                # iPXE auto-detects multiboot from the image header; there is no
+                # --multiboot2 flag, and module has no --noinit flag.  Passing
+                # either makes the command error out and fall back to the menu.
+                f"kernel {xen} dom0_mem=2048M,max:2048M || goto start\n"
+                f"module {vmlinuz} {args} || goto start\n"
+                f"module {initrd} || goto start\n"
                 f"boot || goto start\n"
             )
         else:

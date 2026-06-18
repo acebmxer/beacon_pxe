@@ -18,8 +18,11 @@ RUN git clone https://github.com/ipxe/ipxe.git /ipxe \
     && git -C /ipxe checkout "$IPXE_REF"
 WORKDIR /ipxe/src
 RUN printf '#!ipxe\ndhcp || dhcp\nchain http://${next-server}/boot.ipxe || shell\n' > chain.ipxe
-# Enable multiboot2 (required for XCP-NG/XenServer Xen hypervisor booting).
-RUN mkdir -p config/local && printf '#define IMAGE_MULTIBOOT2\n' > config/local/general.h
+# Enable multiboot2 (required for the XCP-NG/XenServer Xen hypervisor) and gzip
+# image support (xen.gz ships gzip-compressed; without this iPXE can't reach its
+# multiboot header and the kernel command fails back to the menu).
+RUN mkdir -p config/local \
+    && printf '#define IMAGE_MULTIBOOT2\n#define IMAGE_GZIP\n' > config/local/general.h
 RUN make -j"$(nproc)" EMBED=chain.ipxe bin/undionly.kpxe bin-x86_64-efi/ipxe.efi
 
 # ---------------------------------------------------------------------------

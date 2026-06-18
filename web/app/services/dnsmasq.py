@@ -93,5 +93,6 @@ def render(db: Session) -> str:
     settings = all_settings(db)
     text = build_config(settings)
     out = config.DNSMASQ_DIR / "dnsmasq.conf"
-    out.write_text(text)
+    if not out.exists() or out.read_text() != text:
+        out.write_text(text)
     return text

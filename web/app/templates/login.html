@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block bare %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand"><span class="logo">B</span><span>Beacon</span></div>
+    <div class="tag">Sign in to the management console</div>
+    {% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" autofocus required>
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+      <button class="btn" type="submit">Sign in</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

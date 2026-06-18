@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block heading %}OS Images{% endblock %}
+{% block content %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+
+{% if user.is_admin %}
+<div class="card">
+  <h2>Upload an image</h2>
+  <div class="sub">Upload an <b>ISO</b> file. Linux ISOs are auto-processed: the kernel
+    and initrd are extracted and a boot menu entry is created.</div>
+  <form method="post" action="/images/upload" enctype="multipart/form-data">
+    <div class="row">
+      <div>
+        <label for="name">Display name (optional)</label>
+        <input id="name" name="name" placeholder="e.g. Ubuntu 24.04 Live">
+      </div>
+      <div>
+        <label for="file">ISO file</label>
+        <input id="file" name="file" type="file" accept=".iso" required>
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn" type="submit">Upload &amp; process</button>
+    </div>
+  </form>
+  <div class="alert info" style="margin-top:16px;">
+    <b>Format note:</b> only <span class="mono">.iso</span> is accepted.
+    <b>Windows ISOs</b> are stored but not yet network-bootable (they require
+    wimboot/WinPE — see the README). Booting a raw ISO whole isn't used; the
+    kernel/initrd are extracted and served over HTTP for reliable netboot.
+  </div>
+</div>
+{% endif %}
+
+<div class="card" style="margin-top:18px;">
+  <h2>Images</h2>
+  <div class="sub">{{ images|length }} total</div>
+  {% if not images %}
+    <p class="muted">No images yet.{% if user.is_admin %} Upload one above.{% endif %}</p>
+  {% else %}
+  <table>
+    <thead><tr><th>Name</th><th>OS</th><th>Status</th><th>In menu</th><th>Boot args</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for img in images %}
+      <tr>
+        <td><b>{{ img.name }}</b><br><span class="muted mono">{{ img.filename }}</span></td>
+        <td>{{ img.os_family }}</td>
+        <td>
+          <span class="badge {{ img.status }}">{{ img.status }}</span>
+          {% if img.message %}<br><span class="muted">{{ img.message }}</span>{% endif %}
+        </td>
+        <td>
+          {% if img.status == 'ready' %}
+            <span class="badge {{ 'ready' if img.enabled else 'off' }}">{{ 'shown' if img.enabled else 'hidden' }}</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td>
+          {% if user.is_admin and img.status == 'ready' %}
+          <form class="inline-form" method="post" action="/images/{{ img.id }}/args">
+            <input class="mono" name="boot_args" value="{{ img.boot_args }}" style="min-width:220px;">
+            <button class="btn ghost sm" type="submit">Save</button>
+          </form>
+          {% else %}<span class="muted mono">{{ img.boot_args or '—' }}</span>{% endif %}
+        </td>
+        {% if user.is_admin %}
+        <td>
+          <div class="toolbar">
+            {% if img.status == 'ready' %}
+            <form class="inline-form" method="post" action="/images/{{ img.id }}/toggle">
+              <button class="btn ghost sm" type="submit">{{ 'Hide' if img.enabled else 'Show' }}</button>
+            </form>
+            {% endif %}
+            {% if img.status in ('error', 'pending') %}
+            <form class="inline-form" method="post" action="/images/{{ img.id }}/retry">
+              <button class="btn ghost sm" type="submit">Retry</button>
+            </form>
+            {% endif %}
+            <form class="inline-form" method="post" action="/images/{{ img.id }}/delete"
+                  onsubmit="return confirm('Delete {{ img.name }} and its boot files?');">
+              <button class="btn danger sm" type="submit">Delete</button>
+            </form>
+          </div>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+{% endblock %}

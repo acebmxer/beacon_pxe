@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="en" data-theme="{{ theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}{{ menu_title }}{% endblock %} · Beacon</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+{% if user and not hide_chrome %}
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <span class="logo">PX</span><span>PXE Server</span>
+    </div>
+    <nav class="nav">
+      <a href="/" class="{{ 'active' if active=='dashboard' }}"><span class="ico">▣</span><span>Dashboard</span></a>
+      <a href="/images" class="{{ 'active' if active=='images' }}"><span class="ico">💿</span><span>Images</span></a>
+      {% if user.is_admin %}
+      <a href="/settings" class="{{ 'active' if active=='settings' }}"><span class="ico">⚙</span><span>Server Settings</span></a>
+      <a href="/users" class="{{ 'active' if active=='users' }}"><span class="ico">👥</span><span>User Accounts</span></a>
+      {% endif %}
+      <a href="/profile" class="{{ 'active' if active=='profile' }}"><span class="ico">🔑</span><span>My Profile</span></a>
+    </nav>
+    <div class="sidebar-foot">
+      <a class="btn ghost sm" href="/logout" style="width:100%;justify-content:center;">Log out</a>
+    </div>
+  </aside>
+
+  <div class="content">
+    <div class="topbar">
+      <h1>{% block heading %}{{ menu_title }}{% endblock %}</h1>
+      <div class="right">
+        <form class="inline-form" method="post" action="/theme">
+          <button class="btn ghost sm" type="submit" title="Toggle light/dark">
+            {{ '☀ Light' if theme=='dark' else '🌙 Dark' }}
+          </button>
+        </form>
+        <span class="user-chip">Signed in as <b>{{ user.username }}</b>
+          <span class="badge role-{{ user.role }}">{{ user.role }}</span>
+        </span>
+      </div>
+    </div>
+    <main>
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</div>
+{% else %}
+  {% block bare %}{% endblock %}
+{% endif %}
+</body>
+</html>

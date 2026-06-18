@@ -1,0 +1,35 @@
+{% extends "base.html" %}
+{% block heading %}Dashboard{% endblock %}
+{% block content %}
+<div class="grid cols-3">
+  <div class="card stat"><div class="num">{{ stats.images }}</div><div class="label">OS images</div></div>
+  <div class="card stat"><div class="num">{{ stats.ready }}</div><div class="label">Bootable &amp; ready</div></div>
+  <div class="card stat"><div class="num">{{ stats.users }}</div><div class="label">User accounts</div></div>
+</div>
+
+<div class="grid cols-2" style="margin-top:18px;">
+  <div class="card">
+    <h2>Boot service</h2>
+    <div class="sub">Current PXE configuration</div>
+    <table>
+      <tr><td>Server IP</td><td class="mono">{{ settings.server_ip or '—' }}</td></tr>
+      <tr><td>Boot interface</td><td class="mono">{{ settings.boot_interface }}</td></tr>
+      <tr><td>DHCP mode</td><td>
+        <span class="badge {{ 'ready' if settings.dhcp_mode=='proxy' else 'pending' }}">
+          {{ 'proxyDHCP' if settings.dhcp_mode=='proxy' else 'full DHCP' }}</span></td></tr>
+      <tr><td>DHCP service</td><td>{{ 'enabled' if settings.svc_dhcp=='1' else 'disabled' }}</td></tr>
+      <tr><td>TFTP service</td><td>{{ 'enabled' if settings.svc_tftp=='1' else 'disabled' }}</td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>How clients boot</h2>
+    <div class="sub">Single menu, both firmware types</div>
+    <p class="muted">PXE clients receive the matching iPXE binary for their firmware
+      (BIOS → <span class="mono">undionly.kpxe</span>, UEFI → <span class="mono">ipxe.efi</span>),
+      then load one shared menu:</p>
+    <p class="mono">http://{{ settings.server_ip or 'SERVER_IP' }}/boot.ipxe</p>
+    <p class="muted">Upload an ISO under <a href="/images">Images</a> and it appears in the
+      boot menu automatically once its kernel/initrd are extracted.</p>
+  </div>
+</div>
+{% endblock %}

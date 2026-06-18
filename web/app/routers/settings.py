@@ -1,0 +1,55 @@
+"""Server settings: DHCP mode, services, boot menu, theme."""
+from fastapi import APIRouter, Depends, Form, Request
+from fastapi.responses import RedirectResponse
+from sqlalchemy.orm import Session
+
+from ..db import get_db
+from ..deps import require_admin, require_user, render
+from ..models import User
+from ..store import all_settings, set_setting
+from ..services import dnsmasq, ipxe
+
+router = APIRouter()
+
+# Settings the form is allowed to write, with simple coercion.
+BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http"}
+TEXT_KEYS = {
+    "server_ip", "boot_interface", "dhcp_mode", "dhcp_range_start",
+    "dhcp_range_end", "dhcp_subnet_mask", "dhcp_gateway", "dhcp_dns",
+    "menu_title", "theme",
+}
+
+
+@router.get("/settings")
+def settings_page(request: Request, user: User = Depends(require_admin),
+                  db: Session = Depends(get_db)):
+    return render(request, db, "settings.html",
+                  active="settings", settings=all_settings(db), saved=False)
+
+
+@router.post("/settings")
+async def settings_save(request: Request, user: User = Depends(require_admin),
+                        db: Session = Depends(get_db)):
+    form = await request.form()
+    for key in TEXT_KEYS:
+        if key in form:
+            set_setting(db, key, str(form[key]).strip())
+    # Checkboxes only appear in the form when checked.
+    for key in BOOL_KEYS:
+        set_setting(db, key, "1" if key in form else "0")
+
+    # Regenerate boot configs; the reload sidecar restarts dnsmasq.
+    dnsmasq.render(db)
+    ipxe.render(db)
+    return render(request, db, "settings.html",
+                  active="settings", settings=all_settings(db), saved=True)
+
+
+@router.post("/theme")
+def toggle_theme(request: Request, user: User = Depends(require_user),
+                 db: Session = Depends(get_db)):
+    """Quick global light/dark toggle from the navbar."""
+    current = all_settings(db).get("theme", "dark")
+    set_setting(db, "theme", "light" if current == "dark" else "dark")
+    referer = request.headers.get("referer", "/")
+    return RedirectResponse(referer, status_code=303)

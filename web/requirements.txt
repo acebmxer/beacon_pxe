@@ -1,0 +1,10 @@
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+jinja2==3.1.5
+sqlalchemy==2.0.36
+passlib[bcrypt]==1.7.4
+# Pinned to 4.0.x: passlib 1.7.4 can't read the version of bcrypt >=4.1, which
+# emits a noisy (harmless) warning. 4.0.1 is detected cleanly.
+bcrypt==4.0.1
+python-multipart==0.0.20
+itsdangerous==2.2.0

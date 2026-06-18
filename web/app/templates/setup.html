@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+{% block bare %}
+<div class="auth-wrap">
+  <div class="auth-card" style="max-width:560px;">
+    <div class="brand"><span class="logo">PX</span><span>First-run setup</span></div>
+    <div class="tag">Confirm the network details for your PXE boot server</div>
+
+    <form method="post" action="/setup">
+      <label for="server_ip">Server IP (the address clients will reach this box at)</label>
+      <input id="server_ip" name="server_ip" value="{{ settings.server_ip }}" placeholder="192.168.1.10" required>
+
+      <label for="boot_interface">Network interface for DHCP/PXE</label>
+      <input id="boot_interface" name="boot_interface" value="{{ settings.boot_interface }}" placeholder="eth0">
+
+      <label for="menu_title">Boot menu title</label>
+      <input id="menu_title" name="menu_title" value="{{ settings.menu_title }}">
+
+      <label for="dhcp_mode">DHCP mode</label>
+      <select id="dhcp_mode" name="dhcp_mode">
+        <option value="proxy" {{ 'selected' if settings.dhcp_mode=='proxy' }}>proxyDHCP — recommended, runs beside your router/existing DHCP</option>
+        <option value="full" {{ 'selected' if settings.dhcp_mode=='full' }}>Full DHCP — this box assigns IP addresses</option>
+      </select>
+
+      <div class="row" style="margin-top:6px;">
+        <div><label>DHCP range start (full mode)</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}"></div>
+        <div><label>DHCP range end (full mode)</label><input name="dhcp_range_end" value="{{ settings.dhcp_range_end }}"></div>
+      </div>
+      <div class="row">
+        <div><label>Gateway (full mode)</label><input name="dhcp_gateway" value="{{ settings.dhcp_gateway }}"></div>
+        <div><label>DNS (full mode)</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}"></div>
+      </div>
+
+      <div class="alert info" style="margin-top:18px;">
+        <b>Image storage</b> is the host folder mounted at <span class="mono">/images</span>
+        (set via <span class="mono">IMAGE_PATH</span> in <span class="mono">.env</span>).
+        To use NFS/SMB, mount the share to that host path — see the README.
+      </div>
+
+      <button class="btn" type="submit">Finish setup</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,89 @@
+# Beacon — Docker Compose stack
+#
+# Services:
+#   web     - FastAPI management UI + API (auth, settings, images, users)
+#   nginx   - HTTP boot root served to iPXE clients (menu, kernels, initrds, ISOs)
+#   dnsmasq - proxyDHCP / DHCP + TFTP (serves the iPXE NBP); HOST networking
+#   reload  - watches the generated dnsmasq config and restarts dnsmasq on change
+#
+# Shared state lives in ./data (sqlite + generated configs), ./tftp (iPXE bins),
+# and a "bootroot" volume that web writes and nginx serves.
+
+services:
+  web:
+    build: ./web
+    container_name: beacon_web
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATA_DIR: /data
+      BOOTROOT_DIR: /bootroot
+      TFTP_DIR: /tftp
+      IMAGE_DIR: /images
+      DNSMASQ_DIR: /dnsmasq
+      NFS_DIR: /nfs
+    volumes:
+      - ./data:/data
+      - bootroot:/bootroot
+      - ./tftp:/tftp
+      - ${IMAGE_PATH:-./data/images}:/images
+      - ./dnsmasq:/dnsmasq
+      # Live filesystems extracted from ISOs, served to clients by the nfs service.
+      - nfsroot:/nfs
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+
+  nginx:
+    image: nginx:alpine
+    container_name: beacon_nginx
+    restart: unless-stopped
+    volumes:
+      - ./http/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - bootroot:/usr/share/nginx/bootroot:ro
+      # Served at /images/ via an alias (kept out of the read-only bootroot mount).
+      - ${IMAGE_PATH:-./data/images}:/srv/images:ro
+    ports:
+      - "80:80"
+
+  dnsmasq:
+    build: ./dnsmasq
+    container_name: beacon_dnsmasq
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+    volumes:
+      - ./dnsmasq:/dnsmasq:ro
+      - ./tftp:/tftp:ro
+
+  # Serves each image's live filesystem (extracted from its ISO) over NFS so
+  # clients mount it on demand instead of downloading the whole ISO into RAM.
+  # Needs host networking + privileged for the in-kernel NFS server; the host
+  # must provide the nfsd kernel module (standard on Linux).
+  nfs:
+    build: ./nfs
+    container_name: beacon_nfs
+    restart: unless-stopped
+    network_mode: host
+    privileged: true
+    volumes:
+      - nfsroot:/nfs:ro
+      - /lib/modules:/lib/modules:ro
+
+  # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker
+  # socket into the web app: this sidecar owns the privileged restart instead.
+  reload:
+    image: docker:cli
+    container_name: beacon_reload
+    restart: unless-stopped
+    entrypoint: ["/bin/sh", "/reload.sh"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./dnsmasq:/dnsmasq:ro
+      - ./reload/reload.sh:/reload.sh:ro
+    depends_on:
+      - dnsmasq
+
+volumes:
+  bootroot:
+  nfsroot:

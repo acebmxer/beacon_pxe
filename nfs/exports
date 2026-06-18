@@ -1,0 +1,11 @@
+# GENERATED boot images are served read-only to PXE clients.
+#
+# A single static export of the parent directory is enough: each image lives in
+# a subdirectory /nfs/<image-id>, and NFSv3 clients can mount any subdirectory
+# of an exported tree (the initramfs boots with nfsroot=<server>:/nfs/<id>).
+#
+#   ro                 clients never write the live filesystem
+#   no_root_squash     the live OS expects to read files owned by root
+#   insecure           the klibc initramfs mounter uses source ports >1023
+#   no_subtree_check   standard for whole-directory exports
+/nfs *(ro,sync,no_subtree_check,no_root_squash,insecure)

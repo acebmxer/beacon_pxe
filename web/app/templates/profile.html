@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block heading %}My Profile{% endblock %}
+{% block content %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
+
+<div class="grid cols-2">
+  <div class="card">
+    <h2>Account</h2>
+    <div class="sub">Your account details</div>
+    <table>
+      <tr><td>Username</td><td><b>{{ user.username }}</b></td></tr>
+      <tr><td>Account type</td><td><span class="badge role-{{ user.role }}">{{ user.role }}</span></td></tr>
+    </table>
+  </div>
+  <div class="card">
+    <h2>Change password</h2>
+    <div class="sub">Update your own password</div>
+    <form method="post" action="/profile/password">
+      <label for="current_password">Current password</label>
+      <input id="current_password" name="current_password" type="password" required>
+      <label for="new_password">New password</label>
+      <input id="new_password" name="new_password" type="password" required>
+      <div class="toolbar" style="margin-top:16px;"><button class="btn" type="submit">Update password</button></div>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block heading %}User Accounts{% endblock %}
+{% block content %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if ok %}<div class="alert ok">{{ ok }}</div>{% endif %}
+
+<div class="card">
+  <h2>Create user</h2>
+  <div class="sub">Admins can manage everyone. Regular users can only edit their own profile.</div>
+  <form method="post" action="/users/create">
+    <div class="row">
+      <div><label for="username">Username</label><input id="username" name="username" required></div>
+      <div><label for="password">Password</label><input id="password" name="password" type="password" required></div>
+      <div>
+        <label for="role">Account type</label>
+        <select id="role" name="role">
+          <option value="user">User</option>
+          <option value="admin">Admin</option>
+        </select>
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:16px;"><button class="btn" type="submit">Create account</button></div>
+  </form>
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <h2>Accounts</h2>
+  <div class="sub">{{ users|length }} total</div>
+  <table>
+    <thead><tr><th>Username</th><th>Type</th><th>Reset password</th><th>Role</th><th></th></tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td><b>{{ u.username }}</b>{% if u.id == user.id %} <span class="muted">(you)</span>{% endif %}</td>
+        <td><span class="badge role-{{ u.role }}">{{ u.role }}</span></td>
+        <td>
+          <form class="inline-form" method="post" action="/users/{{ u.id }}/reset">
+            <input name="password" type="password" placeholder="new password" required style="min-width:150px;">
+            <button class="btn ghost sm" type="submit">Reset</button>
+          </form>
+        </td>
+        <td>
+          <form class="inline-form" method="post" action="/users/{{ u.id }}/role">
+            <select name="role" onchange="this.form.submit()">
+              <option value="user" {{ 'selected' if u.role=='user' }}>user</option>
+              <option value="admin" {{ 'selected' if u.role=='admin' }}>admin</option>
+            </select>
+          </form>
+        </td>
+        <td>
+          {% if u.id != user.id %}
+          <form class="inline-form" method="post" action="/users/{{ u.id }}/delete"
+                onsubmit="return confirm('Delete user {{ u.username }}?');">
+            <button class="btn danger sm" type="submit">Delete</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

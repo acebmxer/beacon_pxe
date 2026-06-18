@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block heading %}Server Settings{% endblock %}
+{% block content %}
+{% if saved %}<div class="alert ok">Settings saved. dnsmasq will reload automatically.</div>{% endif %}
+
+<form method="post" action="/settings">
+  <div class="card">
+    <h2>Network &amp; boot</h2>
+    <div class="sub">Identity of this server on the LAN</div>
+    <div class="row">
+      <div>
+        <label for="server_ip">Server IP (reachable by clients)</label>
+        <input id="server_ip" name="server_ip" value="{{ settings.server_ip }}" placeholder="192.168.1.10">
+      </div>
+      <div>
+        <label for="boot_interface">Boot interface</label>
+        <input id="boot_interface" name="boot_interface" value="{{ settings.boot_interface }}" placeholder="eth0">
+      </div>
+      <div>
+        <label for="menu_title">Boot menu title</label>
+        <input id="menu_title" name="menu_title" value="{{ settings.menu_title }}">
+      </div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-top:18px;">
+    <h2>DHCP</h2>
+    <div class="sub">proxyDHCP runs safely beside an existing DHCP server. Full DHCP makes this box assign IP addresses too.</div>
+    <label for="dhcp_mode">DHCP mode</label>
+    <select id="dhcp_mode" name="dhcp_mode">
+      <option value="proxy" {{ 'selected' if settings.dhcp_mode=='proxy' }}>proxyDHCP (recommended — beside existing DHCP)</option>
+      <option value="full" {{ 'selected' if settings.dhcp_mode=='full' }}>Full DHCP (this server assigns addresses)</option>
+    </select>
+    <div class="row" style="margin-top:6px;">
+      <div><label>Range start</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}"></div>
+      <div><label>Range end</label><input name="dhcp_range_end" value="{{ settings.dhcp_range_end }}"></div>
+      <div><label>Subnet mask</label><input name="dhcp_subnet_mask" value="{{ settings.dhcp_subnet_mask }}"></div>
+    </div>
+    <div class="row">
+      <div><label>Gateway</label><input name="dhcp_gateway" value="{{ settings.dhcp_gateway }}"></div>
+      <div><label>DNS server</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}"></div>
+    </div>
+    <p class="muted">Range/gateway/DNS apply only in <b>Full DHCP</b> mode.</p>
+  </div>
+
+  <div class="card" style="margin-top:18px;">
+    <h2>Services</h2>
+    <div class="sub">Enable or disable individual boot services</div>
+    <div class="checkbox"><input type="checkbox" id="svc_dhcp" name="svc_dhcp" {{ 'checked' if settings.svc_dhcp=='1' }}><label for="svc_dhcp">DHCP / proxyDHCP</label></div>
+    <div class="checkbox"><input type="checkbox" id="svc_tftp" name="svc_tftp" {{ 'checked' if settings.svc_tftp=='1' }}><label for="svc_tftp">TFTP (serves iPXE binaries)</label></div>
+    <div class="checkbox"><input type="checkbox" id="svc_http" name="svc_http" {{ 'checked' if settings.svc_http=='1' }}><label for="svc_http">HTTP boot files (informational — served by nginx)</label></div>
+  </div>
+
+  <div class="card" style="margin-top:18px;">
+    <h2>Appearance</h2>
+    <label for="theme">Theme</label>
+    <select id="theme" name="theme">
+      <option value="dark" {{ 'selected' if settings.theme=='dark' }}>Dark</option>
+      <option value="light" {{ 'selected' if settings.theme=='light' }}>Light</option>
+    </select>
+  </div>
+
+  <div class="toolbar" style="margin-top:20px;">
+    <button class="btn" type="submit">Save settings</button>
+  </div>
+</form>
+{% endblock %}

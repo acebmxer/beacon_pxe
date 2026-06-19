@@ -42,7 +42,7 @@ class Image(Base):
     name: Mapped[str] = mapped_column(String(128))
     filename: Mapped[str] = mapped_column(String(255))          # ISO file on disk
     os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows
-    # Extraction lifecycle: pending|ready|error|unsupported
+    # Extraction lifecycle: pending|processing|ready|error|unsupported
     status: Mapped[str] = mapped_column(String(16), default="pending")
     message: Mapped[str] = mapped_column(Text, default="")      # error/info detail
     kernel_path: Mapped[str] = mapped_column(String(255), default="")   # rel to bootroot

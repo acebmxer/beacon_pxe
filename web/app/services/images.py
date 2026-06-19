@@ -139,6 +139,9 @@ def process_image(image_id: int) -> None:
         img = db.get(Image, image_id)
         if img is None:
             return
+        # Mark active extraction so the UI can distinguish "queued" from "working".
+        img.status = "processing"
+        db.commit()
         iso = iso_path(img.filename)
         try:
             entries = _list_iso(iso)

@@ -29,6 +29,13 @@ def images_page(request: Request, user: User = Depends(require_user),
     return render(request, db, "images.html", active="images", images=items)
 
 
+@router.get("/images/status")
+def images_status(user: User = Depends(require_user), db: Session = Depends(get_db)):
+    """Lightweight JSON snapshot the images page polls while extraction runs."""
+    items = db.execute(select(Image)).scalars().all()
+    return [{"id": i.id, "status": i.status, "message": i.message} for i in items]
+
+
 @router.post("/images/upload")
 async def upload(request: Request, background: BackgroundTasks,
                  user: User = Depends(require_admin),

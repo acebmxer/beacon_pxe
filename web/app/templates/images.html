@@ -8,7 +8,7 @@
   <h2>Upload an image</h2>
   <div class="sub">Upload an <b>ISO</b> file. Linux ISOs are auto-processed: the kernel
     and initrd are extracted and a boot menu entry is created.</div>
-  <form method="post" action="/images/upload" enctype="multipart/form-data">
+  <form id="upload-form" method="post" action="/images/upload" enctype="multipart/form-data">
     <div class="row">
       <div>
         <label for="name">Display name (optional)</label>
@@ -20,8 +20,13 @@
       </div>
     </div>
     <div class="toolbar" style="margin-top:16px;">
-      <button class="btn" type="submit">Upload &amp; process</button>
+      <button class="btn" id="upload-btn" type="submit">Upload &amp; process</button>
     </div>
+    <div class="progress" id="upload-progress">
+      <div class="bar-track"><div class="bar-fill" id="upload-bar"></div></div>
+      <div class="bar-label" id="upload-label">Uploading…</div>
+    </div>
+    <div class="alert error" id="upload-error" style="display:none;margin-top:14px;"></div>
   </form>
   <div class="alert info" style="margin-top:16px;">
     <b>Format note:</b> only <span class="mono">.iso</span> is accepted.
@@ -42,7 +47,7 @@
     <thead><tr><th>Name</th><th>OS</th><th>Status</th><th>In menu</th><th>Boot args</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
     <tbody>
     {% for img in images %}
-      <tr>
+      <tr data-image-id="{{ img.id }}" data-status="{{ img.status }}">
         <td><b>{{ img.name }}</b><br><span class="muted mono">{{ img.filename }}</span></td>
         <td>{{ img.os_family }}</td>
         <td>
@@ -91,4 +96,84 @@
   </table>
   {% endif %}
 </div>
+
+<script>
+(function () {
+  // --- Upload with a live progress bar (plain form POST gives no feedback) ---
+  var form = document.getElementById("upload-form");
+  if (form) {
+    var btn = document.getElementById("upload-btn");
+    var wrap = document.getElementById("upload-progress");
+    var bar = document.getElementById("upload-bar");
+    var label = document.getElementById("upload-label");
+    var errBox = document.getElementById("upload-error");
+
+    form.addEventListener("submit", function (e) {
+      var fileInput = form.querySelector('input[type="file"]');
+      if (!fileInput || !fileInput.files.length) return;  // let native required kick in
+
+      var fname = fileInput.files[0].name.toLowerCase();
+      if (!fname.endsWith(".iso")) {
+        e.preventDefault();
+        errBox.textContent = "Only .iso files are supported. See the README for why.";
+        errBox.style.display = "block";
+        return;
+      }
+
+      e.preventDefault();
+      errBox.style.display = "none";
+      var xhr = new XMLHttpRequest();
+      xhr.open("POST", form.action);
+      xhr.upload.addEventListener("progress", function (ev) {
+        if (!ev.lengthComputable) return;
+        var pct = Math.round((ev.loaded / ev.total) * 100);
+        bar.style.width = pct + "%";
+        label.textContent = "Uploading… " + pct + "%";
+      });
+      xhr.addEventListener("load", function () {
+        bar.style.width = "100%";
+        label.textContent = "Upload complete — processing…";
+        // Reload to the images list; the row will show "processing" and poll below.
+        window.location = "/images";
+      });
+      xhr.addEventListener("error", function () {
+        btn.disabled = false;
+        errBox.textContent = "Upload failed. Please try again.";
+        errBox.style.display = "block";
+      });
+      btn.disabled = true;
+      wrap.style.display = "block";
+      bar.style.width = "0%";
+      label.textContent = "Uploading…";
+      xhr.send(new FormData(form));
+    });
+  }
+
+  // --- Poll while any image is still extracting, refresh when it settles ---
+  var rows = Array.prototype.slice.call(
+    document.querySelectorAll("tr[data-image-id]"));
+  var transient = function (s) { return s === "pending" || s === "processing"; };
+  if (!rows.some(function (r) { return transient(r.dataset.status); })) return;
+
+  var initial = {};
+  rows.forEach(function (r) { initial[r.dataset.imageId] = r.dataset.status; });
+
+  var tick = function () {
+    fetch("/images/status", { headers: { "Accept": "application/json" } })
+      .then(function (res) { return res.ok ? res.json() : null; })
+      .then(function (items) {
+        if (items) {
+          var changed = items.some(function (it) {
+            var id = String(it.id);
+            return id in initial && initial[id] !== it.status;
+          });
+          if (changed) { window.location.reload(); return; }
+        }
+        setTimeout(tick, 2500);
+      })
+      .catch(function () { setTimeout(tick, 2500); });
+  };
+  setTimeout(tick, 2500);
+})();
+</script>
 {% endblock %}

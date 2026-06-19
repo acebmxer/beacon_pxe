@@ -68,6 +68,21 @@ exit
 # silently drops to a maintenance shell instead of drawing its UI.
 XEN_ARGS = "dom0_max_vcpus=1-16 dom0_mem=max:8192M console=vga"
 
+# Default dom0 (vmlinuz) args for XCP-NG installs.  vga=normal fb=false disables
+# the dom0 framebuffer, which otherwise hangs the installer right after GRUB on
+# AMD Ryzen APUs whose shared GPU memory sits above 4G (no display, no UI).  It
+# is harmless on Intel iGPUs, so we apply it by default.  See xcp-ng docs:
+# troubleshooting/installation-upgrade ("installer starts booting then hangs").
+XCPNG_DOM0_ARGS = "vga=normal fb=false"
+
+
+def _xcpng_dom0_args(boot_args: str) -> str:
+    """Merge the per-image boot_args with the default dom0 framebuffer args,
+    without duplicating tokens the user already set themselves."""
+    user = boot_args.split()
+    defaults = [tok for tok in XCPNG_DOM0_ARGS.split() if tok not in user]
+    return " ".join(user + defaults).strip()
+
 
 def _image_entries(images: list[Image]) -> tuple[str, str]:
     """Return (menu items, boot labels) for ready, enabled images."""
@@ -88,6 +103,7 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
             xen = f"{base_url}/{xen_dir}/xen.gz"
             vmlinuz = f"{base_url}/{img.kernel_path}"
             initrd = f"{base_url}/{img.initrd_path}"
+            dom0_args = _xcpng_dom0_args(args)
             labels.append(
                 f":{tag}\n"
                 f"iseq ${{platform}} efi && goto {tag}_efi || goto {tag}_bios\n"
@@ -97,7 +113,7 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
                 f":{tag}_bios\n"
                 f"echo Booting {img.name} ...\n"
                 f"kernel {xen} {XEN_ARGS} || goto start\n"
-                f"module {vmlinuz} {args} || goto start\n"
+                f"module {vmlinuz} {dom0_args} || goto start\n"
                 f"module {initrd} || goto start\n"
                 f"boot || goto start\n"
             )
@@ -129,10 +145,11 @@ def _grub_cfg(images: list[Image], server_ip: str) -> str | None:
     for img in xcpng:
         xen_dir = img.kernel_path.rsplit("/", 1)[0]
         args = (img.boot_args or "").replace("${server-ip}", server_ip)
+        dom0_args = _xcpng_dom0_args(args)
         entries.append(
             f'menuentry "{img.name}" {{\n'
             f"  multiboot2 /{xen_dir}/xen.gz {XEN_ARGS}\n"
-            f"  module2 /{img.kernel_path} {args}\n"
+            f"  module2 /{img.kernel_path} {dom0_args}\n"
             f"  module2 /{img.initrd_path}\n"
             f"}}\n"
         )

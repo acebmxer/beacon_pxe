@@ -33,12 +33,6 @@ KERNEL_PATTERNS = [
     r".*/bzimage",
 ]
 XEN_PATTERNS = [r"boot/xen\.gz"]
-# XCP-NG UEFI clients chainload this; iPXE's EFI build can't multiboot Xen itself.
-# (;N) tolerates the ISO9660 version suffix bsdtar may surface, as install.img does.
-GRUB_EFI_PATTERNS = [
-    r"EFI/xenserver/grubx64\.efi(;[0-9]+)?",
-    r".*/grubx64\.efi(;[0-9]+)?",
-]
 INITRD_PATTERNS = [
     r"casper/initrd.*",
     r"live/initrd.*",
@@ -129,11 +123,12 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
         return True, f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
         return False, f"inst.repo={iso_url} ip=dhcp"
-    if "install.img" in joined:  # XCP-NG / XenServer — extract ISO tree so installer finds PACKAGES/ over NFS
-        # console=tty0 last so the installer TUI renders on the physical VGA
-        # monitor (hvc0 is the Xen hypervisor console, paired with console=vga
-        # on the xen.gz line in ipxe.py).
-        return True, f"xencons=hvc console=hvc0 console=tty0 install nfs:{nfsroot}"
+    if "install.img" in joined:  # XCP-NG / XenServer — extract ISO tree so the installer can use it as an NFS source
+        # Matches XCP-NG's own "no-serial" installer entry: console=tty0 draws
+        # the installer UI on the VGA monitor.  Do NOT pass a source/answerfile
+        # here — the installer runs interactively and the operator selects the
+        # NFS source (this image's exported tree at {nfsroot}) in its UI.
+        return True, "console=tty0"
     return False, "ip=dhcp"
 
 
@@ -185,8 +180,9 @@ def process_image(image_id: int) -> None:
 
         # XCP-NG / XenServer boots the Xen hypervisor via Multiboot2.  iPXE only
         # supports multiboot in its BIOS build, so BIOS clients multiboot xen.gz
-        # directly while UEFI clients chainload the ISO's grubx64.efi (GRUB does
-        # Multiboot2 under EFI).  Extract both here so ipxe.py can reference them.
+        # directly; UEFI clients chainload a GRUB that ipxe.render() builds (the
+        # stock ISO grubx64.efi can't self-start networking from a netboot).
+        # Just extract xen.gz alongside vmlinuz so both boot paths can find it.
         if "install.img" in " ".join(e.lower() for e in entries):
             img.os_family = "xcpng"
             xen = _match(entries, XEN_PATTERNS)
@@ -198,27 +194,6 @@ def process_image(image_id: int) -> None:
                     img.message = f"Extraction failed (xen.gz): {e.stderr or e}"
                     db.commit()
                     return
-            grub = _match(entries, GRUB_EFI_PATTERNS)
-            if grub:
-                # Shared across XCP-NG images (same bootloader); GRUB's embedded
-                # prefix makes it read /EFI/xenserver/grub.cfg from the same HTTP
-                # root, which ipxe.render() generates.
-                try:
-                    _extract_one(iso, grub,
-                                 config.BOOTROOT_DIR / "EFI" / "xenserver" / "grubx64.efi")
-                except subprocess.CalledProcessError as e:
-                    img.status = "error"
-                    img.message = f"Extraction failed (grubx64.efi): {e.stderr or e}"
-                    db.commit()
-                    return
-            else:
-                # Without it, UEFI clients can't boot XCP-NG (they chainload it).
-                # Surface this instead of silently producing a dead EFI entry.
-                img.status = "error"
-                img.message = ("Could not find grubx64.efi in the ISO (looked for "
-                               "EFI/xenserver/grubx64.efi). UEFI XCP-NG boot needs it.")
-                db.commit()
-                return
 
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.

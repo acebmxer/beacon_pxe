@@ -8,7 +8,7 @@ import shutil
 import subprocess
 import tempfile
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .. import config
@@ -39,11 +39,20 @@ set boot-url {host_url}
 set server-ip {host}
 set menu-title {title}
 
-# --- Colour scheme (always applied; || true so a missing feature doesn't abort)
-colour --rgb 0x1a1d29 0 || true
-colour --rgb 0x00d2ff 4 || true
+# --- Colour scheme: mirror the web UI's dark theme (always applied; || true so
+# a missing feature on some iPXE build doesn't abort the script).  iPXE only
+# addresses the 8 basic ANSI slots (0-7); we remap the ones we use to the web
+# palette: 0=bg #0e1117, 4=accent cyan #00b4d8, 6=dim text #8b97a7, 7=text
+# #e6edf3.
+colour --rgb 0x0e1117 0 || true
+colour --rgb 0x00b4d8 4 || true
+colour --rgb 0x8b97a7 6 || true
+colour --rgb 0xe6edf3 7 || true
+# Normal text: light foreground on the dark background.
+cpair --foreground 7 --background 0 0 || true
+# Selected item: light text on the cyan accent — mirrors the web UI's active
+# (accent-highlighted) state.
 cpair --foreground 7 --background 4 1 || true
-cpair --foreground 6 --background 0 0 || true
 # Background image is best-effort; failure must not abort the script.
 console --picture {host_url}/background.png || true
 """
@@ -198,7 +207,9 @@ def render(db: Session) -> str:
 
     images = db.execute(
         select(Image).where(Image.status == "ready", Image.enabled == 1)
-        .order_by(Image.name)
+        # Case-insensitive so e.g. "XCP-NG" sorts among the lowercase names
+        # instead of ahead of them (SQLite's default order is case-sensitive).
+        .order_by(func.lower(Image.name))
     ).scalars().all()
 
     items, labels = _image_entries(images)

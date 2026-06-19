@@ -57,8 +57,16 @@ set boot-url {host_url}
 set server-ip {host}
 set menu-title {title}
 
-# --- Colour scheme: mirror the web UI's {theme} theme (|| true so a missing
-# feature on some iPXE build doesn't abort the script).
+# Switch into the graphical framebuffer console FIRST.  This is what makes
+# `colour --rgb` actually paint and the magic backdrop go transparent; without a
+# mode switch iPXE stays in a VGA text console with a hardcoded cyan backdrop and
+# the whole theme is lost (the cyan-screen symptom).  We try the background PNG
+# (which also sizes the console to the image), then fall back to an explicit
+# resolution if the PNG can't be fetched/decoded — either path gives us the
+# framebuffer.  Each is guarded so a missing feature/file can't abort the script.
+console --picture {host_url}/background.png || console --x 1024 --y 768 || true
+# --- Colour scheme: mirror the web UI's {theme} theme.  Applied AFTER the mode
+# switch above, since re-initialising the console can reset the palette.
 colour --rgb {c['bg']} 0 || true
 colour --rgb {c['accent']} 4 || true
 colour --rgb {c['dim']} 6 || true
@@ -67,8 +75,6 @@ colour --rgb {c['text']} 7 || true
 cpair --foreground 7 --background 0 0 || true
 # Selected item: accent background, mirroring the web UI's active state.
 cpair --foreground {sel_fg} --background 4 1 || true
-# Background image is best-effort; failure must not abort the script.
-console --picture {host_url}/background.png || true
 """
 
 

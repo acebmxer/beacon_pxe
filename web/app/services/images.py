@@ -32,7 +32,6 @@ KERNEL_PATTERNS = [
     r".*/vmlinuz.*",
     r".*/bzimage",
 ]
-XEN_PATTERNS = [r"boot/xen\.gz"]
 INITRD_PATTERNS = [
     r"casper/initrd.*",
     r"live/initrd.*",
@@ -41,7 +40,6 @@ INITRD_PATTERNS = [
     r"arch/boot/x86_64/initramfs.*",
     r"boot/initramfs.*",
     r"boot/initrd.*",
-    r"install\.img(;[0-9]+)?",  # XCP-NG / XenServer — root-level, ISO9660 ;1 suffix optional
     r".*/initrd.*",
     r".*/initramfs.*",
 ]
@@ -123,12 +121,6 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
         return True, f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
         return False, f"inst.repo={iso_url} ip=dhcp"
-    if "install.img" in joined:  # XCP-NG / XenServer — extract ISO tree so the installer can use it as an NFS source
-        # Matches XCP-NG's own "no-serial" installer entry: console=tty0 draws
-        # the installer UI on the VGA monitor.  Do NOT pass a source/answerfile
-        # here — the installer runs interactively and the operator selects the
-        # NFS source (this image's exported tree at {nfsroot}) in its UI.
-        return True, "console=tty0"
     return False, "ip=dhcp"
 
 
@@ -180,23 +172,6 @@ def process_image(image_id: int) -> None:
             return
 
         needs_nfs, guessed_args = _netboot_plan(entries, img.filename, img.id)
-
-        # XCP-NG / XenServer boots the Xen hypervisor via Multiboot2.  iPXE only
-        # supports multiboot in its BIOS build, so BIOS clients multiboot xen.gz
-        # directly; UEFI clients chainload a GRUB that ipxe.render() builds (the
-        # stock ISO grubx64.efi can't self-start networking from a netboot).
-        # Just extract xen.gz alongside vmlinuz so both boot paths can find it.
-        if "install.img" in " ".join(e.lower() for e in entries):
-            img.os_family = "xcpng"
-            xen = _match(entries, XEN_PATTERNS)
-            if xen:
-                try:
-                    _extract_one(iso, xen, dest_dir / "xen.gz")
-                except subprocess.CalledProcessError as e:
-                    img.status = "error"
-                    img.message = f"Extraction failed (xen.gz): {e.stderr or e}"
-                    db.commit()
-                    return
 
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.

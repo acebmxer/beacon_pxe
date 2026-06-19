@@ -1,12 +1,11 @@
 """Generate the single boot.ipxe menu served to both BIOS and UEFI clients.
 
 The menu uses iPXE's default plain black-and-white text rendering — no colour
-scheme is applied, so it renders identically in VGA text and framebuffer modes.
+scheme or background is applied.  The iPXE binaries are built without
+CONSOLE_FRAMEBUFFER (see dnsmasq/Dockerfile) so the menu runs in plain VGA text
+mode, where the arrow keys decode correctly for navigating the choices.
 """
 import logging
-import shutil
-import subprocess
-import tempfile
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -16,13 +15,6 @@ from ..models import Image
 from ..store import all_settings
 
 log = logging.getLogger("beacon.ipxe")
-
-# GRUB modules baked into the UEFI binary: network (efinet/http/tftp), the
-# Multiboot2 loader for Xen, gzio to decompress xen.gz, plus the basics.
-_GRUB_MODULES = (
-    "net efinet http tftp normal multiboot2 configfile echo gzio "
-    "part_gpt part_msdos all_video video gfxterm linux test cat"
-)
 
 
 def _header(server_ip: str, title: str) -> str:
@@ -63,27 +55,6 @@ exit
 """
 
 
-# Xen hypervisor (xen.gz) command line — matches XCP-NG's own "no-serial" VGA
-# installer entry.  dom0_mem must be generous: 2G starves the installer and it
-# silently drops to a maintenance shell instead of drawing its UI.
-XEN_ARGS = "dom0_max_vcpus=1-16 dom0_mem=max:8192M console=vga"
-
-# Default dom0 (vmlinuz) args for XCP-NG installs.  vga=normal fb=false disables
-# the dom0 framebuffer, which otherwise hangs the installer right after GRUB on
-# AMD Ryzen APUs whose shared GPU memory sits above 4G (no display, no UI).  It
-# is harmless on Intel iGPUs, so we apply it by default.  See xcp-ng docs:
-# troubleshooting/installation-upgrade ("installer starts booting then hangs").
-XCPNG_DOM0_ARGS = "vga=normal fb=false"
-
-
-def _xcpng_dom0_args(boot_args: str) -> str:
-    """Merge the per-image boot_args with the default dom0 framebuffer args,
-    without duplicating tokens the user already set themselves."""
-    user = boot_args.split()
-    defaults = [tok for tok in XCPNG_DOM0_ARGS.split() if tok not in user]
-    return " ".join(user + defaults).strip()
-
-
 def _image_entries(images: list[Image]) -> tuple[str, str]:
     """Return (menu items, boot labels) for ready, enabled images."""
     items = []
@@ -93,108 +64,16 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
         items.append(f"item {tag}        {img.name}")
         base_url = "${boot-url}"
         args = img.boot_args or ""
-        if img.os_family == "xcpng":
-            # iPXE's EFI build has NO multiboot support, so UEFI clients can't
-            # boot Xen directly — they chainload the self-configuring grubx64.efi
-            # that render() builds, which does Multiboot2 under EFI via the
-            # generated /EFI/xenserver/grub.cfg.  BIOS clients (undionly.kpxe)
-            # still multiboot xen.gz directly.
-            xen_dir = img.kernel_path.rsplit("/", 1)[0]
-            xen = f"{base_url}/{xen_dir}/xen.gz"
-            vmlinuz = f"{base_url}/{img.kernel_path}"
-            initrd = f"{base_url}/{img.initrd_path}"
-            dom0_args = _xcpng_dom0_args(args)
-            labels.append(
-                f":{tag}\n"
-                f"iseq ${{platform}} efi && goto {tag}_efi || goto {tag}_bios\n"
-                f":{tag}_efi\n"
-                f"echo Chainloading GRUB for {img.name} (UEFI) ...\n"
-                f"chain {base_url}/EFI/xenserver/grubx64.efi || goto start\n"
-                f":{tag}_bios\n"
-                f"echo Booting {img.name} ...\n"
-                f"kernel {xen} {XEN_ARGS} || goto start\n"
-                f"module {vmlinuz} {dom0_args} || goto start\n"
-                f"module {initrd} || goto start\n"
-                f"boot || goto start\n"
-            )
-        else:
-            kernel = f"{base_url}/{img.kernel_path}"
-            initrd = f"{base_url}/{img.initrd_path}"
-            labels.append(
-                f":{tag}\n"
-                f"echo Booting {img.name} ...\n"
-                f"kernel {kernel} {args} || goto start\n"
-                f"initrd {initrd} || goto start\n"
-                f"boot || goto start\n"
-            )
+        kernel = f"{base_url}/{img.kernel_path}"
+        initrd = f"{base_url}/{img.initrd_path}"
+        labels.append(
+            f":{tag}\n"
+            f"echo Booting {img.name} ...\n"
+            f"kernel {kernel} {args} || goto start\n"
+            f"initrd {initrd} || goto start\n"
+            f"boot || goto start\n"
+        )
     return "\n".join(items), "\n".join(labels)
-
-
-def _grub_cfg(images: list[Image], server_ip: str) -> str | None:
-    """GRUB config for UEFI XCP-NG clients chainloaded to grubx64.efi.
-
-    Paths are absolute against GRUB's root, which is the HTTP server iPXE chained
-    from, so /os/<id>/... resolves to the same files BIOS clients multiboot.
-    ${server-ip} in boot_args is an iPXE variable GRUB can't expand, so it is
-    substituted with the configured server IP here.
-    """
-    xcpng = [img for img in images if img.os_family == "xcpng"]
-    if not xcpng:
-        return None
-    entries = []
-    for img in xcpng:
-        xen_dir = img.kernel_path.rsplit("/", 1)[0]
-        args = (img.boot_args or "").replace("${server-ip}", server_ip)
-        dom0_args = _xcpng_dom0_args(args)
-        entries.append(
-            f'menuentry "{img.name}" {{\n'
-            f"  multiboot2 /{xen_dir}/xen.gz {XEN_ARGS}\n"
-            f"  module2 /{img.kernel_path} {dom0_args}\n"
-            f"  module2 /{img.initrd_path}\n"
-            f"}}\n"
-        )
-    # One image: boot it immediately (iPXE already made the choice).  Several:
-    # show GRUB's own menu briefly to disambiguate.
-    timeout = 0 if len(xcpng) == 1 else 10
-    header = "# GENERATED by the PXE web app. Do not edit by hand.\n"
-    # Bake the HTTP root in so menuentry paths resolve without the operator
-    # typing `set root` at the grub> prompt (GRUB still needs net_bootp first,
-    # which it can't self-run from the stock grubx64.efi).
-    if server_ip:
-        header += f"set root=(http,{server_ip})\n"
-    header += f"set timeout={timeout}\nset default=0\n\n"
-    return header + "\n".join(entries)
-
-
-def _build_grub(server_ip: str, dest) -> bool:
-    """Build a self-configuring grubx64.efi for UEFI XCP-NG clients.
-
-    iPXE's EFI build can't multiboot Xen and the stock ISO grubx64.efi can't
-    bring up networking from a netboot (it just drops to a grub> prompt).  So we
-    grub-mkstandalone our own binary whose embedded config runs net_bootp (DHCP)
-    then loads Beacon's generated grub.cfg over HTTP.  server_ip is baked in
-    rather than relying on $net_default_server, which is unreliable under
-    proxyDHCP / across subnets.  Returns False if grub-mkstandalone is absent.
-    """
-    if not shutil.which("grub-mkstandalone"):
-        log.warning("grub-mkstandalone not installed; UEFI XCP-NG boot will not "
-                    "work until the web image is rebuilt with grub-efi-amd64-bin")
-        return False
-    embedded = (
-        "net_bootp\n"
-        f"configfile (http,{server_ip})/EFI/xenserver/grub.cfg\n"
-    )
-    with tempfile.NamedTemporaryFile("w", suffix=".cfg") as fh:
-        fh.write(embedded)
-        fh.flush()
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            ["grub-mkstandalone", "-O", "x86_64-efi", "-o", str(dest),
-             f"--modules={_GRUB_MODULES}",
-             f"/boot/grub/grub.cfg={fh.name}"],
-            check=True, capture_output=True, text=True,
-        )
-    return True
 
 
 def render(db: Session) -> str:
@@ -204,7 +83,7 @@ def render(db: Session) -> str:
 
     images = db.execute(
         select(Image).where(Image.status == "ready", Image.enabled == 1)
-        # Case-insensitive so e.g. "XCP-NG" sorts among the lowercase names
+        # Case-insensitive so an uppercase name sorts among the lowercase ones
         # instead of ahead of them (SQLite's default order is case-sensitive).
         .order_by(func.lower(Image.name))
     ).scalars().all()
@@ -226,19 +105,5 @@ def render(db: Session) -> str:
 
     out = config.BOOTROOT_DIR / "boot.ipxe"
     out.write_text(text)
-
-    grub = _grub_cfg(images, server_ip)
-    if grub is not None:
-        grub_dir = config.BOOTROOT_DIR / "EFI" / "xenserver"
-        grub_dir.mkdir(parents=True, exist_ok=True)
-        (grub_dir / "grub.cfg").write_text(grub)
-        # Build the self-configuring GRUB UEFI clients chainload to.  Needs a
-        # server IP to bake in; without one the menuentry paths wouldn't resolve
-        # anyway.  Failure here must not break boot.ipxe generation.
-        if server_ip:
-            try:
-                _build_grub(server_ip, grub_dir / "grubx64.efi")
-            except subprocess.CalledProcessError as e:
-                log.error("grub-mkstandalone failed: %s", e.stderr or e)
 
     return text

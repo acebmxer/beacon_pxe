@@ -51,7 +51,6 @@ def run():
                 log.warning("(password came from ADMIN_PASSWORD in .env)")
 
         # Render initial boot configs so the stack is bootable immediately.
-        # ipxe.render() generates the theme-matched background.png itself.
         dnsmasq.render(db)
         ipxe.render(db)
     finally:

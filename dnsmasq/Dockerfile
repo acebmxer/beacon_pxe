@@ -23,7 +23,12 @@ RUN printf '#!ipxe\ndhcp || dhcp\nchain http://${next-server}/boot.ipxe || shell
 # (iPXE has no Multiboot2 and no multiboot at all in its EFI build, which is why
 # UEFI clients chainload grubx64.efi instead — see web/app/services/ipxe.py.)
 RUN mkdir -p config/local \
-    && printf '#define IMAGE_GZIP\n' > config/local/general.h
+    && printf '#define IMAGE_GZIP\n#define IMAGE_PNG\n' > config/local/general.h
+# Enable a framebuffer console so the boot menu can paint the dark/light
+# background.png and apply the web-UI colour palette.  Without this iPXE stays in
+# plain VGA text mode (fixed 16-colour palette, hardcoded cyan backdrop) and the
+# `console --picture` / `colour --rgb` lines in the generated boot.ipxe are no-ops.
+RUN printf '#define CONSOLE_FRAMEBUFFER\n' > config/local/console.h
 RUN make -j"$(nproc)" EMBED=chain.ipxe bin/undionly.kpxe bin-x86_64-efi/ipxe.efi
 
 # ---------------------------------------------------------------------------

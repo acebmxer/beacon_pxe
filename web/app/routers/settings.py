@@ -51,5 +51,7 @@ def toggle_theme(request: Request, user: User = Depends(require_user),
     """Quick global light/dark toggle from the navbar."""
     current = all_settings(db).get("theme", "dark")
     set_setting(db, "theme", "light" if current == "dark" else "dark")
+    # Regenerate the boot menu so its palette/background follow the web UI theme.
+    ipxe.render(db)
     referer = request.headers.get("referer", "/")
     return RedirectResponse(referer, status_code=303)

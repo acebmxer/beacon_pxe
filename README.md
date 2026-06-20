@@ -127,6 +127,16 @@ Set during the first-run wizard and changeable any time under **Server Settings*
   args** field on the Images page. Examples:
   - Ubuntu live: `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp`
   - Debian live: `boot=live netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp`
+- **XCP-NG (netinstall ISO).** XCP-NG is Xen-based, so it boots via **multiboot**
+  rather than a plain kernel+initrd: the server extracts `xen.gz` (hypervisor),
+  `vmlinuz` (dom0 kernel) and `install.img` (installer), and the menu chains them
+  with iPXE's `kernel`/`module` commands. Use the **netinstall** ISO
+  (`xcp-ng-<ver>-netinstall.iso`): it pulls its package repository over the
+  network, which the installer fetches by HTTP *after* the kernel is up — so it
+  netboots cleanly. The full XCP-NG ISO expects its repo on local media and will
+  stop at *"base installation repository was not found"*. The default boot prompts
+  for the repo URL; pass an answerfile via the **boot args** field for unattended
+  installs (`answerfile=http://.../answerfile.xml install`).
 
 ### How live images boot (NFS, not download-to-RAM)
 

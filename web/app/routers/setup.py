@@ -8,6 +8,7 @@ from ..deps import require_admin, render
 from ..models import User
 from ..store import all_settings, set_setting
 from ..services import dnsmasq, ipxe
+from ..services import images as image_svc
 
 router = APIRouter()
 
@@ -35,4 +36,6 @@ async def setup_save(request: Request, user: User = Depends(require_admin),
     set_setting(db, "setup_complete", "1")
     dnsmasq.render(db)
     ipxe.render(db)
+    # Rebuild XCP-NG GRUB chainloaders with the (possibly new) server IP.
+    image_svc.rebuild_xcpng_grub_all(db)
     return RedirectResponse("/", status_code=303)

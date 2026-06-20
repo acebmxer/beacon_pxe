@@ -55,6 +55,24 @@ exit
 """
 
 
+def _xcpng_label(tag: str, img: Image, base_url: str, args: str) -> str:
+    """Chainload the per-image standalone GRUB, which multiboots Xen.
+
+    iPXE cannot multiboot under UEFI (IMAGE_MULTIBOOT is BIOS-only), which is the
+    arch most XCP-NG hosts boot. So we hand off to a grub.efi built at extraction
+    time (services.images._build_xcpng_grub); GRUB fetches xen/vmlinuz/install.img
+    over HTTP and does the multiboot2 itself.
+    """
+    # bootx64.efi sits in the same extracted dir as vmlinuz (os/<id>/).
+    img_dir = img.initrd_path.rsplit("/", 1)[0]
+    grub = f"{base_url}/{img_dir}/bootx64.efi"
+    return (
+        f":{tag}\n"
+        f"echo Booting {img.name} (XCP-NG via GRUB) ...\n"
+        f"chain {grub} || goto start\n"
+    )
+
+
 def _image_entries(images: list[Image]) -> tuple[str, str]:
     """Return (menu items, boot labels) for ready, enabled images."""
     items = []
@@ -64,6 +82,9 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
         items.append(f"item {tag}        {img.name}")
         base_url = "${boot-url}"
         args = img.boot_args or ""
+        if img.os_family == "xcpng":
+            labels.append(_xcpng_label(tag, img, base_url, args))
+            continue
         kernel = f"{base_url}/{img.kernel_path}"
         initrd = f"{base_url}/{img.initrd_path}"
         labels.append(

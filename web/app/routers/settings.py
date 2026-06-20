@@ -8,6 +8,7 @@ from ..deps import require_admin, require_user, render
 from ..models import User
 from ..store import all_settings, set_setting
 from ..services import dnsmasq, ipxe
+from ..services import images as image_svc
 
 router = APIRouter()
 
@@ -41,6 +42,9 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     # Regenerate boot configs; the reload sidecar restarts dnsmasq.
     dnsmasq.render(db)
     ipxe.render(db)
+    # XCP-NG GRUB chainloaders bake in the server IP, so rebuild them in case it
+    # changed (cheap: no re-extraction).
+    image_svc.rebuild_xcpng_grub_all(db)
     return render(request, db, "settings.html",
                   active="settings", settings=all_settings(db), saved=True)
 

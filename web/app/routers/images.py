@@ -4,7 +4,7 @@ import re
 from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Request,
                      UploadFile, File)
 from fastapi.responses import RedirectResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -25,7 +25,7 @@ def _safe_filename(name: str) -> str:
 @router.get("/images")
 def images_page(request: Request, user: User = Depends(require_user),
                 db: Session = Depends(get_db)):
-    items = db.execute(select(Image).order_by(Image.created_at.desc())).scalars().all()
+    items = db.execute(select(Image).order_by(func.lower(Image.name))).scalars().all()
     return render(request, db, "images.html", active="images", images=items)
 
 
@@ -43,7 +43,7 @@ async def upload(request: Request, background: BackgroundTasks,
                  db: Session = Depends(get_db)):
     filename = _safe_filename(file.filename or "image.iso")
     if not filename.lower().endswith(".iso"):
-        items = db.execute(select(Image).order_by(Image.created_at.desc())).scalars().all()
+        items = db.execute(select(Image).order_by(func.lower(Image.name))).scalars().all()
         return render(request, db, "images.html", active="images", images=items,
                       error="Only .iso files are supported. See the README for why.")
 

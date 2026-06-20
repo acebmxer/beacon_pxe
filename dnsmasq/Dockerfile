@@ -1,11 +1,19 @@
 # ---------------------------------------------------------------------------
 # Stage 1: build the iPXE network boot programs from source.
-#   undionly.kpxe -> legacy BIOS clients
-#   ipxe.efi      -> UEFI clients
+#   ipxe.pxe -> legacy BIOS clients (served as undionly.kpxe)
+#   ipxe.efi -> UEFI clients
 # An embedded script makes the binaries self-chaining: the instant iPXE starts
 # it pulls http://${next-server}/boot.ipxe, so an existing DHCP server only needs
 # next-server + filename. Building (vs downloading boot.ipxe.org binaries) is what
 # lets us embed that script and guarantees matching BIOS + UEFI binaries.
+#
+# We enable iPXE's native USB host-controller + HID keyboard drivers (see the
+# config override below) so iPXE drives the USB keyboard ITSELF instead of
+# depending on the firmware's legacy USB support. On machines whose UEFI/BIOS
+# never enumerates the USB keyboard pre-OS (no Caps/Num lock LEDs, dead keys at
+# the boot menu), this is what makes the keyboard work. Because native USB needs
+# real NIC + USB drivers, the BIOS target is ipxe.pxe, NOT undionly.kpxe:
+# undionly is UNDI-only and carries no native drivers, so it can't drive USB.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS ipxe
 # Which iPXE revision to build (branch, tag, or commit). Override for a pinned,
@@ -18,11 +26,22 @@ RUN git clone https://github.com/ipxe/ipxe.git /ipxe \
     && git -C /ipxe checkout "$IPXE_REF"
 WORKDIR /ipxe/src
 RUN printf '#!ipxe\ndhcp || dhcp\nchain http://${next-server}/boot.ipxe || shell\n' > chain.ipxe
+# Enable iPXE's native USB stack + HID keyboard so the boot menu works on
+# machines whose firmware doesn't hand a USB keyboard to the pre-OS environment.
+# USB_HCD_* are the host-controller drivers (xHCI = USB3, the one modern desktops
+# use; EHCI/UHCI for older ports); USB_KEYBOARD is the HID keyboard driver and is
+# commented out in mainline iPXE by default.  config/local/ is iPXE's supported
+# override dir, so we don't patch tracked headers.
+RUN mkdir -p config/local \
+    && printf '#define USB_HCD_XHCI\n#define USB_HCD_EHCI\n#define USB_HCD_UHCI\n#define USB_KEYBOARD\n' \
+        > config/local/usb.h
 # Build with iPXE's default plain VGA text console.  CONSOLE_FRAMEBUFFER is left
 # off on purpose: in framebuffer mode iPXE's keypress decoding drops the ANSI
 # escape sequences the arrow keys emit, so only number keys move the boot-menu
 # highlight.  Plain text mode decodes the arrow keys correctly.
-RUN make -j"$(nproc)" EMBED=chain.ipxe bin/undionly.kpxe bin-x86_64-efi/ipxe.efi
+# BIOS target is ipxe.pxe (full native drivers), not undionly.kpxe (UNDI-only,
+# no native USB).  ipxe.efi already supports native drivers under UEFI.
+RUN make -j"$(nproc)" EMBED=chain.ipxe bin/ipxe.pxe bin-x86_64-efi/ipxe.efi
 
 # ---------------------------------------------------------------------------
 # Stage 2: dnsmasq (proxyDHCP/DHCP + TFTP) with the binaries baked into /tftp.
@@ -31,7 +50,9 @@ RUN make -j"$(nproc)" EMBED=chain.ipxe bin/undionly.kpxe bin-x86_64-efi/ipxe.efi
 # ---------------------------------------------------------------------------
 FROM alpine:3.20
 RUN apk add --no-cache dnsmasq
-COPY --from=ipxe /ipxe/src/bin/undionly.kpxe        /tftp/undionly.kpxe
+# Served as undionly.kpxe so dnsmasq's pxe-service filename is unchanged; the
+# bytes are the native-driver ipxe.pxe build (see stage 1).
+COPY --from=ipxe /ipxe/src/bin/ipxe.pxe             /tftp/undionly.kpxe
 COPY --from=ipxe /ipxe/src/bin-x86_64-efi/ipxe.efi  /tftp/ipxe.efi
 ENTRYPOINT ["dnsmasq", "--keep-in-foreground", "--log-facility=-", \
             "--conf-file=/dnsmasq/dnsmasq.conf"]

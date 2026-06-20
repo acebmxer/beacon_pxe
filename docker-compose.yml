@@ -58,6 +58,12 @@ services:
     container_name: beacon_dnsmasq
     restart: unless-stopped
     network_mode: host
+    # host networking binds fixed ports (53/67/69); init reaps the process
+    # cleanly and the grace period lets the kernel release those ports before
+    # the new container is recreated, avoiding "address already in use" on
+    # rolling updates (e.g. Dockhand).
+    init: true
+    stop_grace_period: 30s
     cap_add:
       - NET_ADMIN
     volumes:
@@ -73,6 +79,11 @@ services:
     restart: unless-stopped
     network_mode: host
     privileged: true
+    # Same rationale as dnsmasq: host net binds 2049/111. Give the in-kernel
+    # NFS server time to unexport and release ports on stop so recreation on a
+    # rolling update doesn't collide with the old container's bindings.
+    init: true
+    stop_grace_period: 30s
     volumes:
       - nfsroot:/nfs:ro
       - /lib/modules:/lib/modules:ro

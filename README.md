@@ -260,6 +260,18 @@ docker compose down                                   # stop (keeps data)
 docker compose down -v                                # stop + drop bootroot/nfsroot volumes
 ```
 
+**Always update the whole stack with `docker compose`, not a per-container UI.**
+The `dnsmasq` and `nfs` services run with `network_mode: host` (required:
+dnsmasq serves broadcast DHCP/proxyDHCP + TFTP, and nfs runs the in-kernel NFS
+server). Container-management tools such as Dockhand/Portainer recreate
+containers one at a time and mishandle host-networked containers — they pull the
+new image and remove the old container but never recreate it, reporting
+"Container recreation failed" for exactly those two. The other three services
+update fine, leaving the stack half-updated. `docker compose pull && docker
+compose up -d` recreates host-networked containers correctly and is the
+supported way to update. (If you've already hit the failure in such a tool, just
+run that compose command to finish the update.)
+
 User accounts, settings, and image metadata live in `./data/pxe.db`. Uploaded
 ISOs live under `IMAGE_PATH`.
 

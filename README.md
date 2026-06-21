@@ -1,5 +1,7 @@
 # Beacon
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 A self-hosted PXE/iPXE boot server with a modern, colourful boot menu and a
 login-protected web management console. It netboots **both BIOS and UEFI**
 clients from a **single boot menu**, manages OS images uploaded as **ISO**, and
@@ -291,3 +293,26 @@ ISOs live under `IMAGE_PATH`.
   restart dnsmasq manually after changing settings.
 - Change the auto-generated admin password if you prefer your own, and create
   individual user accounts rather than sharing the admin login.
+
+---
+
+## License
+
+Beacon's own source code is released under the **[MIT License](LICENSE)** —
+free to use, modify, and redistribute (including commercially) with attribution.
+
+Beacon does not vendor third-party source; its Docker images install upstream
+packages and build a few tools (iPXE, wimboot) from source at build time. Those
+components keep their own licenses — several are GPL/LGPL (dnsmasq, samba, iPXE,
+wimboot, etc.). The MIT license covers only Beacon's code, not the bundled
+components. See [THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md) for the full
+inventory and source-availability notes.
+
+---
+
+## Contributing
+
+Contributions are welcome. By submitting a pull request you agree that your
+contribution is licensed under the project's MIT License. Please keep changes
+focused and describe what you tested (the README's QEMU section is handy for
+verifying boot changes without real hardware).

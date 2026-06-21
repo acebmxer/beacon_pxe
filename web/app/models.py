@@ -34,6 +34,26 @@ class Setting(Base):
     value: Mapped[str] = mapped_column(Text, default="")
 
 
+class BootEvent(Base):
+    """One record per time a client selected an image to boot.
+
+    Written by the /track/{image_id} endpoint, which the boot menu pings (best
+    effort) when a client picks an OS. Powers the dashboard's all-time "clients
+    served" and "top deployed images" stats -- nginx serves the actual boot
+    files and the web app never sees those requests, so this is how we count
+    deployments.
+    """
+    __tablename__ = "boot_events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    image_id: Mapped[int] = mapped_column(Integer, index=True)
+    # Snapshot of the image name so stats survive the image being deleted.
+    image_name: Mapped[str] = mapped_column(String(128), default="")
+    mac: Mapped[str] = mapped_column(String(32), default="", index=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
 class Image(Base):
     """An uploaded OS image (ISO) and its extracted boot files."""
     __tablename__ = "images"
@@ -41,8 +61,8 @@ class Image(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     filename: Mapped[str] = mapped_column(String(255))          # ISO file on disk
-    os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows
-    # Extraction lifecycle: pending|processing|ready|error|unsupported
+    os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows|xcpng
+    # Extraction lifecycle: pending|processing|ready|error
     status: Mapped[str] = mapped_column(String(16), default="pending")
     message: Mapped[str] = mapped_column(Text, default="")      # error/info detail
     kernel_path: Mapped[str] = mapped_column(String(255), default="")   # rel to bootroot

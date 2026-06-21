@@ -22,12 +22,16 @@
       </select>
 
       <div class="row" style="margin-top:6px;">
-        <div><label>DHCP range start (full mode)</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}"></div>
-        <div><label>DHCP range end (full mode)</label><input name="dhcp_range_end" value="{{ settings.dhcp_range_end }}"></div>
+        <div><label>DHCP range start (full mode)</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}" placeholder="192.168.1.100"></div>
+        <div><label>DHCP range end (full mode)</label><input name="dhcp_range_end" value="{{ settings.dhcp_range_end }}" placeholder="192.168.1.200"></div>
       </div>
       <div class="row">
-        <div><label>Gateway (full mode)</label><input name="dhcp_gateway" value="{{ settings.dhcp_gateway }}"></div>
-        <div><label>DNS (full mode)</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}"></div>
+        <div><label>Subnet mask (full mode)</label><input name="dhcp_subnet_mask" value="{{ settings.dhcp_subnet_mask }}" placeholder="255.255.255.0"></div>
+        <div><label>Gateway (full mode)</label><input name="dhcp_gateway" value="{{ settings.dhcp_gateway }}" placeholder="192.168.1.1"></div>
+      </div>
+      <div class="row">
+        <div><label>DNS (full mode)</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}" placeholder="192.168.1.1"></div>
+        <div></div>
       </div>
 
       <div class="alert info" style="margin-top:18px;">

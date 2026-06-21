@@ -12,6 +12,20 @@ from .store import get_setting
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
+_STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _asset_version() -> str:
+    """Cache-busting token for static assets: newest mtime under static/.
+
+    Bumps automatically whenever a CSS/JS file changes, so browsers re-fetch the
+    stylesheet instead of serving a stale cached copy.
+    """
+    try:
+        return str(int(max(p.stat().st_mtime for p in _STATIC_DIR.glob("*"))))
+    except ValueError:
+        return "0"
+
 
 class RedirectException(Exception):
     """Raised to bounce unauthenticated users to the login page."""
@@ -50,6 +64,7 @@ def render(request: Request, db: Session, template: str, **ctx):
         "user": user,
         "theme": get_setting(db, "theme"),
         "menu_title": get_setting(db, "menu_title"),
+        "asset_version": _asset_version(),
     }
     base.update(ctx)
     return templates.TemplateResponse(template, base)

@@ -54,5 +54,7 @@ RUN apk add --no-cache dnsmasq
 # bytes are the native-driver ipxe.pxe build (see stage 1).
 COPY --from=ipxe /ipxe/src/bin/ipxe.pxe             /tftp/undionly.kpxe
 COPY --from=ipxe /ipxe/src/bin-x86_64-efi/ipxe.efi  /tftp/ipxe.efi
-ENTRYPOINT ["dnsmasq", "--keep-in-foreground", "--log-facility=-", \
+# log-facility is set in the generated conf (a file on the shared volume) so the
+# web app can read recent clients off it; don't override it to stderr here.
+ENTRYPOINT ["dnsmasq", "--keep-in-foreground", \
             "--conf-file=/dnsmasq/dnsmasq.conf"]

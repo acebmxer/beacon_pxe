@@ -161,9 +161,14 @@ plus the unpacked tree).
 > an image processed before this change keeps its old `url=…iso` args. Clear the
 > **boot args** field and hit **Retry** (or delete and re-upload) to switch it to
 > NFS.
-- **Windows ISOs are stored but *not yet bootable*.** Windows can't PXE-boot a
-  raw ISO; it needs `wimboot` + WinPE (and usually an SMB share for the install
-  files). The UI flags Windows images as `unsupported`. This is on the roadmap.
+- **Windows ISOs boot the installer via `wimboot` + WinPE.** Windows can't
+  PXE-boot a raw kernel/initrd, so Beacon extracts the WinPE boot files
+  (`bootmgr`, `BCD`, `boot.sdi`, `sources/boot.wim`) and boots them through
+  [`wimboot`](https://ipxe.org/wimboot). To supply the full install media, iPXE
+  mounts the **same uploaded ISO** over HTTP as a virtual CD (`sanhook`), so
+  Windows Setup installs straight from the ISO — **no SMB share required**. The
+  install runs interactively (no answer file). `wimboot` is bundled in the web
+  image and served at `/wimboot`.
 
 If extraction can't find a kernel/initrd, the image shows `error` with a reason;
 fix the boot args or check the ISO layout and hit **Retry**.

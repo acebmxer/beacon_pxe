@@ -1,13 +1,74 @@
 {% extends "base.html" %}
 {% block heading %}Dashboard{% endblock %}
 {% block content %}
+{% if stats_reset %}<div class="alert ok">Statistics reset.</div>{% endif %}
 <div class="grid cols-3">
   <div class="card stat"><div class="num">{{ stats.images }}</div><div class="label">OS images</div></div>
   <div class="card stat"><div class="num">{{ stats.ready }}</div><div class="label">Bootable &amp; ready</div></div>
   <div class="card stat"><div class="num">{{ stats.users }}</div><div class="label">User accounts</div></div>
+  <div class="card stat"><div class="num" id="stat-active">—</div><div class="label">Active clients (10m)</div></div>
+  <div class="card stat"><div class="num" id="stat-served">—</div><div class="label">Clients served (all-time)</div></div>
+  <div class="card stat"><div class="num" id="stat-deploys">—</div><div class="label">Total deployments</div></div>
 </div>
 
-<div class="grid cols-2" style="margin-top:18px;">
+<div class="card" style="margin-top:18px;">
+  <h2>System performance</h2>
+  <div class="sub">Live host metrics — watch load while images are pushed to clients</div>
+  <div class="grid cols-4 metrics">
+    <div class="metric">
+      <div class="metric-head"><span class="label">CPU</span><span class="metric-val" id="m-cpu">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="m-cpu-bar"></div></div>
+    </div>
+    <div class="metric">
+      <div class="metric-head"><span class="label">Memory</span><span class="metric-val" id="m-mem">—</span></div>
+      <div class="bar-track"><div class="bar-fill" id="m-mem-bar"></div></div>
+      <div class="metric-sub" id="m-mem-sub">&nbsp;</div>
+    </div>
+    <div class="metric">
+      <div class="metric-head"><span class="label">Network</span></div>
+      <div class="metric-val sm" id="m-net">—</div>
+      <div class="metric-sub">↓ in &nbsp; ↑ out</div>
+    </div>
+    <div class="metric">
+      <div class="metric-head"><span class="label">Disk I/O</span></div>
+      <div class="metric-val sm" id="m-disk">—</div>
+      <div class="metric-sub">read &nbsp; write</div>
+    </div>
+  </div>
+</div>
+
+<div class="grid cols-2 top" style="margin-top:18px;">
+  <div class="card">
+    <h2>Recent clients</h2>
+    <div class="sub">PXE boot requests seen by the DHCP/TFTP service. Boot IP is the
+      address used during PXE — it may differ from the installed OS's IP.</div>
+    <table>
+      <thead><tr><th>MAC address</th>
+        <th title="The address iPXE used during PXE boot. In proxyDHCP mode this can differ from the installed OS's final IP.">Boot IP</th>
+        <th>Hostname</th><th>Firmware</th><th>Last seen</th></tr></thead>
+      <tbody id="clients-body">
+        <tr><td colspan="5" class="muted">Waiting for client activity…</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="card">
+    <div class="card-head">
+      <h2>Top deployed images</h2>
+      {% if user and user.is_admin %}
+      <form method="post" action="/stats/reset"
+            onsubmit="return confirm('Reset all deployment statistics? This clears clients served, total deployments, top deployed images, and the recent clients list. This cannot be undone.');">
+        <button class="btn ghost sm" type="submit">Reset statistics</button>
+      </form>
+      {% endif %}
+    </div>
+    <div class="sub">Top 5 most-booted operating systems (all-time)</div>
+    <div id="top-body" class="toplist">
+      <div class="muted">No deployments recorded yet.</div>
+    </div>
+  </div>
+</div>
+
+<div class="grid cols-2 top" style="margin-top:18px;">
   <div class="card">
     <h2>Boot service</h2>
     <div class="sub">Current PXE configuration</div>
@@ -32,4 +93,92 @@
       boot menu automatically once its kernel/initrd are extracted.</p>
   </div>
 </div>
+
+<script>
+(function () {
+  function fmtBps(n) {
+    if (!n) return "0 B/s";
+    const u = ["B/s", "KB/s", "MB/s", "GB/s"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i ? 1 : 0) + " " + u[i];
+  }
+  function fmtBytes(n) {
+    if (!n) return "0 B";
+    const u = ["B", "KB", "MB", "GB", "TB"];
+    let i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return n.toFixed(i ? 1 : 0) + " " + u[i];
+  }
+  function esc(s) {
+    return (s || "").replace(/[&<>"]/g, c =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  }
+
+  function render(d) {
+    const p = d.perf || {};
+    document.getElementById("stat-active").textContent = d.clients_active ?? 0;
+    document.getElementById("stat-served").textContent = d.clients_served ?? 0;
+    document.getElementById("stat-deploys").textContent = d.total_deploys ?? 0;
+
+    document.getElementById("m-cpu").textContent = (p.cpu_pct ?? 0) + "%";
+    document.getElementById("m-cpu-bar").style.width = (p.cpu_pct ?? 0) + "%";
+
+    document.getElementById("m-mem").textContent = (p.mem_pct ?? 0) + "%";
+    document.getElementById("m-mem-bar").style.width = (p.mem_pct ?? 0) + "%";
+    document.getElementById("m-mem-sub").textContent =
+      fmtBytes(p.mem_used) + " / " + fmtBytes(p.mem_total);
+
+    document.getElementById("m-net").innerHTML =
+      "↓ " + fmtBps(p.net_rx_bps) + " &nbsp; ↑ " + fmtBps(p.net_tx_bps);
+    document.getElementById("m-disk").innerHTML =
+      fmtBps(p.disk_read_bps) + " &nbsp; " + fmtBps(p.disk_write_bps);
+
+    const body = document.getElementById("clients-body");
+    const rows = d.clients || [];
+    if (!rows.length) {
+      body.innerHTML = '<tr><td colspan="5" class="muted">No client activity yet.</td></tr>';
+    } else {
+      body.innerHTML = rows.map(c =>
+        "<tr><td class='mono'>" + esc(c.mac) + "</td>" +
+        "<td class='mono'>" + esc(c.ip || "—") + "</td>" +
+        "<td>" + esc(c.hostname || "—") + "</td>" +
+        "<td>" + (c.firmware ? "<span class='badge off'>" + esc(c.firmware) + "</span>" : "—") + "</td>" +
+        "<td class='muted'>" + esc(c.ago || "—") + "</td></tr>"
+      ).join("");
+    }
+
+    const top = document.getElementById("top-body");
+    const imgs = d.top_images || [];
+    if (!imgs.length) {
+      top.innerHTML = '<div class="muted">No deployments recorded yet.</div>';
+    } else {
+      const max = Math.max.apply(null, imgs.map(i => i.count || 0)) || 1;
+      top.innerHTML = imgs.map((i, n) => {
+        const c = i.count ?? 0;
+        const pct = Math.max(8, Math.round(c / max * 100));   // min 8% so 1 still shows a sliver
+        return (
+          "<div class='toprow'>" +
+            "<span class='toprank'>" + (n + 1) + "</span>" +
+            "<div class='topmain'>" +
+              "<div class='topbar-fill' style='width:" + pct + "%'></div>" +
+              "<div class='toplabel'><span class='topname' title='" + esc(i.name) + "'>" +
+                esc(i.name) + "</span><span class='topcount'>" + c + "</span></div>" +
+            "</div>" +
+          "</div>"
+        );
+      }).join("");
+    }
+  }
+
+  async function poll() {
+    try {
+      const r = await fetch("/api/stats", { headers: { "Accept": "application/json" } });
+      if (r.ok) render(await r.json());
+    } catch (e) { /* transient; next tick retries */ }
+  }
+  poll();
+  setInterval(poll, 3000);
+})();
+</script>
 {% endblock %}

@@ -45,6 +45,8 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     # XCP-NG GRUB chainloaders bake in the server IP, so rebuild them in case it
     # changed (cheap: no re-extraction).
     image_svc.rebuild_xcpng_grub_all(db)
+    # Windows WinPE setup script also bakes in the server IP for its SMB mount.
+    image_svc.rebuild_windows_setup_all(db)
     return render(request, db, "settings.html",
                   active="settings", settings=all_settings(db), saved=True)
 

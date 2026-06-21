@@ -97,10 +97,13 @@ a:hover { text-decoration: underline; }
 .user-chip { color: var(--text-dim); font-size: 0.9rem; }
 .user-chip b { color: var(--text); }
 
-main { padding: 28px; max-width: 1100px; }
+/* Fill the available width (minus the fixed sidebar) so the dashboard scales
+   with the window/monitor; cap only on ultra-wide so lines stay readable. */
+main { padding: 28px; width: 100%; max-width: 1800px; margin: 0 auto; }
 
 /* ---------- Cards ---------- */
 .grid { display: grid; gap: 18px; }
+.grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
 .grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
 .grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
 
@@ -113,12 +116,25 @@ main { padding: 28px; max-width: 1100px; }
 }
 .card h2 { margin: 0 0 4px; font-size: 1.05rem; }
 .card .sub { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 16px; }
+.card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.card-head h2 { margin-bottom: 0; }
+.card-head form { margin: 0; }
 
 .stat { text-align: left; }
 .stat .num { font-size: 2.2rem; font-weight: 800;
   background: var(--gradient); -webkit-background-clip: text; background-clip: text;
   -webkit-text-fill-color: transparent; }
 .stat .label { color: var(--text-dim); font-size: 0.85rem; }
+
+/* ---------- Live metrics ---------- */
+.metrics { margin-top: 4px; }
+.metric-head { display: flex; justify-content: space-between; align-items: baseline;
+  gap: 12px; margin-bottom: 8px; }
+.metric .metric-val { font-size: 1.5rem; font-weight: 800; }
+.metric .metric-val.sm { font-size: 1.05rem; }
+.metric .metric-sub { color: var(--text-dim); font-size: 0.78rem; margin-top: 6px; }
+.metric .bar-track { height: 8px; background: var(--bg-elev-2); border-radius: 999px; overflow: hidden; }
+.metric .bar-fill { height: 100%; width: 0; background: var(--gradient); border-radius: 999px; transition: width 0.5s ease; }
 
 /* ---------- Forms ---------- */
 label { display: block; font-size: 0.85rem; color: var(--text-dim); margin: 14px 0 6px; }
@@ -155,6 +171,40 @@ table { width: 100%; border-collapse: collapse; }
 th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 th { color: var(--text-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
 tr:last-child td { border-bottom: none; }
+.num-col { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+/* Paired cards share the row height (stretch to the taller one) so Recent
+   clients and Top deployed images line up edge to edge. */
+.grid.top { align-items: stretch; }
+
+/* ---------- Top deployed images (ranked bars) ---------- */
+.toplist { display: flex; flex-direction: column; gap: 8px; }
+.toprow { display: flex; align-items: center; gap: 12px; }
+.toprank {
+  flex: 0 0 20px; color: var(--text-dim);
+  font-size: 0.8rem; font-weight: 700; font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.toprow:first-child .toprank { color: var(--accent); }
+/* The bar is the row: a filled track with the name overlaid on the left and the
+   count pinned right, so the visual length encodes the deploy count directly. */
+.topmain {
+  position: relative; flex: 1; min-width: 0;
+  height: 30px; border-radius: var(--radius-sm);
+  background: var(--bg-elev-2); overflow: hidden;
+}
+.topbar-fill {
+  position: absolute; inset: 0 auto 0 0;
+  background: var(--gradient); opacity: 0.85;
+  border-radius: var(--radius-sm); transition: width 0.5s ease;
+}
+.toplabel {
+  position: relative; z-index: 1;
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  height: 100%; padding: 0 12px;
+  font-size: 0.8rem;
+}
+.topname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.topcount { flex: 0 0 auto; font-weight: 800; font-variant-numeric: tabular-nums; font-size: 0.85rem; }
 
 .badge {
   display: inline-block; padding: 3px 10px; border-radius: 999px;
@@ -209,5 +259,5 @@ tr:last-child td { border-bottom: none; }
 @media (max-width: 820px) {
   .sidebar { width: 64px; }
   .brand span, .nav a span:not(.ico) { display: none; }
-  .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
+  .grid.cols-4, .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
 }

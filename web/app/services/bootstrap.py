@@ -1,7 +1,9 @@
 """First-start bootstrap: seed settings and create the default admin account."""
 import logging
 import secrets
+import shutil
 import string
+from pathlib import Path
 
 from sqlalchemy import select
 
@@ -12,6 +14,22 @@ from .. import config
 from . import dnsmasq, ipxe
 
 log = logging.getLogger("beacon.bootstrap")
+
+# wimboot is baked into the web image (see web/Dockerfile) and copied into the
+# bootroot so nginx serves it at /wimboot for the Windows boot chain.
+_WIMBOOT_SRC = Path("/usr/local/share/wimboot")
+
+
+def _stage_wimboot() -> None:
+    """Copy wimboot into the bootroot if it isn't already there (or is stale)."""
+    dest = config.BOOTROOT_DIR / "wimboot"
+    if not _WIMBOOT_SRC.exists():
+        log.warning("wimboot not bundled in image; Windows boot will not work")
+        return
+    if dest.exists() and dest.stat().st_size == _WIMBOOT_SRC.stat().st_size:
+        return
+    shutil.copy2(_WIMBOOT_SRC, dest)
+    log.info("Staged wimboot into bootroot")
 
 
 def _gen_password(length: int = 20) -> str:
@@ -49,6 +67,9 @@ def run():
                         banner, config.ADMIN_USER, password, banner)
             if not generated:
                 log.warning("(password came from ADMIN_PASSWORD in .env)")
+
+        # Make wimboot available for Windows images.
+        _stage_wimboot()
 
         # Render initial boot configs so the stack is bootable immediately.
         dnsmasq.render(db)

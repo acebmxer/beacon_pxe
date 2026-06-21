@@ -23,6 +23,9 @@ IMAGE_DIR = _path("IMAGE_DIR", "./data/images")
 DNSMASQ_DIR = _path("DNSMASQ_DIR", "./dnsmasq")
 # Live filesystems extracted from ISOs, exported read-only by the nfs service.
 NFS_DIR = _path("NFS_DIR", "./data/nfs")
+# Unpacked Windows install media, exported read-only by the smb service so WinPE
+# can run setup.exe over SMB (iPXE sanhook can't present the ISO under UEFI).
+SMB_DIR = _path("SMB_DIR", "./data/smb")
 
 DB_PATH = DATA_DIR / "pxe.db"
 DB_URL = f"sqlite:///{DB_PATH}"
@@ -42,11 +45,13 @@ DEFAULTS = {
     "server_ip": os.environ.get("SERVER_IP", "").strip(),
     "boot_interface": os.environ.get("BOOT_INTERFACE", "eth0").strip(),
     "dhcp_mode": os.environ.get("DHCP_MODE", "proxy").strip(),
-    "dhcp_range_start": os.environ.get("DHCP_RANGE_START", "192.168.1.100").strip(),
-    "dhcp_range_end": os.environ.get("DHCP_RANGE_END", "192.168.1.200").strip(),
-    "dhcp_subnet_mask": os.environ.get("DHCP_SUBNET_MASK", "255.255.255.0").strip(),
-    "dhcp_gateway": os.environ.get("DHCP_GATEWAY", "192.168.1.1").strip(),
-    "dhcp_dns": os.environ.get("DHCP_DNS", "192.168.1.1").strip(),
+    # Full-DHCP-only fields: left empty by default so they only carry values the
+    # admin explicitly sets (in Full DHCP mode). .env can still seed them.
+    "dhcp_range_start": os.environ.get("DHCP_RANGE_START", "").strip(),
+    "dhcp_range_end": os.environ.get("DHCP_RANGE_END", "").strip(),
+    "dhcp_subnet_mask": os.environ.get("DHCP_SUBNET_MASK", "").strip(),
+    "dhcp_gateway": os.environ.get("DHCP_GATEWAY", "").strip(),
+    "dhcp_dns": os.environ.get("DHCP_DNS", "").strip(),
     # Service toggles.
     "svc_dhcp": "1",
     "svc_tftp": "1",

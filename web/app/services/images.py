@@ -7,6 +7,7 @@ import logging
 import re
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 from ..db import SessionLocal
@@ -50,12 +51,42 @@ def iso_path(filename: str) -> Path:
     return config.IMAGE_DIR / filename
 
 
+def _list_7z(path: Path) -> list[str]:
+    """List members via 7z, which reads UDF (modern Windows ISOs use it)."""
+    out = subprocess.run(
+        ["7z", "-slt", "l", str(path)],
+        capture_output=True, text=True, check=True,
+    )
+    entries = []
+    for line in out.stdout.splitlines():
+        # 7z -slt prints one "Path = <member>" per file. The first such line is
+        # the archive's own path; skip it by ignoring the absolute ISO path.
+        if line.startswith("Path = "):
+            member = line[len("Path = "):].strip()
+            if member and member != str(path):
+                entries.append(member)
+    return entries
+
+
 def _list_iso(path: Path) -> list[str]:
+    """List ISO members. bsdtar reads ISO9660 (Linux/XCP-NG ISOs); modern
+    Windows ISOs are UDF, which bsdtar can't read — it returns only the ISO9660
+    stub (a lone README). Fall back to 7z, which handles UDF, in that case.
+    """
     out = subprocess.run(
         ["bsdtar", "-tf", str(path)],
         capture_output=True, text=True, check=True,
     )
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    entries = [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    # A real bootable ISO has dozens+ of entries; a couple means bsdtar only saw
+    # the ISO9660 stub of a UDF disc. Re-list with 7z to read the UDF volume.
+    real = [e for e in entries if e.lstrip("./").rstrip("/")]
+    if len(real) <= 3:
+        try:
+            return _list_7z(path)
+        except subprocess.CalledProcessError:
+            pass
+    return entries
 
 
 def _match(entries: list[str], patterns: list[str]) -> str | None:
@@ -73,6 +104,16 @@ def _extract_one(iso: Path, member: str, dest: Path) -> None:
         subprocess.run(
             ["bsdtar", "-xOf", str(iso), member],
             stdout=fh, check=True,
+        )
+
+
+def _extract_one_7z(iso: Path, member: str, dest: Path) -> None:
+    """Extract one member to dest via 7z (for UDF ISOs bsdtar can't read)."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with open(dest, "wb") as fh:
+        subprocess.run(
+            ["7z", "e", "-so", str(iso), member],
+            stdout=fh, stderr=subprocess.DEVNULL, check=True,
         )
 
 
@@ -100,6 +141,21 @@ def _extract_tree(iso: Path, dest: Path) -> None:
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bsdtar", "-xf", str(iso), "-C", str(dest)], check=True)
+
+
+def _extract_tree_7z(iso: Path, dest: Path) -> None:
+    """Unpack the whole ISO into dest via 7z (UDF-capable, for Windows ISOs).
+
+    bsdtar can't read the UDF volume modern Windows ISOs use, so the SMB install
+    media is unpacked with 7z. Re-extracts cleanly so a Retry can't leave a
+    half-written tree.
+    """
+    shutil.rmtree(dest, ignore_errors=True)
+    dest.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["7z", "x", "-y", f"-o{dest}", str(iso)],
+        check=True, capture_output=True, text=True,
+    )
 
 
 def _detect_family(entries: list[str]) -> str:
@@ -219,6 +275,182 @@ def _process_xcpng(db, img: Image, iso: Path) -> None:
     db.commit()
 
 
+# Windows boot files extracted from the ISO for the wimboot chain, mapped to the
+# fixed names the iPXE label references. wimboot loads bootmgr + BCD + boot.sdi +
+# boot.wim into a ramdisk and starts WinPE. Paths are matched case-insensitively
+# because Windows ISOs are inconsistent about case (boot/BCD vs boot/bcd).
+_WINDOWS_FILES = {
+    r"bootmgr": "bootmgr",
+    r"boot/bcd": "bcd",
+    r"boot/boot\.sdi": "boot.sdi",
+    r"sources/boot\.wim": "boot.wim",
+}
+
+# The Windows Setup image inside boot.wim is index 2 (index 1 is the bare WinPE
+# shell). We override index 2's shell with a winpeshl.ini that runs our own
+# beacon-setup.cmd, which maps the SMB share and launches setup.exe from it.
+# wiminfo confirms this layout on standard install media.
+#
+# Why not startnet.cmd? On Windows *Setup* media the boot image does not use
+# startnet.cmd as its shell — Setup is auto-launched by winpeshl (or its
+# built-in default when winpeshl.ini is absent), so a patched startnet.cmd never
+# runs and Setup starts with no install-media drive ("a media driver is
+# missing"). winpeshl.ini is the entry point WinPE Setup actually honors.
+_WIM_SETUP_INDEX = 2
+
+# Samba share name exported by the smb service (see smb/smb.conf).
+_SMB_SHARE = "install"
+
+# Set True to drop to a WinPE command prompt (after mounting the share) instead
+# of launching Setup — useful for inspecting the mounted media live.
+_WINPE_DIAGNOSTIC = False
+
+
+# winpeshl runs the listed app(s) in order, replacing Setup's default
+# auto-launch. We point it at our own beacon-setup.cmd.
+_WINPESHL_INI = (
+    "[LaunchApps]\r\n"
+    "%SYSTEMDRIVE%\\Windows\\System32\\beacon-setup.cmd\r\n"
+)
+
+
+def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
+    """Build the script winpeshl runs: mount the SMB share and launch Setup.
+
+    iPXE can't present the ISO to WinPE as a drive under UEFI (sanhook is BIOS
+    INT 13h only), so instead WinPE pulls the install media from Samba. wpeinit
+    brings up networking + DHCP; then we map the read-only guest share and launch
+    setup.exe from it. The server IP is baked in: WinPE has no DNS for our host.
+
+    This is invoked via winpeshl.ini (not startnet.cmd): on Windows Setup media
+    the boot image auto-launches Setup and ignores startnet.cmd, so overriding
+    winpeshl is the only way to inject our own pre-Setup steps.
+
+    CRLF line endings — this runs as a Windows batch file.
+    """
+    host = server_ip or "%SERVER_IP%"
+    share = rf"\\{host}\{_SMB_SHARE}\{image_id}"
+    lines = [
+        "@echo off",
+        "wpeinit",
+        rf"echo Connecting to Beacon install share {share} ...",
+        # Bounded retry (DHCP may not be ready on the first try). Show the real
+        # `net use` error on each attempt instead of silently looping forever —
+        # a silent infinite loop just makes the firmware reboot with no clue why.
+        "set /a tries=0",
+        ":retry",
+        "set /a tries+=1",
+        rf'net use Y: {share} /user:guest ""',
+        "if exist Y:\\setup.exe goto run",
+        "if %tries% geq 10 goto failed",
+        "echo   mount attempt %tries% failed; retrying in 3s ...",
+        "ping -n 4 127.0.0.1 >nul",
+        "goto retry",
+        ":failed",
+        "echo.",
+        "echo *** Could not mount the install share after %tries% tries. ***",
+        rf"echo Server: {host}   Share: {share}",
+        "echo --- ipconfig ---",
+        "ipconfig",
+        rf"echo --- ping {host} ---",
+        rf"ping -n 3 {host}",
+        "echo Dropping to a prompt so you can diagnose (try the net use by hand).",
+        "cmd",
+        "goto end",
+        ":run",
+    ]
+    if _WINPE_DIAGNOSTIC:
+        # Don't launch Setup; show what WinPE can see on the share, then drop to
+        # a prompt so we can inspect the mounted media live.
+        lines += [
+            "echo === Beacon diagnostics ===",
+            "net use",
+            "dir Y:\\",
+            "dir Y:\\sources\\install.* Y:\\sources\\setup*.*",
+            "type Y:\\sources\\install.wim >nul 2>&1 && echo READ_OK || echo READ_FAIL",
+            "echo === end diagnostics; dropping to a prompt ===",
+            "cmd",
+        ]
+    else:
+        lines += [
+            "echo Starting Windows Setup ...",
+            "Y:\\setup.exe",
+        ]
+    lines.append(":end")
+    return "\r\n".join(lines) + "\r\n"
+
+
+def _patch_boot_wim(wim: Path, server_ip: str, image_id: int) -> None:
+    """Override the Setup image (index 2) shell with our winpeshl + script.
+
+    Adds winpeshl.ini and beacon-setup.cmd to \\Windows\\System32 via wimlib's
+    `wimupdate` add command (overwrites in place, no mount, so it works
+    unprivileged in the container). winpeshl.ini makes WinPE run beacon-setup.cmd
+    instead of auto-launching Setup, and that script mounts the SMB share and
+    starts setup.exe from it.
+    """
+    with tempfile.TemporaryDirectory() as tmp:
+        cmd = Path(tmp) / "beacon-setup.cmd"
+        cmd.write_text(_beacon_setup_cmd(server_ip, image_id), newline="")
+        ini = Path(tmp) / "winpeshl.ini"
+        ini.write_text(_WINPESHL_INI, newline="")
+        # `add <source> <dest-in-wim>`; overwrites existing files. wimupdate
+        # reads its command list from stdin.
+        commands = (
+            f"add '{cmd}' '/Windows/System32/beacon-setup.cmd'\n"
+            f"add '{ini}' '/Windows/System32/winpeshl.ini'\n"
+        )
+        subprocess.run(
+            ["wimupdate", str(wim), str(_WIM_SETUP_INDEX)],
+            input=commands, check=True, capture_output=True, text=True,
+        )
+
+
+def _process_windows(db, img: Image, iso: Path, entries: list[str]) -> None:
+    """Prepare a Windows ISO for PXE install via wimboot + SMB.
+
+    1. Extract the WinPE boot files (bootmgr/BCD/boot.sdi/boot.wim) that wimboot
+       loads into a ramdisk to start WinPE.
+    2. Unpack the whole ISO into SMB_DIR/<id> so the smb service can serve the
+       install media (sources/install.wim et al.) to WinPE.
+    3. Inject winpeshl.ini + beacon-setup.cmd into boot.wim so WinPE maps that
+       share and launches setup.exe from it.
+    """
+    dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
+    shutil.rmtree(dest_dir, ignore_errors=True)
+    server_ip = all_settings(db).get("server_ip", "")
+    try:
+        for pattern, name in _WINDOWS_FILES.items():
+            member = _match(entries, [pattern])
+            if member is None:
+                img.status = "error"
+                img.message = f"Windows ISO is missing {name} (looked for {pattern})"
+                db.commit()
+                return
+            # Windows ISOs are UDF; extract with 7z (bsdtar can't read UDF).
+            _extract_one_7z(iso, member, dest_dir / name)
+
+        # Unpack the full ISO for the SMB share (Setup reads install.wim there).
+        _extract_tree_7z(iso, config.SMB_DIR / str(img.id))
+
+        # Override WinPE's shell so it mounts the share and runs Setup.
+        _patch_boot_wim(dest_dir / "boot.wim", server_ip, img.id)
+    except subprocess.CalledProcessError as e:
+        img.status = "error"
+        detail = getattr(e, "stderr", "") or e
+        img.message = f"Windows extraction failed: {detail}"
+        db.commit()
+        return
+
+    # kernel_path points at wimboot's WinPE image; the renderer wraps the wimboot
+    # chain (no sanhook — WinPE reaches the media over SMB instead).
+    img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/boot.wim"
+    img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/bootmgr"
+    img.status = "ready"
+    img.message = "Extracted WinPE + unpacked SMB media; boots via wimboot"
+    db.commit()
+
+
 def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[bool, str]:
     """Decide how a live ISO should netboot and return (needs_nfs, kernel cmdline).
 
@@ -240,6 +472,20 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
     return False, "ip=dhcp"
 
 
+def _clean_derived_data(image_id: int) -> None:
+    """Remove every derived artifact for an image (all families) but keep the ISO.
+
+    Called at the start of each (re)process so a run is always a clean slate: an
+    image whose family or netboot method changed can't leave a stale boot.wim,
+    Xen kernel, or a multi-GB NFS/SMB tree from a previous run behind. The ISO
+    itself lives in IMAGE_DIR and is preserved.
+    """
+    sid = str(image_id)
+    shutil.rmtree(config.BOOTROOT_DIR / EXTRACT_SUBDIR / sid, ignore_errors=True)
+    shutil.rmtree(config.NFS_DIR / sid, ignore_errors=True)
+    shutil.rmtree(config.SMB_DIR / sid, ignore_errors=True)
+
+
 def process_image(image_id: int) -> None:
     """Run extraction for one image. Intended to run as a background task."""
     db = SessionLocal()
@@ -250,6 +496,9 @@ def process_image(image_id: int) -> None:
         # Mark active extraction so the UI can distinguish "queued" from "working".
         img.status = "processing"
         db.commit()
+        # Wipe any artifacts from a previous run before re-extracting, so a
+        # changed family/netboot method can't leave stale (possibly huge) data.
+        _clean_derived_data(image_id)
         iso = iso_path(img.filename)
         try:
             entries = _list_iso(iso)
@@ -262,10 +511,9 @@ def process_image(image_id: int) -> None:
         family = _detect_family(entries)
         img.os_family = family
         if family == "windows":
-            img.status = "unsupported"
-            img.message = ("Windows image stored. Direct PXE boot of Windows ISOs "
-                           "is not supported yet (needs wimboot/WinPE). See README.")
-            db.commit()
+            _process_windows(db, img, iso, entries)
+            ipxe.render(db)
+            log.info("Image %s ready (%s)", img.name, family)
             return
 
         if family == "xcpng":
@@ -326,6 +574,7 @@ def delete_image(db, img: Image) -> None:
     extracted = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
     shutil.rmtree(extracted, ignore_errors=True)
     shutil.rmtree(config.NFS_DIR / str(img.id), ignore_errors=True)
+    shutil.rmtree(config.SMB_DIR / str(img.id), ignore_errors=True)
     db.delete(img)
     db.commit()
     ipxe.render(db)
@@ -350,3 +599,23 @@ def rebuild_xcpng_grub_all(db) -> None:
                               server_ip)
         except subprocess.CalledProcessError as e:
             log.warning("Rebuilding XCP-NG GRUB for %s failed: %s", img.name, e)
+
+
+def rebuild_windows_setup_all(db) -> None:
+    """Re-patch the WinPE setup script for every ready Windows image.
+
+    The server IP is baked into each boot.wim's beacon-setup.cmd (WinPE has no
+    DNS for our host), so a Server IP change must rewrite it. This only re-patches
+    the already-extracted boot.wim — no slow re-unpacking of the SMB tree.
+    """
+    server_ip = all_settings(db).get("server_ip", "")
+    for img in db.query(Image).filter(
+            Image.os_family == "windows", Image.status == "ready").all():
+        wim = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id) / "boot.wim"
+        if not wim.exists():
+            continue  # extracted files gone; a full reprocess is needed instead
+        try:
+            _patch_boot_wim(wim, server_ip, img.id)
+        except subprocess.CalledProcessError as e:
+            log.warning("Re-patching Windows setup for %s failed: %s",
+                        img.name, e)

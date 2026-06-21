@@ -15,5 +15,7 @@ services:
     build: ./dnsmasq
   nfs:
     build: ./nfs
+  smb:
+    build: ./smb
   reload:
     build: ./reload

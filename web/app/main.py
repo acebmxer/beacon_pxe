@@ -12,7 +12,7 @@ from .db import init_db, SessionLocal
 from .deps import RedirectException
 from .store import get_setting
 from .services import bootstrap
-from .routers import auth, dashboard, settings, images, users, setup
+from .routers import auth, dashboard, settings, images, users, setup, track
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -36,7 +36,7 @@ async def _redirect_handler(request: Request, exc: RedirectException):
 
 
 # Force the first-run wizard until it's completed.
-_EXEMPT_PREFIXES = ("/login", "/logout", "/setup", "/static", "/theme")
+_EXEMPT_PREFIXES = ("/login", "/logout", "/setup", "/static", "/theme", "/track")
 
 
 @app.middleware("http")
@@ -65,3 +65,4 @@ app.include_router(dashboard.router)
 app.include_router(settings.router)
 app.include_router(images.router)
 app.include_router(users.router)
+app.include_router(track.router)

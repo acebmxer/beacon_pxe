@@ -32,6 +32,11 @@ services:
       IMAGE_DIR: /images
       DNSMASQ_DIR: /dnsmasq
       NFS_DIR: /nfs
+      SMB_DIR: /smb
+      # Host /proc mounted below; the dashboard reads CPU/mem/disk/net from it so
+      # its performance graphs reflect the whole machine (incl. nginx/nfs pushing
+      # images), not just this container.
+      HOST_PROC: /host/proc
     volumes:
       - ./data:/data
       - bootroot:/bootroot
@@ -39,6 +44,10 @@ services:
       - dnsmasqconf:/dnsmasq
       # Live filesystems extracted from ISOs, served to clients by the nfs service.
       - nfsroot:/nfs
+      # Unpacked Windows install media, served to WinPE by the smb service.
+      - smbroot:/smb
+      # Host metrics for the dashboard (read-only).
+      - /proc:/host/proc:ro
     ports:
       - "${WEB_PORT:-8080}:8080"
 
@@ -61,7 +70,9 @@ services:
     cap_add:
       - NET_ADMIN
     volumes:
-      - dnsmasqconf:/dnsmasq:ro
+      # Writable (not :ro) so dnsmasq can write dnsmasq.log here for the
+      # dashboard's recent-clients view; it still only reads dnsmasq.conf.
+      - dnsmasqconf:/dnsmasq
 
   # Serves each image's live filesystem (extracted from its ISO) over NFS so
   # clients mount it on demand instead of downloading the whole ISO into RAM.
@@ -76,6 +87,18 @@ services:
     volumes:
       - nfsroot:/nfs:ro
       - /lib/modules:/lib/modules:ro
+
+  # Serves each Windows image's unpacked install media over SMB. WinPE (booted
+  # via wimboot) mounts this share and runs setup.exe — iPXE can't present the
+  # ISO as a CD under UEFI, so SMB is how Setup reaches sources/install.wim.
+  # Host networking so WinPE reaches it by the server IP on the boot LAN.
+  smb:
+    image: ghcr.io/acebmxer/beacon-smb:latest
+    container_name: beacon_smb
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - smbroot:/srv/install:ro
 
   # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker
   # socket into the web app: this sidecar owns the privileged restart instead.
@@ -92,4 +115,5 @@ services:
 volumes:
   bootroot:
   nfsroot:
+  smbroot:
   dnsmasqconf:

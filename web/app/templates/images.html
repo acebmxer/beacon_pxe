@@ -30,9 +30,10 @@
   </form>
   <div class="alert info" style="margin-top:16px;">
     <b>Format note:</b> only <span class="mono">.iso</span> is accepted.
-    <b>Windows ISOs</b> are stored but not yet network-bootable (they require
-    wimboot/WinPE — see the README). Booting a raw ISO whole isn't used; the
-    kernel/initrd are extracted and served over HTTP for reliable netboot.
+    <b>Windows ISOs</b> boot the installer via wimboot/WinPE: the WinPE boot
+    files are extracted and the ISO is mounted over HTTP as a virtual CD, so
+    Setup installs straight from the ISO (no extra share needed). Linux ISOs have
+    their kernel/initrd extracted and served over HTTP for reliable netboot.
   </div>
 </div>
 {% endif %}

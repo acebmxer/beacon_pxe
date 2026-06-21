@@ -38,4 +38,6 @@ async def setup_save(request: Request, user: User = Depends(require_admin),
     ipxe.render(db)
     # Rebuild XCP-NG GRUB chainloaders with the (possibly new) server IP.
     image_svc.rebuild_xcpng_grub_all(db)
+    # Re-patch Windows WinPE setup script (SMB mount bakes in the server IP).
+    image_svc.rebuild_windows_setup_all(db)
     return RedirectResponse("/", status_code=303)

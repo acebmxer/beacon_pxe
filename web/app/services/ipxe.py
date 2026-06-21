@@ -55,6 +55,23 @@ exit
 """
 
 
+def _track(tag: str, img: Image, base_url: str) -> str:
+    """Best-effort ping so the dashboard can count this deployment.
+
+    Fetched and immediately freed: it records a BootEvent server-side, we don't
+    use the response. `||` makes it non-fatal -- if it fails the client still
+    boots from nginx, which serves the files below independently.
+
+    base_url is the HTTP boot root (port 80, nginx); nginx reverse-proxies
+    /track/ to the web app (see http/nginx.conf), so the menu reaches tracking
+    over the same single boot-url the client already uses for everything else.
+    """
+    url = f"{base_url}/track/{img.id}?mac=${{net0/mac}}&ip=${{net0/ip}}"
+    return (f"imgfetch --name track {url} || goto {tag}_boot\n"
+            f"imgfree track || goto {tag}_boot\n"
+            f":{tag}_boot\n")
+
+
 def _xcpng_label(tag: str, img: Image, base_url: str, args: str) -> str:
     """Chainload the per-image standalone GRUB, which multiboots Xen.
 
@@ -68,8 +85,35 @@ def _xcpng_label(tag: str, img: Image, base_url: str, args: str) -> str:
     grub = f"{base_url}/{img_dir}/bootx64.efi"
     return (
         f":{tag}\n"
-        f"echo Booting {img.name} (XCP-NG via GRUB) ...\n"
+        + _track(tag, img, base_url)
+        + f"echo Booting {img.name} (XCP-NG via GRUB) ...\n"
         f"chain {grub} || goto start\n"
+    )
+
+
+def _windows_label(tag: str, img: Image, base_url: str) -> str:
+    """Boot Windows via wimboot; WinPE reaches the install media over SMB.
+
+    wimboot loads bootmgr + BCD + boot.sdi + boot.wim into a ramdisk and starts
+    WinPE. The full install media (sources/install.wim and friends) isn't in
+    boot.wim — under UEFI iPXE can't sanhook the ISO as a CD, so instead the
+    boot.wim's winpeshl.ini (patched at extraction time to run beacon-setup.cmd)
+    mounts the smb service's share and runs setup.exe from it.
+
+    The trailing filename on each initrd line names the ramdisk file so
+    bootmgr/BCD resolve them by their expected names.
+    """
+    img_dir = img.kernel_path.rsplit("/", 1)[0]  # os/<id>
+    return (
+        f":{tag}\n"
+        + _track(tag, img, base_url)
+        + f"echo Booting {img.name} (Windows) ...\n"
+        f"kernel {base_url}/wimboot || goto start\n"
+        f"initrd {base_url}/{img_dir}/bootmgr   bootmgr  || goto start\n"
+        f"initrd {base_url}/{img_dir}/bcd       BCD      || goto start\n"
+        f"initrd {base_url}/{img_dir}/boot.sdi  boot.sdi || goto start\n"
+        f"initrd {base_url}/{img_dir}/boot.wim  boot.wim || goto start\n"
+        f"boot || goto start\n"
     )
 
 
@@ -85,11 +129,15 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
         if img.os_family == "xcpng":
             labels.append(_xcpng_label(tag, img, base_url, args))
             continue
+        if img.os_family == "windows":
+            labels.append(_windows_label(tag, img, base_url))
+            continue
         kernel = f"{base_url}/{img.kernel_path}"
         initrd = f"{base_url}/{img.initrd_path}"
         labels.append(
             f":{tag}\n"
-            f"echo Booting {img.name} ...\n"
+            + _track(tag, img, base_url)
+            + f"echo Booting {img.name} ...\n"
             f"kernel {kernel} {args} || goto start\n"
             f"initrd {initrd} || goto start\n"
             f"boot || goto start\n"

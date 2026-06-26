@@ -29,6 +29,9 @@ KERNEL_PATTERNS = [
     r"images/pxeboot/vmlinuz",
     r"isolinux/vmlinuz.*",
     r"arch/boot/x86_64/vmlinuz.*",
+    # Fedora 42+ live ISOs ship the kernel as boot/<arch>/loader/linux
+    # (systemd-boot/grub layout) — named "linux", not "vmlinuz".
+    r"boot/[^/]+/loader/linux",
     r"boot/vmlinuz.*",
     r"kernel/vmlinuz",
     r".*/vmlinuz.*",
@@ -40,6 +43,8 @@ INITRD_PATTERNS = [
     r"images/pxeboot/initrd.*",
     r"isolinux/initrd.*",
     r"arch/boot/x86_64/initramfs.*",
+    # Fedora 42+ live ISOs ship the initrd as boot/<arch>/loader/initrd.
+    r"boot/[^/]+/loader/initrd",
     r"boot/initramfs.*",
     r"boot/initrd.*",
     r".*/initrd.*",
@@ -96,6 +101,28 @@ def _match(entries: list[str], patterns: list[str]) -> str | None:
             if rx.fullmatch(entry.lstrip("./")):
                 return entry
     return None
+
+
+def _pair_initrd(kernel: str, initrd: str, entries: list[str]) -> str:
+    """Pick the initrd that matches the chosen kernel's version suffix.
+
+    Archiso ISOs that ship multiple kernels name them in parallel —
+    vmlinuz-linux-cachyos ↔ initramfs-linux-cachyos.img,
+    vmlinuz-linux-cachyos-lts ↔ initramfs-linux-cachyos-lts.img. The plain
+    pattern match can otherwise pair a kernel with another flavour's initrd
+    (whichever lists first), which boots a mismatched initramfs and fails.
+    Falls back to the already-matched initrd when no suffix-paired one exists.
+    """
+    kname = kernel.lstrip("./").rsplit("/", 1)[-1]
+    m = re.match(r"vmlinuz(-.+)$", kname, re.IGNORECASE)
+    if not m:
+        return initrd
+    suffix = m.group(1)  # e.g. "-linux-cachyos-lts"
+    want = re.compile(rf"initramfs{re.escape(suffix)}(\.img)?$", re.IGNORECASE)
+    for entry in entries:
+        if want.fullmatch(entry.lstrip("./").rsplit("/", 1)[-1]):
+            return entry
+    return initrd
 
 
 def _extract_one(iso: Path, member: str, dest: Path) -> None:
@@ -451,8 +478,18 @@ def _process_windows(db, img: Image, iso: Path, entries: list[str]) -> None:
     db.commit()
 
 
-def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[bool, str]:
-    """Decide how a live ISO should netboot and return (needs_nfs, kernel cmdline).
+def _netboot_plan(
+    entries: list[str], filename: str, image_id: int
+) -> tuple[bool, list[tuple[str, str]], str]:
+    """Decide how a live ISO should netboot.
+
+    Returns (needs_nfs, http_files, kernel cmdline):
+      - needs_nfs: unpack the whole ISO and export it over NFS.
+      - http_files: (iso_member, dest_relpath) pairs to extract into the image's
+        bootroot dir (os/<id>/) and stream over HTTP. dest_relpath keeps the
+        on-disc subpath where the bootloader expects it. Empty unless a single-
+        file HTTP root is used (Fedora 42+ live, Archiso); mutually exclusive
+        with needs_nfs.
 
     casper (Ubuntu) and live (Debian) images mount their squashfs over NFS so the
     whole ISO never has to fit in client RAM — the old `url=`/`fetch=` methods
@@ -462,14 +499,48 @@ def _netboot_plan(entries: list[str], filename: str, image_id: int) -> tuple[boo
     """
     nfsroot = f"${{server-ip}}:/nfs/{image_id}"
     iso_url = f"${{boot-url}}/images/{filename}"
+    base = f"${{boot-url}}/{EXTRACT_SUBDIR}/{image_id}"
     joined = " ".join(e.lower() for e in entries)
     if "casper/" in joined:  # Ubuntu / casper live
-        return True, f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp"
+        return True, [], f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "live/" in joined:    # Debian live
-        return True, f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
+        return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
-        return False, f"inst.repo={iso_url} ip=dhcp"
-    return False, "ip=dhcp"
+        return False, [], f"inst.repo={iso_url} ip=dhcp"
+    # Fedora 42+ live: dracut dmsquash-live root filesystem under LiveOS/. The
+    # squashfs is extracted to the bootroot and streamed over HTTP — no NFS or
+    # whole-ISO copy needed.
+    squashfs = _match(entries, [r"liveos/squashfs.img"])
+    if squashfs:
+        return False, [(squashfs, "squashfs.img")], (
+            f"root=live:{base}/squashfs.img rd.live.image ip=dhcp")
+    # Archiso (Arch / EndeavourOS / CachyOS): the airootfs squashfs lives under
+    # arch/<arch>/. archiso's initramfs fetches it (and verifies the .sha512)
+    # from archiso_http_srv, keeping the same arch/<arch>/ layout, so extract
+    # both files preserving their subpath.
+    #
+    # BOOTIF is required: archiso's archiso_pxe_common hook re-runs IP-Config to
+    # bring the boot NIC up for the HTTP fetch, and it identifies that NIC by the
+    # BOOTIF=01-<mac> parameter PXELINUX normally appends (IPAPPEND 2). iPXE does
+    # not add it on its own, so without this the hook can't find the interface
+    # ("SIOCGIFFLAGS: No such device") and DHCP times out. ${net0/mac:hexhyp}
+    # expands to aa-bb-cc-dd-ee-ff, giving the 01-<mac> form archiso expects.
+    #
+    # Note: archiso's HTTP boot pulls the whole airootfs.sfs into a RAM tmpfs, so
+    # the live desktop needs ~8 GB to boot (4-6 GB OOMs or thrashes). That's
+    # acceptable: real PXE clients are physical machines with 8+ GB. copytoram=n
+    # was tried to lower this and did not help, so it's not used.
+    sfs = _match(entries, [r"arch/[^/]+/airootfs.sfs"])
+    if sfs:
+        basedir = sfs.lstrip("./").split("/", 1)[0]  # "arch"
+        files = [(sfs, sfs.lstrip("./"))]
+        sha = _match(entries, [r"arch/[^/]+/airootfs.sha512"])
+        if sha:
+            files.append((sha, sha.lstrip("./")))
+        return False, files, (
+            f"archiso_http_srv={base}/ archisobasedir={basedir} "
+            "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp")
+    return False, [], "ip=dhcp"
 
 
 def _clean_derived_data(image_id: int) -> None:
@@ -531,6 +602,8 @@ def process_image(image_id: int) -> None:
                            "paths manually after checking the ISO layout.")
             db.commit()
             return
+        # Keep the initrd on the same kernel flavour (multi-kernel Arch ISOs).
+        initrd = _pair_initrd(kernel, initrd, entries)
 
         dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
         try:
@@ -542,7 +615,8 @@ def process_image(image_id: int) -> None:
             db.commit()
             return
 
-        needs_nfs, guessed_args = _netboot_plan(entries, img.filename, img.id)
+        needs_nfs, http_files, guessed_args = _netboot_plan(
+            entries, img.filename, img.id)
 
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.
@@ -553,10 +627,25 @@ def process_image(image_id: int) -> None:
                 img.message = f"Live filesystem extraction failed: {e.stderr or e}"
                 db.commit()
                 return
+        elif http_files:
+            # Single-file HTTP root (Fedora 42+ live, Archiso): extract just the
+            # root filesystem (+ any checksum) into the bootroot, preserving the
+            # subpath the bootloader expects, so nginx can stream it.
+            try:
+                for member, relpath in http_files:
+                    _extract_one(iso, member, dest_dir / relpath)
+            except subprocess.CalledProcessError as e:
+                img.status = "error"
+                img.message = f"Live filesystem extraction failed: {e.stderr or e}"
+                db.commit()
+                return
 
         img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
         img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/initrd"
-        img.boot_args = img.boot_args or guessed_args
+        # Reprocess regenerates everything, so reset boot args to the freshly
+        # guessed ones — a changed family/layout must not keep stale args (e.g.
+        # an Archiso image left on a previous run's bare ip=dhcp).
+        img.boot_args = guessed_args
         img.status = "ready"
         img.message = f"Extracted {Path(kernel).name} + {Path(initrd).name}"
         db.commit()

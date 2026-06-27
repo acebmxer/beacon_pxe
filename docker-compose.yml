@@ -37,6 +37,10 @@ services:
       # its performance graphs reflect the whole machine (incl. nginx/nfs pushing
       # images), not just this container.
       HOST_PROC: /host/proc
+      # Self-update: the web app needs the host project directory so docker
+      # compose can resolve relative volume paths (./data, etc.) correctly
+      # when it runs against the Docker daemon on the host.
+      COMPOSE_PROJECT_DIR: ${PWD}
     volumes:
       - ./data:/data
       - bootroot:/bootroot
@@ -48,6 +52,11 @@ services:
       - smbroot:/smb
       # Host metrics for the dashboard (read-only).
       - /proc:/host/proc:ro
+      # Self-update: Docker socket + this compose file + env file so the web
+      # app can pull new images and recreate containers on admin request.
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./docker-compose.yml:/beacon/docker-compose.yml:ro
+      - ./.env:/beacon/.env:ro
     ports:
       - "${WEB_PORT:-8080}:8080"
 

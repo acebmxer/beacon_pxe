@@ -1,4 +1,11 @@
+# Bring in the Docker CLI + compose plugin so the web container can run
+# `docker compose pull/up` for self-updates (requires docker socket mount).
+FROM docker:cli AS docker-cli
+
 FROM python:3.12-slim-bookworm
+COPY --from=docker-cli /usr/local/bin/docker /usr/local/bin/docker
+COPY --from=docker-cli /usr/local/libexec/docker/cli-plugins/docker-compose \
+                       /usr/local/libexec/docker/cli-plugins/docker-compose
 
 # bsdtar (libarchive-tools) and 7z extract kernel/initrd from ISO images without
 # needing a privileged loop mount. grub-efi-amd64-bin + grub-common provide

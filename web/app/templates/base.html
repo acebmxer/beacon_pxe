@@ -31,6 +31,9 @@
     <div class="topbar">
       <h1>{% block heading %}{{ menu_title }}{% endblock %}</h1>
       <div class="right">
+        {% if user.is_admin %}
+        <a id="update-badge" href="/settings#updates" class="badge pending" style="display:none;text-decoration:none;">Update available</a>
+        {% endif %}
         <form class="inline-form" method="post" action="/theme">
           <button class="btn ghost sm" type="submit" title="Toggle light/dark">
             {{ '☀ Light' if theme=='dark' else '🌙 Dark' }}
@@ -48,6 +51,18 @@
 </div>
 {% else %}
   {% block bare %}{% endblock %}
+{% endif %}
+{% if user and user.is_admin %}
+<script>
+(function () {
+  var badge = document.getElementById("update-badge");
+  if (!badge) return;
+  fetch("/api/update/status", { headers: { Accept: "application/json" } })
+    .then(function (r) { return r.ok ? r.json() : null; })
+    .then(function (d) { if (d && d.available) badge.style.display = ""; })
+    .catch(function () {});
+})();
+</script>
 {% endif %}
 </body>
 </html>

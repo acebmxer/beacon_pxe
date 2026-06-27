@@ -40,6 +40,15 @@ SECRET_KEY = os.environ.get("SECRET_KEY", "").strip() or secrets.token_hex(32)
 
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
 
+# Self-update: docker compose file + env mounted into the container by
+# docker-compose.yml.  COMPOSE_PROJECT_DIR is the host directory where
+# docker compose is run from (set via ${PWD} in the compose file) so that
+# relative volume paths in the compose file are resolved correctly by the
+# Docker daemon.
+COMPOSE_FILE = Path(os.environ.get("COMPOSE_FILE_PATH", "/beacon/docker-compose.yml"))
+COMPOSE_ENV_FILE = Path(os.environ.get("COMPOSE_ENV_FILE", "/beacon/.env"))
+COMPOSE_PROJECT_DIR = os.environ.get("COMPOSE_PROJECT_DIR", "")
+
 # Defaults for first-run / settings, sourced from env so .env can seed them.
 DEFAULTS = {
     "server_ip": os.environ.get("SERVER_IP", "").strip(),

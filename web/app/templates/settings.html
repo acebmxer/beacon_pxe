@@ -64,4 +64,121 @@
     <button class="btn" type="submit">Save settings</button>
   </div>
 </form>
+
+<div class="card" id="updates" style="margin-top:18px;">
+  <h2>Updates</h2>
+  <div class="sub">Pull new Docker images and redeploy all Beacon services</div>
+  <div id="upd-status" class="muted">Checking…</div>
+  <div class="toolbar" style="margin-top:14px;">
+    <button class="btn ghost sm" id="btn-check" onclick="updCheck()">Check now</button>
+    <button class="btn" id="btn-apply" onclick="updApply()" style="display:none;">Apply update</button>
+  </div>
+  <div id="upd-log" style="display:none;margin-top:14px;" class="alert info"></div>
+</div>
+
+<script>
+(function () {
+  var statusEl = document.getElementById("upd-status");
+  var applyBtn = document.getElementById("btn-apply");
+  var checkBtn = document.getElementById("btn-check");
+  var logEl    = document.getElementById("upd-log");
+  var polling  = null;
+
+  function fmt(iso) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
+  }
+
+  function render(d) {
+    if (d.in_progress) {
+      statusEl.textContent = "Update in progress — pulling images…";
+      statusEl.className = "";
+      applyBtn.style.display = "none";
+      checkBtn.disabled = true;
+      logEl.style.display = "none";
+      if (!polling) startPoll();
+      return;
+    }
+
+    checkBtn.disabled = false;
+
+    if (d.last_result === "success") {
+      logEl.textContent = "Update applied successfully. Services are restarting.";
+      logEl.className = "alert ok";
+      logEl.style.display = "";
+    } else if (d.last_result && d.last_result !== "") {
+      logEl.textContent = "Update failed: " + d.last_result;
+      logEl.className = "alert error";
+      logEl.style.display = "";
+    }
+
+    if (d.available) {
+      statusEl.innerHTML = '<span class="badge pending">Update available</span>';
+      applyBtn.style.display = "";
+    } else {
+      var checked = d.last_checked ? " · last checked " + fmt(d.last_checked) : "";
+      statusEl.innerHTML = '<span class="badge ready">Up to date</span>' +
+        '<span class="muted" style="margin-left:10px;font-size:0.83rem;">' + checked + '</span>';
+      applyBtn.style.display = "none";
+    }
+
+    stopPoll();
+  }
+
+  function load() {
+    fetch("/api/update/status", { headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) { if (d) render(d); })
+      .catch(function () {});
+  }
+
+  function startPoll() {
+    if (polling) return;
+    polling = setInterval(load, 3000);
+  }
+
+  function stopPoll() {
+    if (polling) { clearInterval(polling); polling = null; }
+  }
+
+  window.updCheck = function () {
+    checkBtn.disabled = true;
+    statusEl.textContent = "Checking…";
+    statusEl.className = "muted";
+    fetch("/api/update/check", { method: "POST", headers: { Accept: "application/json" } })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function () { load(); })
+      .catch(function () { checkBtn.disabled = false; });
+  };
+
+  window.updApply = function () {
+    if (!confirm("Pull new Docker images and redeploy all Beacon services?\n\nThe page will briefly become unavailable while services restart.")) return;
+    applyBtn.disabled = true;
+    checkBtn.disabled = true;
+    statusEl.textContent = "Starting update…";
+    logEl.style.display = "none";
+    fetch("/api/update/apply", { method: "POST", headers: { Accept: "application/json" } })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (d.error) {
+          statusEl.textContent = "Error: " + d.error;
+          applyBtn.disabled = false;
+          checkBtn.disabled = false;
+          return;
+        }
+        statusEl.textContent = "Update in progress — pulling images…";
+        statusEl.className = "";
+        startPoll();
+      })
+      .catch(function () {
+        // Connection lost — the container may already be restarting.
+        statusEl.textContent = "Reconnecting after restart…";
+        statusEl.className = "muted";
+        startPoll();
+      });
+  };
+
+  load();
+})();
+</script>
 {% endblock %}

@@ -12,7 +12,8 @@ from .db import init_db, SessionLocal
 from .deps import RedirectException
 from .store import get_setting
 from .services import bootstrap
-from .routers import auth, dashboard, settings, images, users, setup, track
+from .routers import auth, dashboard, settings, images, users, setup, track, updates
+from .services import updates as update_svc
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -27,6 +28,7 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 def on_startup():
     init_db()
     bootstrap.run()
+    update_svc.start_background_checker()
 
 
 # Bounce unauthenticated users (raised from require_user) to the login page.
@@ -66,3 +68,4 @@ app.include_router(settings.router)
 app.include_router(images.router)
 app.include_router(users.router)
 app.include_router(track.router)
+app.include_router(updates.router)

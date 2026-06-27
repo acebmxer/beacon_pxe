@@ -1,0 +1,153 @@
+"""Update checking: compares deployed image digest against GHCR :latest."""
+import json
+import logging
+import subprocess
+import threading
+import time
+import urllib.error
+import urllib.request
+from datetime import datetime, timezone
+
+from ..db import SessionLocal
+from ..store import get_setting, set_setting
+from .. import config
+
+log = logging.getLogger(__name__)
+
+_OWNER = "acebmxer"
+_IMAGE = "beacon-web"
+_CHECK_INTERVAL = 86400  # 24 hours
+
+
+def _ghcr_latest_digest() -> str | None:
+    """Return the current :latest manifest digest from GHCR, or None on error."""
+    try:
+        token_url = (
+            f"https://ghcr.io/token"
+            f"?scope=repository:{_OWNER}/{_IMAGE}:pull&service=ghcr.io"
+        )
+        with urllib.request.urlopen(token_url, timeout=15) as r:
+            token = json.loads(r.read())["token"]
+
+        req = urllib.request.Request(
+            f"https://ghcr.io/v2/{_OWNER}/{_IMAGE}/manifests/latest",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Accept": (
+                    "application/vnd.oci.image.index.v1+json,"
+                    "application/vnd.oci.image.manifest.v1+json,"
+                    "application/vnd.docker.distribution.manifest.list.v2+json,"
+                    "application/vnd.docker.distribution.manifest.v2+json"
+                ),
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return r.headers.get("Docker-Content-Digest")
+    except Exception as exc:
+        log.debug("GHCR digest check failed: %s", exc)
+        return None
+
+
+def check_for_updates() -> bool:
+    """Query GHCR and record result in DB. Returns True if an update is available."""
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        set_setting(db, "update_last_checked", now)
+
+        digest = _ghcr_latest_digest()
+
+        if digest is None:
+            # Network unreachable — keep whatever state was last recorded.
+            return get_setting(db, "update_available", "0") == "1"
+
+        known = get_setting(db, "update_known_digest", "")
+        if not known:
+            # First run: record current GHCR digest as the deployed baseline.
+            # The image was just pulled, so GHCR digest == what's running.
+            set_setting(db, "update_known_digest", digest)
+            set_setting(db, "update_available", "0")
+            return False
+
+        available = digest != known
+        set_setting(db, "update_available", "1" if available else "0")
+        return available
+    finally:
+        db.close()
+
+
+def run_update() -> None:
+    """
+    Pull new images then trigger container recreation via docker compose up -d.
+
+    Writes the success state to the DB *before* issuing up -d, because the
+    web container itself gets replaced and this thread won't survive the kill.
+    """
+    db = SessionLocal()
+    try:
+        set_setting(db, "update_in_progress", "1")
+        set_setting(db, "update_last_result", "")
+
+        compose_file = str(config.COMPOSE_FILE)
+        project_dir = config.COMPOSE_PROJECT_DIR
+        env_file = config.COMPOSE_ENV_FILE
+
+        base_cmd = ["docker", "compose", "-f", compose_file]
+        if project_dir:
+            base_cmd += ["--project-directory", project_dir]
+        if env_file and env_file.exists():
+            base_cmd += ["--env-file", str(env_file)]
+
+        # Pull new images (blocking; does not touch running containers).
+        pull = subprocess.run(
+            base_cmd + ["pull"],
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if pull.returncode != 0:
+            err = (pull.stderr or pull.stdout or "unknown error")[:400]
+            set_setting(db, "update_last_result", f"pull_failed: {err}")
+            set_setting(db, "update_in_progress", "0")
+            return
+
+        # Record success *before* launching up -d so the state is persisted
+        # even after the web container is replaced.
+        new_digest = _ghcr_latest_digest()
+        if new_digest:
+            set_setting(db, "update_known_digest", new_digest)
+        set_setting(db, "update_available", "0")
+        set_setting(db, "update_in_progress", "0")
+        set_setting(db, "update_last_result", "success")
+
+        # Recreate containers with new images. -d means the compose CLI
+        # hands off to the daemon and exits quickly — well before the web
+        # container is actually stopped, so this Popen returns immediately.
+        subprocess.Popen(
+            base_cmd + ["up", "-d", "--remove-orphans"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+    except subprocess.TimeoutExpired:
+        set_setting(db, "update_last_result", "timeout: pull took too long")
+        set_setting(db, "update_in_progress", "0")
+    except Exception as exc:
+        set_setting(db, "update_last_result", f"error: {str(exc)[:200]}")
+        set_setting(db, "update_in_progress", "0")
+    finally:
+        db.close()
+
+
+def _check_loop() -> None:
+    time.sleep(300)  # let the app settle before the first network call
+    while True:
+        try:
+            check_for_updates()
+        except Exception:
+            pass
+        time.sleep(_CHECK_INTERVAL)
+
+
+def start_background_checker() -> None:
+    threading.Thread(target=_check_loop, daemon=True, name="update-checker").start()

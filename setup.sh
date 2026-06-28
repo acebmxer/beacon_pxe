@@ -27,6 +27,10 @@ else
   # Session secret.
   sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(rand 48)|" .env
 
+  # Bake the project directory into .env so self-updates pass the correct
+  # --project-directory to docker compose regardless of where it runs from.
+  sed -i "s|^PROJECT_DIR=.*|PROJECT_DIR=$(pwd)|" .env
+
   # Best-effort server IP detection.
   IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || true)"
   [[ -n "${IP:-}" ]] && sed -i "s|^SERVER_IP=.*|SERVER_IP=${IP}|" .env

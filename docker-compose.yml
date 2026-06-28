@@ -40,7 +40,7 @@ services:
       # Self-update: the web app needs the host project directory so docker
       # compose can resolve relative volume paths (./data, etc.) correctly
       # when it runs against the Docker daemon on the host.
-      COMPOSE_PROJECT_DIR: ${PWD}
+      COMPOSE_PROJECT_DIR: ${PROJECT_DIR}
     volumes:
       - ./data:/data
       - bootroot:/bootroot

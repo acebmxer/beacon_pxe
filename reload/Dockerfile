@@ -3,4 +3,5 @@
 # in so end users need only the compose file.
 FROM docker:cli
 COPY reload.sh /reload.sh
+RUN sed -i 's/\r//' /reload.sh
 ENTRYPOINT ["/bin/sh", "/reload.sh"]

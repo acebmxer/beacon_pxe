@@ -10,6 +10,24 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- The Updates panel in Settings now reports what is deployed and where updates
+  come from: the running version (`v0.2.0` on a release, `main (<sha>)` on a
+  rolling build, `dev build` when built locally), the active channel, and the
+  full image reference being watched. Previously an admin could only see
+  whether an update existed, not which build they were on or which channel it
+  would come from.
+
+### Fixed
+
+- "Update applied successfully. Services are restarting." no longer persists
+  indefinitely. The message was written to the database and never cleared, so
+  it reappeared on every visit to Settings long after the restart finished —
+  and after a later failed update it sat alongside the failure. Successes now
+  expire 30 minutes after the update; failures persist (they describe a
+  condition that still needs attention) but can be dismissed.
+
 ## [0.2.0] - 2026-07-19
 
 ### Added

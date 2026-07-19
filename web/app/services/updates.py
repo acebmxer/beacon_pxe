@@ -24,10 +24,78 @@ _OWNER = "acebmxer"
 _IMAGE = "beacon-web"
 _CHECK_INTERVAL = 86400  # 24 hours
 
+# How long "Update applied successfully" stays on screen. It exists to confirm
+# the restart finished, which the admin sees within a minute or two of the page
+# coming back; past that it is stale reassurance about an update they have long
+# since moved on from. Failures are not expired here — they describe a condition
+# that is still true and still needs acting on, so they persist until the next
+# attempt or an explicit dismissal.
+_SUCCESS_TTL = 1800  # 30 minutes
+
 # Stand-in for the deployed digest after a channel switch. Never equals a real
 # digest, so the comparison below keeps reporting an update until one is applied
 # and run_update() writes the true digest back.
 _CHANNEL_SWITCHED = "channel-switched"
+
+
+def _set_result(db, value: str) -> None:
+    """Record the outcome of an update attempt, stamped with the time.
+
+    The timestamp is what lets current_result() expire a success banner; without
+    it a completed update reports "services are restarting" forever.
+    """
+    set_setting(db, "update_last_result", value)
+    set_setting(db, "update_last_result_at", datetime.now(timezone.utc).isoformat())
+
+
+def current_result(db) -> str:
+    """The last update outcome worth showing, or "" if there is none.
+
+    A success older than _SUCCESS_TTL is treated as absent. Results written
+    before this timestamp existed have no recorded time; those are also treated
+    as expired, since anything from a previous deployment is by definition old.
+    """
+    result = get_setting(db, "update_last_result", "")
+    if result != "success":
+        return result
+
+    stamped = get_setting(db, "update_last_result_at", "")
+    if not stamped:
+        return ""
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(stamped)).total_seconds()
+    except ValueError:
+        return ""
+    return result if age < _SUCCESS_TTL else ""
+
+
+def clear_result(db) -> None:
+    """Drop the recorded outcome so the UI stops showing it."""
+    _set_result(db, "")
+
+
+def image_ref() -> str:
+    """Fully qualified image the update check watches and compose pulls."""
+    return f"ghcr.io/{_OWNER}/{_IMAGE}:{config.BEACON_TAG}"
+
+
+def version_label() -> str:
+    """Human-readable description of the running build.
+
+    BEACON_VERSION is whatever docker/metadata-action called the primary tag, so
+    its shape tells us which kind of build this is: a semver release, a branch
+    build off main, or an unpublished local build.
+    """
+    ver = config.BEACON_VERSION
+    short = config.BEACON_COMMIT[:7]
+
+    if ver == "dev":
+        return f"dev build ({short})" if short else "dev build"
+    if ver[0].isdigit():
+        return f"v{ver}"
+    # Branch build (e.g. "main"): the name alone doesn't identify it, so the
+    # commit is what actually pins the version.
+    return f"{ver} ({short})" if short else ver
 
 
 def _ghcr_latest_digest() -> str | None:
@@ -125,7 +193,7 @@ def run_update() -> None:
     db = SessionLocal()
     try:
         set_setting(db, "update_in_progress", "1")
-        set_setting(db, "update_last_result", "")
+        _set_result(db, "")
 
         compose_file = str(config.COMPOSE_FILE)
         project_dir = config.COMPOSE_PROJECT_DIR
@@ -146,7 +214,7 @@ def run_update() -> None:
         )
         if pull.returncode != 0:
             err = (pull.stderr or pull.stdout or "unknown error")[:400]
-            set_setting(db, "update_last_result", f"pull_failed: {err}")
+            _set_result(db, f"pull_failed: {err}")
             set_setting(db, "update_in_progress", "0")
             return
 
@@ -157,7 +225,7 @@ def run_update() -> None:
             set_setting(db, "update_known_digest", new_digest)
         set_setting(db, "update_available", "0")
         set_setting(db, "update_in_progress", "0")
-        set_setting(db, "update_last_result", "success")
+        _set_result(db, "success")
 
         # Recreate containers with new images. -d means the compose CLI
         # hands off to the daemon and exits quickly — well before the web
@@ -169,10 +237,10 @@ def run_update() -> None:
         )
 
     except subprocess.TimeoutExpired:
-        set_setting(db, "update_last_result", "timeout: pull took too long")
+        _set_result(db, "timeout: pull took too long")
         set_setting(db, "update_in_progress", "0")
     except Exception as exc:
-        set_setting(db, "update_last_result", f"error: {str(exc)[:200]}")
+        _set_result(db, f"error: {str(exc)[:200]}")
         set_setting(db, "update_in_progress", "0")
     finally:
         db.close()

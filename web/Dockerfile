@@ -35,6 +35,17 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 
+# Build provenance, surfaced in the UI's Updates panel so an admin can tell what
+# is actually deployed. Set by the publish workflow from the docker metadata
+# action; left at the defaults for local `docker-compose.dev.yml` builds.
+#   BEACON_VERSION - "1.2.3" on a release tag, "main" on a main-branch build
+#   BEACON_COMMIT  - full git sha of the build
+# Declared after COPY app so a version-only change doesn't rebuild the layers above.
+ARG BEACON_VERSION=dev
+ARG BEACON_COMMIT=""
+ENV BEACON_VERSION=${BEACON_VERSION} \
+    BEACON_COMMIT=${BEACON_COMMIT}
+
 EXPOSE 8080
 
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

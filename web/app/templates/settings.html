@@ -68,6 +68,7 @@
 <div class="card" id="updates" style="margin-top:18px;">
   <h2>Updates</h2>
   <div class="sub">Pull new Docker images and redeploy all Beacon services</div>
+  <div id="upd-build" class="muted" style="margin-bottom:10px;"></div>
   <div id="upd-status" class="muted">Checking…</div>
   <div class="toolbar" style="margin-top:14px;">
     <button class="btn ghost sm" id="btn-check" onclick="updCheck()">Check now</button>
@@ -79,6 +80,7 @@
 <script>
 (function () {
   var statusEl = document.getElementById("upd-status");
+  var buildEl  = document.getElementById("upd-build");
   var applyBtn = document.getElementById("btn-apply");
   var checkBtn = document.getElementById("btn-check");
   var logEl    = document.getElementById("upd-log");
@@ -89,7 +91,35 @@
     try { return new Date(iso).toLocaleString(); } catch(e) { return iso; }
   }
 
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c];
+    });
+  }
+
+  // Which build is deployed and which channel it came from. Rendered on every
+  // poll rather than at page load so it survives an in-place update.
+  function renderBuild(d) {
+    if (!d.version && !d.channel) { buildEl.innerHTML = ""; return; }
+    buildEl.innerHTML =
+      'Running <strong>' + esc(d.version) + '</strong>' +
+      ' · <strong>' + esc(d.channel) + '</strong> channel';
+  }
+
+  function showLog(msg, cls) {
+    logEl.className = cls;
+    logEl.innerHTML =
+      '<span>' + esc(msg) + '</span>' +
+      '<button type="button" class="btn ghost sm" onclick="updDismiss()"' +
+      ' style="margin-left:16px;flex:none;">Dismiss</button>';
+    logEl.style.display = "flex";
+    logEl.style.alignItems = "center";
+    logEl.style.justifyContent = "space-between";
+  }
+
   function render(d) {
+    renderBuild(d);
+
     if (d.in_progress) {
       statusEl.textContent = "Update in progress — pulling images…";
       statusEl.className = "";
@@ -103,13 +133,13 @@
     checkBtn.disabled = false;
 
     if (d.last_result === "success") {
-      logEl.textContent = "Update applied successfully. Services are restarting.";
-      logEl.className = "alert ok";
-      logEl.style.display = "";
-    } else if (d.last_result && d.last_result !== "") {
-      logEl.textContent = "Update failed: " + d.last_result;
-      logEl.className = "alert error";
-      logEl.style.display = "";
+      showLog("Update applied successfully. Services are restarting.", "alert ok");
+    } else if (d.last_result) {
+      showLog("Update failed: " + d.last_result, "alert error");
+    } else {
+      // The server expires a stale success and honours dismissals, so an empty
+      // result means the banner should go away rather than linger from before.
+      logEl.style.display = "none";
     }
 
     if (d.available) {
@@ -149,6 +179,12 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function () { load(); })
       .catch(function () { checkBtn.disabled = false; });
+  };
+
+  window.updDismiss = function () {
+    logEl.style.display = "none";
+    fetch("/api/update/dismiss", { method: "POST", headers: { Accept: "application/json" } })
+      .catch(function () {});
   };
 
   window.updApply = function () {

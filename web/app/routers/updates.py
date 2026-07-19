@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from .. import config
 from ..db import get_db
 from ..deps import require_admin
 from ..models import User
@@ -20,7 +21,11 @@ def update_status(user: User = Depends(require_admin), db: Session = Depends(get
         "available": get_setting(db, "update_available", "0") == "1",
         "in_progress": get_setting(db, "update_in_progress", "0") == "1",
         "last_checked": get_setting(db, "update_last_checked", ""),
-        "last_result": get_setting(db, "update_last_result", ""),
+        "last_result": update_svc.current_result(db),
+        # Where updates come from and what's running now.
+        "channel": config.BEACON_TAG,
+        "image": update_svc.image_ref(),
+        "version": update_svc.version_label(),
     }
 
 
@@ -29,6 +34,14 @@ def trigger_check(user: User = Depends(require_admin)):
     """Force an immediate update check (runs synchronously, returns result)."""
     available = update_svc.check_for_updates()
     return {"available": available}
+
+
+@router.post("/api/update/dismiss")
+def dismiss_result(user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Clear the last update outcome. Successes expire on their own; failures
+    stay until the admin has dealt with them, so this is how they go away."""
+    update_svc.clear_result(db)
+    return {"cleared": True}
 
 
 @router.post("/api/update/apply")

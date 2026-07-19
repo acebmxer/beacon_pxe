@@ -56,6 +56,12 @@ COMPOSE_PROJECT_DIR = os.environ.get("COMPOSE_PROJECT_DIR", "")
 #   stable -> release builds only, moves when a v* tag is published
 BEACON_TAG = os.environ.get("BEACON_TAG", "latest").strip() or "latest"
 
+# Build provenance baked into the image by web/Dockerfile (see the ARGs there).
+# "dev" means a local build from docker-compose.dev.yml rather than a published
+# image, so the UI can say so instead of showing a meaningless version.
+BEACON_VERSION = os.environ.get("BEACON_VERSION", "dev").strip() or "dev"
+BEACON_COMMIT = os.environ.get("BEACON_COMMIT", "").strip()
+
 # Defaults for first-run / settings, sourced from env so .env can seed them.
 DEFAULTS = {
     "server_ip": os.environ.get("SERVER_IP", "").strip(),

@@ -83,5 +83,12 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Baked into the image so the web UI can report what is deployed.
+          # meta.outputs.version is the primary tag: "1.2.3" for a v* tag push,
+          # "main" for a main-branch push. Only the web image declares these
+          # ARGs; the other five ignore them.
+          build-args: |
+            BEACON_VERSION=${{ steps.meta.outputs.version }}
+            BEACON_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=beacon-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=beacon-${{ matrix.name }}

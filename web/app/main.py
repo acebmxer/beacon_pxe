@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 import logging
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
@@ -18,14 +19,9 @@ from .services import updates as update_svc
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
-app = FastAPI(title="Beacon", docs_url=None, redoc_url=None)
 
-app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")),
-          name="static")
-
-
-@app.on_event("startup")
-def on_startup():
+@asynccontextmanager
+async def lifespan(app: FastAPI):
     init_db()
     bootstrap.run()
     # Reaching startup with an update in flight means this process is the
@@ -33,12 +29,46 @@ def on_startup():
     # actually landed. Runs before the checker so the state is settled first.
     update_svc.finish_pending_update()
     update_svc.start_background_checker()
+    yield
+
+
+app = FastAPI(title="Beacon", docs_url=None, redoc_url=None, lifespan=lifespan)
+
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")),
+          name="static")
 
 
 # Bounce unauthenticated users (raised from require_user) to the login page.
 @app.exception_handler(RedirectException)
 async def _redirect_handler(request: Request, exc: RedirectException):
     return RedirectResponse(exc.location, status_code=303)
+
+
+# Security headers applied to every response. The CSP still permits inline
+# script/style because the templates rely on them; it locks down framing
+# (clickjacking), plugins, and the base URI, and is a meaningful backstop
+# against injected markup. Tightening to a nonce-based CSP (dropping
+# 'unsafe-inline') is a possible follow-up but needs a template refactor.
+_CSP = (
+    "default-src 'self'; "
+    "script-src 'self' 'unsafe-inline'; "
+    "style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; "
+    "object-src 'none'; "
+    "base-uri 'self'; "
+    "frame-ancestors 'none'; "
+    "form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    return response
 
 
 # Force the first-run wizard until it's completed.
@@ -61,6 +91,12 @@ async def first_run_redirect(request: Request, call_next):
 
 # SessionMiddleware is added LAST so it sits OUTERMOST in the stack and has
 # populated request.session before first_run_redirect (above) runs.
+#
+# same_site="lax" is also the CSRF defense: browsers won't send the session
+# cookie on cross-site POSTs, so a third-party page can't drive a state-changing
+# request as the logged-in admin. "strict" would harden this slightly further
+# but drops the cookie on ordinary top-level navigations into the app (e.g. a
+# bookmarked deep link would appear logged out), which isn't worth it here.
 app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY,
                    max_age=60 * 60 * 12, same_site="lax")
 

@@ -38,11 +38,14 @@ def track(image_id: int, request: Request):
     db: Session = SessionLocal()
     try:
         img = db.get(Image, image_id)
+        # This endpoint is unauthenticated, so bound every stored field to its
+        # column size. SQLite does not enforce String(n) limits, so without this
+        # a client could persist arbitrarily large mac/ip values (disk-fill).
         db.add(BootEvent(
             image_id=image_id,
-            image_name=img.name if img else f"#{image_id}",
-            mac=mac,
-            ip=ip,
+            image_name=(img.name if img else f"#{image_id}")[:128],
+            mac=mac[:32],
+            ip=ip[:64],
         ))
         db.commit()
     except Exception:                       # never let tracking break a boot

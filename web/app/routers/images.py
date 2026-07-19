@@ -12,6 +12,7 @@ from ..deps import require_admin, require_user, render
 from ..models import Image, User
 from ..services import images as image_svc
 from ..services import ipxe
+from ..store import strip_control_chars
 
 router = APIRouter()
 
@@ -85,7 +86,9 @@ def update_args(image_id: int, boot_args: str = Form(""),
                 user: User = Depends(require_admin), db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
     if img:
-        img.boot_args = boot_args.strip()
+        # boot_args is written verbatim into boot.ipxe; strip control chars so a
+        # newline can't inject additional iPXE commands into the menu.
+        img.boot_args = strip_control_chars(boot_args.strip())
         db.commit()
         ipxe.render(db)
     return RedirectResponse("/images", status_code=303)

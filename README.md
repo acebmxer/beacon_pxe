@@ -398,6 +398,25 @@ under `IMAGE_PATH` and are not touched by `-v`). Ordinary updates never do this
 The admin UI can also update the stack in place (Settings → Updates), which
 pulls new images and recreates the containers for you.
 
+> **Updates don't include `docker-compose.yml` or `.env`.** Both the in-app
+> update button and `docker compose pull` only fetch new container *images* —
+> they never touch the compose file or your environment file, because those live
+> on your host and Beacon doesn't overwrite them. So when a release changes
+> `docker-compose.yml` or `.env.example`, you have to grab the new file yourself
+> and re-run `docker compose up -d`. **The CHANGELOG calls out any release that
+> needs this**, and the releases below list what changed:
+>
+> - **0.3.0 — `docker-compose.yml` changed** (container hardening:
+>   `no-new-privileges` on all services, dropped capabilities on the `reload`
+>   sidecar). Existing installs keep running without it; re-fetch to apply the
+>   hardening:
+>   ```bash
+>   curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
+>   docker compose up -d
+>   ```
+> - **0.2.1 — `.env` gained `PROJECT_DIR` and `BEACON_TAG`** (see the upgrade note
+>   below). Compare your `.env` against `.env.example` and add anything missing.
+
 > **Upgrading from 0.2.0 or earlier to 0.2.1 must be done from the host, using
 > the commands above.** The in-app update button is broken in those versions —
 > it reports success without recreating anything — and the fix only takes effect
@@ -449,12 +468,27 @@ ISOs live under `IMAGE_PATH`.
 ## Security notes
 
 - The UI is HTTP on port 8080. For anything beyond a trusted LAN, put it behind a
-  reverse proxy with TLS (Caddy/Traefik/nginx) — not included here.
-- The `reload` sidecar mounts the Docker socket so it can restart dnsmasq. This
-  keeps that privilege out of the web app. Remove the service if you'd rather
-  restart dnsmasq manually after changing settings.
+  reverse proxy with TLS (Caddy/Traefik/nginx) — not included here. The login is
+  rate-limited (5 failed attempts → 15-minute lockout per client IP) and the app
+  sends `Content-Security-Policy`, `X-Frame-Options`, and related headers, but it
+  is still an admin console and should live on a trusted network.
+- **The `web` and `reload` containers mount the Docker socket**
+  (`/var/run/docker.sock`). `web` needs it to pull images and recreate the stack
+  for in-place self-updates; `reload` needs it to restart dnsmasq. Mounting the
+  socket grants control of the Docker daemon, so **a compromise of either
+  container is effectively root on the host** — this is an accepted trade-off for
+  the self-update / auto-reload convenience. All services run with
+  `no-new-privileges`; `reload` additionally drops all Linux capabilities. The
+  `web` container keeps its default capabilities because, running as root, it
+  needs root's permission override to write the SQLite DB and uploaded images to
+  the host-owned `./data` bind mount. If you don't want this exposure, remove the
+  socket mount
+  from `web` (self-update from the UI stops working; update with
+  `docker compose pull && docker compose up -d` instead) and/or remove the
+  `reload` service (restart dnsmasq manually after changing settings).
 - Change the auto-generated admin password if you prefer your own, and create
-  individual user accounts rather than sharing the admin login.
+  individual user accounts rather than sharing the admin login. Passwords must be
+  at least 12 characters.
 
 ---
 

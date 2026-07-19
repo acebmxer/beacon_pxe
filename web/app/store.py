@@ -5,6 +5,18 @@ from .models import Setting
 from . import config
 
 
+def strip_control_chars(value: str) -> str:
+    """Remove C0 control characters (incl. CR/LF/TAB) and DEL from a value.
+
+    Settings and boot args are written verbatim into generated config files
+    (dnsmasq.conf, boot.ipxe). A newline in one of those fields would let an
+    admin-supplied value inject extra directives/commands into the generated
+    file, so strip anything that could break out of a single line before it is
+    stored.
+    """
+    return "".join(c for c in value if c >= " " and c != "\x7f")
+
+
 def get_setting(db: Session, key: str, default: str | None = None) -> str:
     row = db.get(Setting, key)
     if row is not None:

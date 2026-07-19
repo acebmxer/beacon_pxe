@@ -10,6 +10,29 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-19
+
+**This release changes `docker-compose.yml`.** The in-app update button and
+`docker compose pull` only update container images — they do not touch your local
+compose file — so the container hardening below arrives only if you re-fetch it:
+
+```bash
+curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
+docker compose up -d
+```
+
+Everything else ships inside the `web` image and lands with a normal update.
+
+### Changed
+
+- **The web app's framework and dependencies were upgraded to clear known
+  security advisories.** FastAPI 0.115 → 0.139 (which pulls in Starlette 1.3),
+  along with Jinja2, python-multipart and others, resolving a batch of published
+  CVEs — including unauthenticated denial-of-service vectors in the form and
+  file-upload parsers that front the login page. No configuration changes are
+  required: the new versions ship inside the `web` image and arrive with a normal
+  update.
+
 ### Fixed
 
 - **The dashboard's network graph now shows the whole machine's traffic**
@@ -21,6 +44,42 @@ to do differently. Internal refactors that change nothing observable are omitted
   container's own veth; disk was unaffected because `/proc/diskstats` is not
   namespaced. Beacon now reads the host init process's interface counters, so
   the network graph tracks a deployment the way the disk graph already did.
+
+### Security
+
+- **The login page is now rate-limited and no longer reveals which usernames
+  exist.** Five failed attempts from one client IP trigger a 15-minute lockout,
+  during which even the correct password is refused, so an exposed instance can't
+  be brute-forced at speed. A failed login now also takes the same time whether
+  or not the account exists — previously a real username was measurably slower
+  (it ran the password hash) while a missing one returned almost instantly, which
+  let an attacker enumerate valid accounts. The lockout is in-memory per `web`
+  process, so restarting the container clears it.
+
+- **Passwords must now be at least 12 characters** (and at most 72 bytes, past
+  which bcrypt silently ignores the rest). This applies when creating a user,
+  resetting a user's password, or changing your own; existing passwords keep
+  working until they are next changed.
+
+- **The UI sends security headers and escapes image names correctly.** Every
+  response now carries a Content-Security-Policy plus `X-Frame-Options`,
+  `X-Content-Type-Options`, and `Referrer-Policy` — the framing headers mean the
+  console can no longer be embedded in an `<iframe>` on another site. Separately,
+  an image name containing a single quote could previously break out of an
+  attribute in the dashboard's "top images" list and inject markup; names are now
+  fully escaped.
+
+- **Settings and boot arguments can no longer inject extra configuration.**
+  Values that get written into the generated `dnsmasq.conf` and `boot.ipxe` (the
+  DHCP DNS field, per-image boot args, and so on) are stripped of newlines and
+  other control characters, so a crafted value cannot append its own directives
+  or iPXE commands to those files.
+
+- **The containers are hardened against privilege escalation.** Every service now
+  runs with `no-new-privileges`, and the `reload` sidecar additionally drops all
+  Linux capabilities. Because these settings live in `docker-compose.yml`, the
+  in-app update button does not apply them — it only pulls new images. To pick
+  them up, re-fetch `docker-compose.yml` and run `docker compose up -d`.
 
 ## [0.2.3] - 2026-07-19
 

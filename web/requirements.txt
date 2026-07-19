@@ -1,10 +1,16 @@
-fastapi==0.115.6
+# fastapi 0.139.x pulls starlette >=1.3.1, which carries the fixes for the
+# unauthenticated multipart / FileResponse-Range DoS advisories (and the
+# request.url host-header issues). Bumping fastapi is the only way to reach a
+# patched starlette, since fastapi pins the starlette range.
+fastapi==0.139.2
 uvicorn[standard]==0.34.0
-jinja2==3.1.5
+# 3.1.6 fixes the sandbox |attr RCE advisory (PYSEC-2026-1471).
+jinja2==3.1.6
 sqlalchemy==2.0.36
 passlib[bcrypt]==1.7.4
 # Pinned to 4.0.x: passlib 1.7.4 can't read the version of bcrypt >=4.1, which
 # emits a noisy (harmless) warning. 4.0.1 is detected cleanly.
 bcrypt==4.0.1
-python-multipart==0.0.20
+# 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
+python-multipart==0.0.32
 itsdangerous==2.2.0

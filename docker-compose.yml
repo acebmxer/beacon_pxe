@@ -30,6 +30,14 @@ services:
     image: ghcr.io/acebmxer/beacon-web:${BEACON_TAG:-latest}
     container_name: beacon_web
     restart: unless-stopped
+    # SECURITY: this container mounts the Docker socket (for self-update), so a
+    # compromise here is effectively host root -- keep it on a trusted network.
+    # It runs as root and writes the SQLite DB and uploaded images to the
+    # host-owned ./data bind mount, which relies on root's DAC override, so its
+    # capabilities can't be dropped wholesale (doing so makes the DB read-only).
+    # no-new-privileges is safe and still applied.
+    security_opt:
+      - no-new-privileges:true
     env_file: .env
     environment:
       DATA_DIR: /data
@@ -69,6 +77,8 @@ services:
     image: ghcr.io/acebmxer/beacon-nginx:${BEACON_TAG:-latest}
     container_name: beacon_nginx
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - bootroot:/usr/share/nginx/bootroot:ro
       # Served at /images/ via an alias (kept out of the read-only bootroot mount).
@@ -81,6 +91,8 @@ services:
     container_name: beacon_dnsmasq
     restart: unless-stopped
     network_mode: host
+    security_opt:
+      - no-new-privileges:true
     cap_add:
       - NET_ADMIN
     volumes:
@@ -111,6 +123,8 @@ services:
     container_name: beacon_smb
     restart: unless-stopped
     network_mode: host
+    security_opt:
+      - no-new-privileges:true
     volumes:
       - smbroot:/srv/install:ro
 
@@ -120,6 +134,11 @@ services:
     image: ghcr.io/acebmxer/beacon-reload:${BEACON_TAG:-latest}
     container_name: beacon_reload
     restart: unless-stopped
+    # Also mounts the Docker socket (to restart dnsmasq). Needs no capabilities.
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - dnsmasqconf:/dnsmasq:ro

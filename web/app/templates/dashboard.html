@@ -115,8 +115,12 @@
     return n.toFixed(i ? 1 : 0) + " " + u[i];
   }
   function esc(s) {
-    return (s || "").replace(/[&<>"]/g, c =>
-      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+    // Escapes single quotes and backticks too, not just double quotes: some
+    // values (e.g. image name) are interpolated into single-quoted attributes,
+    // where an unescaped ' would break out and inject markup/handlers.
+    return (s || "").replace(/[&<>"'`]/g, c =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+         "'": "&#39;", "`": "&#96;" }[c]));
   }
 
   function render(d) {

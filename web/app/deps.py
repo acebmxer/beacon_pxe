@@ -74,4 +74,6 @@ def render(request: Request, db: Session, template: str, **ctx):
         "build_channel": config.BEACON_TAG,
     }
     base.update(ctx)
-    return templates.TemplateResponse(template, base)
+    # Starlette >=1.0 takes the request as the first positional argument
+    # (the old TemplateResponse(name, context) signature was removed).
+    return templates.TemplateResponse(request, template, base)

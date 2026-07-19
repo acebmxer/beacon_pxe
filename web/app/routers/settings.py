@@ -1,4 +1,6 @@
 """Server settings: DHCP mode, services, boot menu, theme."""
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
@@ -6,7 +8,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import require_admin, require_user, render
 from ..models import User
-from ..store import all_settings, set_setting
+from ..store import all_settings, set_setting, strip_control_chars
 from ..services import dnsmasq, ipxe
 from ..services import images as image_svc
 
@@ -34,7 +36,7 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     form = await request.form()
     for key in TEXT_KEYS:
         if key in form:
-            set_setting(db, key, str(form[key]).strip())
+            set_setting(db, key, strip_control_chars(str(form[key]).strip()))
     # Checkboxes only appear in the form when checked.
     for key in BOOL_KEYS:
         set_setting(db, key, "1" if key in form else "0")
@@ -57,5 +59,14 @@ def toggle_theme(request: Request, user: User = Depends(require_user),
     """Quick global light/dark toggle from the navbar."""
     current = all_settings(db).get("theme", "dark")
     set_setting(db, "theme", "light" if current == "dark" else "dark")
-    referer = request.headers.get("referer", "/")
-    return RedirectResponse(referer, status_code=303)
+    # Return to the page the toggle was clicked from, but only if the Referer is
+    # same-origin -- otherwise a crafted Referer would make this an open redirect.
+    dest = "/"
+    referer = request.headers.get("referer", "")
+    if referer:
+        parsed = urlparse(referer)
+        if not parsed.netloc or parsed.netloc == request.url.netloc:
+            dest = parsed.path or "/"
+            if parsed.query:
+                dest += "?" + parsed.query
+    return RedirectResponse(dest, status_code=303)

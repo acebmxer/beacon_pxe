@@ -5,7 +5,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import get_db
-from ..auth import hash_password, verify_password, get_user_by_name
+from ..auth import hash_password, verify_password, get_user_by_name, password_error
 from ..deps import require_admin, require_user, render
 from ..models import User
 
@@ -35,6 +35,9 @@ def create_user(request: Request, username: str = Form(...),
     role = "admin" if role == "admin" else "user"
     if not username or not password:
         return users_page(request, user, db, error="Username and password required.")
+    pw_err = password_error(password)
+    if pw_err:
+        return users_page(request, user, db, error=pw_err)
     if get_user_by_name(db, username):
         return users_page(request, user, db, error="That username already exists.")
     db.add(User(username=username, password_hash=hash_password(password), role=role))
@@ -46,9 +49,13 @@ def create_user(request: Request, username: str = Form(...),
 def reset_password(user_id: int, request: Request, password: str = Form(...),
                    user: User = Depends(require_admin), db: Session = Depends(get_db)):
     target = db.get(User, user_id)
-    if target and password:
-        target.password_hash = hash_password(password)
-        db.commit()
+    if not target or not password:
+        return RedirectResponse("/users", status_code=303)
+    pw_err = password_error(password)
+    if pw_err:
+        return users_page(request, user, db, error=pw_err)
+    target.password_hash = hash_password(password)
+    db.commit()
     return RedirectResponse("/users", status_code=303)
 
 
@@ -98,8 +105,9 @@ def change_own_password(request: Request, current_password: str = Form(...),
                         db: Session = Depends(get_db)):
     if not verify_password(current_password, user.password_hash):
         return profile_page(request, user, db, error="Current password is incorrect.")
-    if not new_password:
-        return profile_page(request, user, db, error="New password cannot be empty.")
+    pw_err = password_error(new_password)
+    if pw_err:
+        return profile_page(request, user, db, error=pw_err)
     user.password_hash = hash_password(new_password)
     db.commit()
     return profile_page(request, user, db, ok="Password updated.")

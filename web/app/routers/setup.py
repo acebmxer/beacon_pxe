@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..deps import require_admin, render
 from ..models import User
-from ..store import all_settings, set_setting
+from ..store import all_settings, set_setting, strip_control_chars
 from ..services import dnsmasq, ipxe
 from ..services import images as image_svc
 
@@ -32,7 +32,7 @@ async def setup_save(request: Request, user: User = Depends(require_admin),
     form = await request.form()
     for key in WIZARD_KEYS:
         if key in form:
-            set_setting(db, key, str(form[key]).strip())
+            set_setting(db, key, strip_control_chars(str(form[key]).strip()))
     set_setting(db, "setup_complete", "1")
     dnsmasq.render(db)
     ipxe.render(db)

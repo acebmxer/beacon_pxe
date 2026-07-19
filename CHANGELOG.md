@@ -10,6 +10,19 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-19
+
+**Two of the fixes below ship inside images other than `web`, so the in-app
+update button is not enough on its own** — it pulls every image, but a deployment
+that updates by any other means (or that rebuilt only the web image) will not
+pick them up. The proxyDHCP chain fix is embedded in the iPXE binaries at build
+time (`dnsmasq` image) and the SMB keepalive fix is baked into `smb.conf` (`smb`
+image). Update the whole stack:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
 ### Added
 
 - **External DHCP mode.** A third DHCP mode for networks whose own DHCP server
@@ -47,6 +60,49 @@ to do differently. Internal refactors that change nothing observable are omitted
   in Server Settings left clients with no TFTP server — breaking exactly the
   setup where an external DHCP server supplies next-server/filename itself. TFTP
   now follows its own service toggle.
+- **Images whose boot files have been deleted no longer appear bootable.**
+  `status` recorded how the last extraction went and was never rechecked against
+  the disk, so an image stayed `ready` after the files that extraction produced
+  were gone. `docker compose down -v` is what does this: it destroys the
+  `bootroot`, `nfsroot`, and `smbroot` volumes holding every unpacked image,
+  while the database — a bind mount — survives with every row still marked
+  ready. Those images were listed in the boot menu and failed at the client with
+  nothing pointing at the real cause. Beacon now verifies each ready image's
+  files at startup and marks anything missing **needs reprocess**, which holds it
+  out of the boot menu and offers a Reprocess button; the uploaded ISO is
+  untouched by `-v`, so reprocessing rebuilds everything. Ordinary updates were
+  never affected — `pull && up -d` and the update button leave volumes alone.
+- **An image whose extraction was interrupted no longer sits at "processing"
+  forever.** Extraction runs as a background task, so restarting the web
+  container while one is in flight left the row marked processing with nothing
+  running, and the images page polled that state indefinitely. Interrupted
+  extractions are now marked needs reprocess at startup.
+
+### Documentation
+
+- The Updates panel warns when the running images were built locally
+  (`docker-compose.dev.yml`), and the Apply confirmation says so explicitly.
+  Applying an update has only one path — pull the published images for the
+  configured channel and recreate the stack — so on a locally built deployment
+  it silently reverts to the published build, which reads as a verified fix
+  spontaneously regressing. Also documented in the README's build-from-source
+  section.
+- **Corrected README and in-app text that described how Windows images boot
+  before 0.2.0.** Both claimed iPXE mounted the ISO as a virtual CD (`sanhook`)
+  and that **no SMB share was required** — the reverse of what Beacon has done
+  since 0.2.0, and directly contradicted by the same README's troubleshooting
+  entry telling operators to open 139/445. Anyone sizing disk or writing
+  firewall rules from that paragraph got it wrong. The XCP-NG description was
+  similarly stale (it claimed iPXE chains the Xen files directly, when Beacon
+  builds a standalone GRUB EFI per image because iPXE can't multiboot under
+  UEFI), and the advice to clear the boot-args field before reprocessing no
+  longer applies — a reprocess re-derives those args unconditionally.
+- README additions for things shipped in 0.2.0 but never documented there: the
+  `smb` service in the architecture table, the HTTP single-file boot path used
+  by Fedora 42+ live and Archiso (including Archiso's ~8 GB client-RAM
+  requirement), the third DHCP mode in the feature list, and the `7z` fallback
+  for UDF ISOs. Also dropped a stray `--build` from the documented update
+  command, which does nothing against the prebuilt compose file.
 
 ## [0.2.1] - 2026-07-19
 
@@ -182,7 +238,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.1...v0.1.2

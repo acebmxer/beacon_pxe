@@ -26,8 +26,9 @@ Runs as a small Docker Compose stack.
 - **Web UI** (FastAPI) gated by a login screen, with light/dark themes.
 - **Default admin** created on first run; password supplied via `.env` or
   **auto-generated** and printed to the logs.
-- **Server settings:** enable/disable services, switch **proxyDHCP ↔ full DHCP**,
-  set the DHCP server/range, edit the menu, toggle theme.
+- **Server settings:** enable/disable services, switch between **proxyDHCP**,
+  **full DHCP**, and **external DHCP**, set the DHCP range, edit the menu,
+  toggle theme.
 - **Images:** upload ISO → kernel/initrd auto-extracted → menu entry created;
   enable/disable, edit boot args, delete.
 - **Users:** admins create/reset/delete users and set account type
@@ -80,6 +81,14 @@ To build the images locally instead of pulling them, use the dev override:
 docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 ```
 
+> **The in-app update button replaces a local build with the published one.**
+> Settings → Updates has one update path: pull the images for the configured
+> channel from GHCR and recreate the stack. It has no way to rebuild from your
+> source, so clicking Apply on a locally built deployment reverts it — a fix you
+> just built and verified appears to regress, because the image under it was
+> swapped. The Updates panel warns when the running build is local (it reports
+> `dev build`); to get your build back, re-run the command above.
+
 ---
 
 ## Architecture
@@ -90,12 +99,20 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
 | `nginx`   | `beacon-nginx` (nginx:alpine + config) | Serves boot files to iPXE (`/boot.ipxe`, kernels, initrds, ISOs) | port 80 |
 | `dnsmasq` | `beacon-dnsmasq` (alpine + iPXE binaries) | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
 | `nfs`     | `beacon-nfs` (alpine) | Exports each image's live filesystem (read-only) so clients mount it instead of downloading the whole ISO into RAM | **host**, privileged |
+| `smb`     | `beacon-smb` (alpine + samba) | Exports each Windows image's unpacked install media (read-only, guest) so WinPE can run `setup.exe` | **host** |
 | `reload`  | `beacon-reload` (docker:cli + watch script) | Restarts dnsmasq when its config is regenerated | host |
 
 Images are published to `ghcr.io/acebmxer/beacon-<service>`. The iPXE boot
 binaries (built from source with an embedded chain script), the nginx config,
-and the reload script are baked into their images — nothing is bind-mounted from
-the repo, which is why the stack runs from just `docker-compose.yml` + `.env`.
+the samba config, and the reload script are baked into their images — nothing is
+bind-mounted from the repo, which is why the stack runs from just
+`docker-compose.yml` + `.env`.
+
+A consequence worth knowing: **some fixes ship inside a service image, not in
+the web app.** The iPXE chain script (`dnsmasq`) and the samba tuning (`smb`)
+are two examples. Updating only some services, or rebuilding only `web`, can
+leave those behind — which is why the supported update is a whole-stack
+`docker compose pull && docker compose up -d`.
 
 `dnsmasq` uses **host networking** because DHCP/PXE relies on layer-2 broadcasts
 that don't traverse Docker's bridge network. This is the standard requirement for
@@ -105,6 +122,9 @@ any PXE server in Docker.
 in-kernel NFS server (`nfsd`). The host must provide the `nfsd` kernel module
 (standard on Linux — `modprobe nfsd` if it isn't already loaded). See "How live
 images boot" below for why NFS is used.
+
+`smb` also uses **host networking**, so WinPE reaches the share at the server's
+LAN address — the same IP baked into the boot script inside `boot.wim`.
 
 ---
 
@@ -144,19 +164,30 @@ at all.
 
 ## Images: format & what actually boots
 
-- **Upload format: `.iso` only.** On upload, the server reads the ISO with
-  `bsdtar` (no privileged mount) and extracts the Linux **kernel** + **initrd**,
-  which are served over HTTP for reliable netboot. The raw ISO is also kept and
-  served at `/images/<file>.iso`.
+- **Upload format: `.iso` only.** On upload, the server reads the ISO without a
+  privileged loop mount and extracts the Linux **kernel** + **initrd**, which are
+  served over HTTP for reliable netboot. `bsdtar` handles ISO9660 (Linux, XCP-NG);
+  modern Windows ISOs are UDF, which `bsdtar` can't read, so those fall back to
+  `7z`. The raw ISO is also kept and served at `/images/<file>.iso`.
 - **Boot arguments.** A best-effort kernel command line is filled in per distro
-  family (casper/live/Fedora). Some live ISOs need a tweak — edit the **boot
-  args** field on the Images page. Examples:
+  family. Some live ISOs need a tweak — edit the **boot args** field on the
+  Images page (note that a **Reprocess** re-derives them and overwrites your
+  edit). Examples:
   - Ubuntu live: `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp`
   - Debian live: `boot=live netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp`
+  - Fedora/RHEL netinstall: `inst.repo=${boot-url}/images/<file>.iso ip=dhcp`
+  - Fedora 42+ live: `root=live:${boot-url}/os/<id>/squashfs.img rd.live.image ip=dhcp`
+  - Archiso (Arch/EndeavourOS/CachyOS):
+    `archiso_http_srv=${boot-url}/os/<id>/ archisobasedir=arch BOOTIF=01-${net0/mac:hexhyp} ip=dhcp`
 - **XCP-NG (netinstall ISO).** XCP-NG is Xen-based, so it boots via **multiboot**
-  rather than a plain kernel+initrd: the server extracts `xen.gz` (hypervisor),
-  `vmlinuz` (dom0 kernel) and `install.img` (installer), and the menu chains them
-  with iPXE's `kernel`/`module` commands. Use the **netinstall** ISO
+  rather than a plain kernel+initrd: the server extracts `xen.gz` (hypervisor,
+  decompressed — the multiboot loader can't gunzip it itself), `vmlinuz` (dom0
+  kernel) and `install.img` (installer). iPXE's own multiboot support is
+  BIOS-only, and most XCP-NG hosts boot UEFI, so Beacon builds a **self-contained
+  GRUB EFI binary per image** (`grub-mkstandalone`) and chainloads that; GRUB
+  fetches the three files over HTTP and does the `multiboot2` itself. The server
+  IP is baked into that binary, so changing **Server IP** rebuilds it
+  automatically. Use the **netinstall** ISO
   (`xcp-ng-<ver>-netinstall.iso`): it pulls its package repository over the
   network, which the installer fetches by HTTP *after* the kernel is up — so it
   netboots cleanly. The full XCP-NG ISO expects its repo on local media and will
@@ -164,7 +195,29 @@ at all.
   for the repo URL; pass an answerfile via the **boot args** field for unattended
   installs (`answerfile=http://.../answerfile.xml install`).
 
-### How live images boot (NFS, not download-to-RAM)
+- **Windows ISOs boot the installer via `wimboot` + WinPE, with the install media
+  served over SMB.** Windows can't PXE-boot a raw kernel/initrd, so Beacon
+  extracts the WinPE boot files (`bootmgr`, `BCD`, `boot.sdi`,
+  `sources/boot.wim`) and boots them through
+  [`wimboot`](https://ipxe.org/wimboot). That gets WinPE running, but not the
+  install media: `sources/install.wim` isn't inside `boot.wim`, and iPXE can't
+  present the ISO as a virtual CD under UEFI (`sanhook` is BIOS INT 13h only).
+  So the whole ISO is also unpacked to the `smbroot` volume, and the `smb`
+  service exports it read-only. Beacon patches `winpeshl.ini` inside `boot.wim`
+  so WinPE mounts that share on boot and runs `setup.exe` from it. The install
+  runs interactively (no answer file). `wimboot` is bundled in the web image and
+  served at `/wimboot`.
+
+  This means **Windows images need ports 139 + 445 reachable** from the client
+  (see Troubleshooting), and each one costs roughly **2× its size on disk** —
+  the kept ISO plus the unpacked share.
+
+If extraction can't find a kernel/initrd, the image shows `error` with a reason;
+fix the boot args or check the ISO layout and hit **Retry**. If an image's
+extracted files are later deleted, it shows `needs reprocess` instead — see
+"Updating / tearing down".
+
+### How live images boot (NFS or HTTP, not download-to-RAM)
 
 For **casper (Ubuntu)** and **live (Debian)** images, the server also unpacks the
 ISO's live filesystem into the `nfsroot` Docker volume (mounted at `/nfs/<id>`),
@@ -183,21 +236,24 @@ ISO** — nothing extra is downloaded; the contents are just unpacked server-sid
 Cost: each NFS-backed image uses roughly **2× its size on disk** (the kept ISO
 plus the unpacked tree).
 
-> **Upgrading an existing image:** boot args are only auto-filled when blank, so
-> an image processed before this change keeps its old `url=…iso` args. Clear the
-> **boot args** field and hit **Retry** (or delete and re-upload) to switch it to
-> NFS.
-- **Windows ISOs boot the installer via `wimboot` + WinPE.** Windows can't
-  PXE-boot a raw kernel/initrd, so Beacon extracts the WinPE boot files
-  (`bootmgr`, `BCD`, `boot.sdi`, `sources/boot.wim`) and boots them through
-  [`wimboot`](https://ipxe.org/wimboot). To supply the full install media, iPXE
-  mounts the **same uploaded ISO** over HTTP as a virtual CD (`sanhook`), so
-  Windows Setup installs straight from the ISO — **no SMB share required**. The
-  install runs interactively (no answer file). `wimboot` is bundled in the web
-  image and served at `/wimboot`.
+**Fedora 42+ live** and **Archiso** (Arch, EndeavourOS, CachyOS) take a third
+route: neither NFS nor download-to-RAM. Both dropped the boot methods Beacon
+relied on, so rather than unpacking the whole ISO, Beacon extracts just the root
+filesystem — `LiveOS/squashfs.img` or `arch/<arch>/airootfs.sfs` — into the
+bootroot and lets nginx stream it over HTTP. Nothing is exported over NFS for
+these, and the disk cost is the ISO plus that one file rather than a full second
+copy.
 
-If extraction can't find a kernel/initrd, the image shows `error` with a reason;
-fix the boot args or check the ISO layout and hit **Retry**.
+One caveat specific to Archiso: its initramfs pulls the entire `airootfs.sfs`
+into a RAM tmpfs before starting, so the live desktop needs **~8 GB of client
+RAM** (4–6 GB thrashes or OOMs). That's fine for physical clients but worth
+knowing when testing in a VM.
+
+> **Upgrading an existing image:** an image processed before this change keeps
+> its old `url=…iso` args until it is reprocessed. Hit **Reprocess** on the
+> Images page — a reprocess re-derives the boot args from the ISO and overwrites
+> whatever was in the field, so there is no need to clear it first. (Any manual
+> edit you made is overwritten too; re-apply it afterwards.)
 
 ---
 
@@ -282,9 +338,9 @@ to the real network.)
 
 - **`No space left on device` / `Unable to find a live file system on the
   network`, dropping to an `(initramfs)` shell.** The image is still using the
-  old download-the-whole-ISO-to-RAM boot method. Switch it to NFS: clear the
-  **boot args** field on the Images page and hit **Retry** (or delete and
-  re-upload). See "How live images boot" above.
+  old download-the-whole-ISO-to-RAM boot method. Hit **Reprocess** on the Images
+  page to re-derive its boot args and switch it to NFS. See "How live images
+  boot" above.
 
 - **NFS mount fails / live FS not found even with NFS args.** Check the `nfs`
   service: `docker compose logs nfs` should show `current exports: /nfs`. The
@@ -322,10 +378,22 @@ to the real network.)
 ## Updating / tearing down
 
 ```bash
-docker compose pull && docker compose up -d --build   # update
-docker compose down                                   # stop (keeps data)
-docker compose down -v                                # stop + drop bootroot/nfsroot volumes
+docker compose pull && docker compose up -d   # update
+docker compose down                           # stop (keeps data)
+docker compose down -v                        # stop + drop the unpacked-image volumes
 ```
+
+(No `--build` — `docker-compose.yml` pulls prebuilt images and defines no build
+context. Building is the dev override's job; see "Building from source" above.)
+
+`-v` destroys the `bootroot`, `nfsroot`, and `smbroot` volumes, which hold every
+unpacked image — kernels, initrds, live filesystems, and Windows install media.
+The database is a bind mount (`./data`) and survives, so the image list comes
+back intact while the files behind it are gone. Beacon detects this at startup:
+images whose boot files are missing are marked **needs reprocess**, held out of
+the boot menu, and restored by hitting **Reprocess** (the uploaded ISOs live
+under `IMAGE_PATH` and are not touched by `-v`). Ordinary updates never do this
+— `pull && up -d` and the in-app update button leave volumes alone.
 
 The admin UI can also update the stack in place (Settings → Updates), which
 pulls new images and recreates the containers for you.

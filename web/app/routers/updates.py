@@ -29,6 +29,9 @@ def update_status(user: User = Depends(require_admin), db: Session = Depends(get
         "channel": config.BEACON_TAG,
         "image": update_svc.image_ref(),
         "version": update_svc.version_label(),
+        # Locally built images are replaced by the published ones on Apply; the
+        # UI warns rather than letting that happen unannounced.
+        "dev_build": update_svc.is_dev_build(),
     }
 
 

@@ -220,6 +220,8 @@ tr:last-child td { border-bottom: none; }
 }
 @keyframes pulse { 0%, 100% { opacity: 0.25; } 50% { opacity: 1; } }
 .badge.error, .badge.unsupported { background: rgba(239, 71, 111, 0.15); color: var(--danger); }
+/* Extraction succeeded but its output is gone — actionable, not a failure. */
+.badge.needs_reprocess { background: rgba(255, 209, 102, 0.15); color: var(--warn); }
 .badge.role-admin { background: rgba(123, 47, 247, 0.18); color: var(--accent-2); }
 .badge.role-user { background: var(--bg-elev-2); color: var(--text-dim); }
 .badge.off { background: var(--bg-elev-2); color: var(--text-dim); }
@@ -228,6 +230,7 @@ tr:last-child td { border-bottom: none; }
 .alert.error { background: rgba(239, 71, 111, 0.12); color: var(--danger); border: 1px solid rgba(239,71,111,.3); }
 .alert.ok { background: rgba(6, 214, 160, 0.12); color: var(--ok); border: 1px solid rgba(6,214,160,.3); }
 .alert.info { background: rgba(0,180,216,.1); color: var(--accent); border: 1px solid rgba(0,180,216,.3); }
+.alert.warn { background: rgba(255,209,102,.12); color: var(--warn); border: 1px solid rgba(255,209,102,.3); }
 
 .muted { color: var(--text-dim); font-size: 0.85rem; }
 .mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.85rem; }

@@ -100,6 +100,14 @@
   <h2>Updates</h2>
   <div class="sub">Pull new Docker images and redeploy all Beacon services</div>
   <div id="upd-build" class="muted" style="margin-bottom:10px;"></div>
+  <div id="upd-dev" class="alert warn" style="display:none;">
+    <b>This stack runs locally built images.</b> Applying an update pulls the
+    published <b><span id="upd-dev-channel"></span></b> images from GHCR and
+    replaces them — your local build is gone, along with any change in it that
+    isn't published yet. Rebuild with
+    <span class="mono">docker compose -f docker-compose.yml -f
+    docker-compose.dev.yml up -d --build</span> to get it back.
+  </div>
   <div id="upd-status" class="muted">Checking…</div>
   <div class="toolbar" style="margin-top:14px;">
     <button class="btn ghost sm" id="btn-check" onclick="updCheck()">Check now</button>
@@ -112,6 +120,9 @@
 (function () {
   var statusEl = document.getElementById("upd-status");
   var buildEl  = document.getElementById("upd-build");
+  var devEl    = document.getElementById("upd-dev");
+  var devChanEl = document.getElementById("upd-dev-channel");
+  var isDev    = false;
   var applyBtn = document.getElementById("btn-apply");
   var checkBtn = document.getElementById("btn-check");
   var logEl    = document.getElementById("upd-log");
@@ -135,6 +146,12 @@
     buildEl.innerHTML =
       'Running <strong>' + esc(d.version) + '</strong>' +
       ' · <strong>' + esc(d.channel) + '</strong> channel';
+
+    // Apply would swap a locally built image for the published one. Warn up
+    // front, not only in the confirm dialog, so it's visible before deciding.
+    isDev = !!d.dev_build;
+    devChanEl.textContent = d.channel || "published";
+    devEl.style.display = isDev ? "" : "none";
   }
 
   function showLog(msg, cls) {
@@ -219,7 +236,15 @@
   };
 
   window.updApply = function () {
-    if (!confirm("Pull new Docker images and redeploy all Beacon services?\n\nThe page will briefly become unavailable while services restart.")) return;
+    var msg = "Pull new Docker images and redeploy all Beacon services?\n\n" +
+      "The page will briefly become unavailable while services restart.";
+    if (isDev) {
+      msg = "This stack runs LOCALLY BUILT images.\n\n" +
+        "Updating replaces them with the published ones from GHCR — any local " +
+        "change that isn't published yet will be gone until you rebuild.\n\n" +
+        "Pull and redeploy anyway?";
+    }
+    if (!confirm(msg)) return;
     applyBtn.disabled = true;
     checkBtn.disabled = true;
     statusEl.textContent = "Starting update…";

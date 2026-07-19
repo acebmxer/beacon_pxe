@@ -11,7 +11,7 @@ from ..db import SessionLocal
 from ..models import User, Setting
 from ..auth import hash_password
 from .. import config
-from . import dnsmasq, ipxe
+from . import dnsmasq, images, ipxe
 
 log = logging.getLogger("beacon.bootstrap")
 
@@ -70,6 +70,10 @@ def run():
 
         # Make wimboot available for Windows images.
         _stage_wimboot()
+
+        # Drop images whose extracted files no longer exist out of "ready", so
+        # the menu rendered below can't offer a boot that is guaranteed to fail.
+        images.reconcile_statuses(db)
 
         # Render initial boot configs so the stack is bootable immediately.
         dnsmasq.render(db)

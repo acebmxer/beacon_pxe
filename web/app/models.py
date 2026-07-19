@@ -62,7 +62,9 @@ class Image(Base):
     name: Mapped[str] = mapped_column(String(128))
     filename: Mapped[str] = mapped_column(String(255))          # ISO file on disk
     os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows|xcpng
-    # Extraction lifecycle: pending|processing|ready|error
+    # Extraction lifecycle: pending|processing|ready|error|needs_reprocess
+    # (needs_reprocess is set at startup when a ready image's extracted files
+    # are gone -- see services.images.reconcile_statuses)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     message: Mapped[str] = mapped_column(Text, default="")      # error/info detail
     kernel_path: Mapped[str] = mapped_column(String(255), default="")   # rel to bootroot

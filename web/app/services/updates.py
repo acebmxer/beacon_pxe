@@ -105,6 +105,18 @@ def version_label() -> str:
     return f"{ver} ({short})" if short else ver
 
 
+def is_dev_build() -> bool:
+    """True when this image was built locally rather than pulled from GHCR.
+
+    Matters because the update path is the same either way: Apply pulls the
+    published images for the configured channel and recreates the stack, which
+    silently replaces a local build with the published one. Somebody testing a
+    fix from docker-compose.dev.yml then sees it "regress" with no indication
+    that the image under them was swapped.
+    """
+    return config.BEACON_VERSION == "dev"
+
+
 def _ghcr_latest_digest() -> str | None:
     """Return the tracked tag's manifest digest from GHCR, or None on error.
 

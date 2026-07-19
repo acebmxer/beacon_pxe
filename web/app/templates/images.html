@@ -31,9 +31,10 @@
   <div class="alert info" style="margin-top:16px;">
     <b>Format note:</b> only <span class="mono">.iso</span> is accepted.
     <b>Windows ISOs</b> boot the installer via wimboot/WinPE: the WinPE boot
-    files are extracted and the ISO is mounted over HTTP as a virtual CD, so
-    Setup installs straight from the ISO (no extra share needed). Linux ISOs have
-    their kernel/initrd extracted and served over HTTP for reliable netboot.
+    files are extracted, and the ISO is unpacked to an SMB share that WinPE
+    mounts to run Setup (needs ports 139 + 445 reachable from the client).
+    Linux ISOs have their kernel/initrd extracted and served over HTTP for
+    reliable netboot.
   </div>
 </div>
 {% endif %}
@@ -52,7 +53,7 @@
         <td><b>{{ img.name }}</b><br><span class="muted mono">{{ img.filename }}</span></td>
         <td>{{ img.os_family }}</td>
         <td>
-          <span class="badge {{ img.status }}">{{ img.status }}</span>
+          <span class="badge {{ img.status }}">{{ 'needs reprocess' if img.status == 'needs_reprocess' else img.status }}</span>
           {% if img.message %}<br><span class="muted">{{ img.message }}</span>{% endif %}
         </td>
         <td>
@@ -79,7 +80,7 @@
               <button class="btn ghost sm" type="submit">Reprocess</button>
             </form>
             {% endif %}
-            {% if img.status in ('error', 'pending') %}
+            {% if img.status in ('error', 'pending', 'needs_reprocess') %}
             <form class="inline-form" method="post" action="/images/{{ img.id }}/retry">
               <button class="btn ghost sm" type="submit">Retry</button>
             </form>

@@ -21,6 +21,11 @@ log = logging.getLogger("beacon.images")
 # Where extracted kernels/initrds live, relative to BOOTROOT_DIR.
 EXTRACT_SUBDIR = "os"
 
+# Status for an image whose extraction succeeded but whose files are no longer
+# on disk (see reconcile_statuses). Distinct from "error": nothing went wrong
+# with the ISO, the derived data just has to be rebuilt.
+NEEDS_REPROCESS = "needs_reprocess"
+
 # Candidate (kernel, initrd) path patterns by distro family, checked in order.
 # Patterns are matched case-insensitively against the ISO's file listing.
 KERNEL_PATTERNS = [
@@ -660,6 +665,107 @@ def process_image(image_id: int) -> None:
         log.info("Image %s ready (%s)", img.name, family)
     finally:
         db.close()
+
+
+def _exists_nonempty(path: Path) -> bool:
+    """True if path is a file with content, or a directory with something in it.
+
+    An empty directory counts as missing: a destroyed and re-created volume
+    leaves the mount point there but nothing under it.
+    """
+    if not path.exists():
+        return False
+    if path.is_dir():
+        return any(path.iterdir())
+    return path.stat().st_size > 0
+
+
+def _required_paths(img: Image) -> list[Path]:
+    """Everything that must be on disk for this image to actually boot.
+
+    Mirrors what the extraction for each family produced, since that is what the
+    generated menu entry (services.ipxe) points a client at.
+    """
+    dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
+    paths = []
+    if img.kernel_path:
+        paths.append(config.BOOTROOT_DIR / img.kernel_path)
+    if img.initrd_path:
+        paths.append(config.BOOTROOT_DIR / img.initrd_path)
+
+    if img.os_family == "xcpng":
+        # UEFI clients chainload this; the extracted xen/vmlinuz alone won't boot.
+        paths += [dest_dir / "bootx64.efi", dest_dir / "install.img"]
+    elif img.os_family == "windows":
+        # The rest of the wimboot chain, plus the install media the SMB share
+        # serves — WinPE starts without it and then fails to find setup.exe.
+        paths += [dest_dir / "bcd", dest_dir / "boot.sdi"]
+        paths.append(config.SMB_DIR / str(img.id))
+    else:
+        # Linux: whatever the boot args send the client to beyond kernel+initrd.
+        args = img.boot_args or ""
+        if "netboot=nfs" in args:
+            paths.append(config.NFS_DIR / str(img.id))
+        if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
+            paths.append(dest_dir / "squashfs.img")
+        basedir = re.search(r"archisobasedir=(\S+)", args)
+        if basedir:
+            paths.append(dest_dir / basedir.group(1))
+    return paths
+
+
+def _missing_message(img: Image, missing: list[Path]) -> str:
+    """Explain what vanished and which action recovers it."""
+    shown = ", ".join(str(p) for p in missing[:3])
+    if len(missing) > 3:
+        shown += f", and {len(missing) - 3} more"
+    if not iso_path(img.filename).exists():
+        return (f"Boot files are missing ({shown}) and so is the ISO "
+                f"{img.filename} — upload the ISO again to restore this image.")
+    return (f"Boot files are missing ({shown}). The ISO is still here, so "
+            "Reprocess rebuilds them.")
+
+
+def reconcile_statuses(db) -> int:
+    """Flag images whose extracted files are gone. Returns the number changed.
+
+    `status` records how the last extraction went; it says nothing about whether
+    what that extraction produced still exists. `docker compose down -v` destroys
+    the bootroot/nfsroot/smbroot volumes holding every unpacked image while the
+    database — a bind mount — survives, leaving rows still marked `ready` that
+    point at nothing. Those images were listed in the boot menu and failed at the
+    client with nothing pointing at the real cause.
+
+    Runs at startup, which is the only moment the volumes can have changed
+    without Beacon doing it, and is when the boot menu is regenerated anyway.
+    """
+    changed = 0
+    for img in db.query(Image).all():
+        # No background task survives a restart, so a row still marked in-flight
+        # was interrupted and will never finish on its own.
+        if img.status == "processing":
+            img.status = NEEDS_REPROCESS
+            img.message = ("Extraction was interrupted by a restart and never "
+                           "finished. Reprocess to run it again.")
+            changed += 1
+            continue
+        if img.status != "ready":
+            continue
+        missing = [p for p in _required_paths(img) if not _exists_nonempty(p)]
+        if not missing:
+            continue
+        img.status = NEEDS_REPROCESS
+        img.message = _missing_message(img, missing)
+        log.warning("Image %s (id=%s) is missing %s; marked %s",
+                    img.name, img.id, ", ".join(str(p) for p in missing),
+                    NEEDS_REPROCESS)
+        changed += 1
+
+    if changed:
+        db.commit()
+        log.warning("%d image(s) need reprocessing; they are held out of the "
+                    "boot menu until their files are rebuilt", changed)
+    return changed
 
 
 def delete_image(db, img: Image) -> None:

@@ -6,8 +6,10 @@ from sqlalchemy.orm import Session
 
 from pathlib import Path
 
+from . import config
 from .db import get_db
 from .models import User
+from .services import updates as update_svc
 from .store import get_setting
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
@@ -65,6 +67,11 @@ def render(request: Request, db: Session, template: str, **ctx):
         "theme": get_setting(db, "theme"),
         "menu_title": get_setting(db, "menu_title"),
         "asset_version": _asset_version(),
+        # Which build is deployed, shown in the topbar. Server-rendered rather
+        # than fetched like the update badge, because /api/update/status is
+        # admin-only and every user should be able to see the version.
+        "build_version": update_svc.version_label(),
+        "build_channel": config.BEACON_TAG,
     }
     base.update(ctx)
     return templates.TemplateResponse(template, base)

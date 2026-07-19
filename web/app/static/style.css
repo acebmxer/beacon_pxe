@@ -96,6 +96,8 @@ a:hover { text-decoration: underline; }
 .topbar .right { display: flex; align-items: center; gap: 14px; }
 .user-chip { color: var(--text-dim); font-size: 0.9rem; }
 .user-chip b { color: var(--text); }
+.build-chip { color: var(--text-dim); font-size: 0.85rem; white-space: nowrap; }
+.build-chip b { color: var(--text); font-weight: 600; }
 
 /* Fill the available width (minus the fixed sidebar) so the dashboard scales
    with the window/monitor; cap only on ultra-wide so lines stay readable. */

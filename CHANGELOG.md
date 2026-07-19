@@ -10,6 +10,14 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- **The running version and update channel now show in the topbar** on every
+  page, left of the light/dark toggle — e.g. `Running v0.2.2 · latest channel`.
+  Previously this only appeared in Settings → Updates, which is admin-only; the
+  topbar shows it to every user. Locally built images read `Running dev build`
+  rather than a version number.
+
 ## [0.2.2] - 2026-07-19
 
 **Two of the fixes below ship inside images other than `web`, so the in-app

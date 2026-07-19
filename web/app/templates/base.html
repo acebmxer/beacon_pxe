@@ -34,6 +34,7 @@
         {% if user.is_admin %}
         <a id="update-badge" href="/settings#updates" class="badge pending" style="display:none;text-decoration:none;">Update available</a>
         {% endif %}
+        <span class="build-chip">Running <b>{{ build_version }}</b> · <b>{{ build_channel }}</b> channel</span>
         <form class="inline-form" method="post" action="/theme">
           <button class="btn ghost sm" type="submit" title="Toggle light/dark">
             {{ '☀ Light' if theme=='dark' else '🌙 Dark' }}

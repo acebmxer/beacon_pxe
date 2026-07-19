@@ -49,6 +49,13 @@ COMPOSE_FILE = Path(os.environ.get("COMPOSE_FILE_PATH", "/beacon/docker-compose.
 COMPOSE_ENV_FILE = Path(os.environ.get("COMPOSE_ENV_FILE", "/beacon/.env"))
 COMPOSE_PROJECT_DIR = os.environ.get("COMPOSE_PROJECT_DIR", "")
 
+# Which image tag this deployment tracks — the update channel. Must match the
+# tag docker-compose.yml pulls (both default to "latest") or the update check
+# would watch a different channel than `docker compose pull` installs.
+#   latest -> rolling main branch, moves on every push to main
+#   stable -> release builds only, moves when a v* tag is published
+BEACON_TAG = os.environ.get("BEACON_TAG", "latest").strip() or "latest"
+
 # Defaults for first-run / settings, sourced from env so .env can seed them.
 DEFAULTS = {
     "server_ip": os.environ.get("SERVER_IP", "").strip(),

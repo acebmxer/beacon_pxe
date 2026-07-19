@@ -1,11 +1,14 @@
 name: Publish images
 
-# Builds the five Beacon images and pushes them to GitHub Container Registry
+# Builds the six Beacon images and pushes them to GitHub Container Registry
 # (ghcr.io/acebmxer/beacon-<service>).
 #
-#   - push to main           -> :latest (+ :main-<sha>)
-#   - push a tag like v1.2.3  -> :1.2.3, :1.2, :latest
+#   - push to main            -> :latest (+ :main, :main-<sha>)
+#   - push a tag like v1.2.3  -> :1.2.3, :1.2, :stable
 #   - manual run (workflow_dispatch)
+#
+# :latest and :stable are the two update channels a deployment can track via
+# BEACON_TAG. :latest moves on every push to main; :stable only on release tags.
 #
 # No secrets to configure: the built-in GITHUB_TOKEN authenticates to GHCR.
 # After the first run, make each package public under the repo's Packages tab
@@ -64,6 +67,11 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
+            # Release channel: only ever moves when a v* tag is published, so
+            # deployments running BEACON_TAG=stable are not disturbed by pushes
+            # to main. Explicitly keyed off the tag ref rather than
+            # is_default_branch, whose behaviour on tag pushes is ambiguous.
+            type=raw,value=stable,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3

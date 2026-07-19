@@ -1,4 +1,10 @@
-"""Update checking: compares deployed image digest against GHCR :latest."""
+"""Update checking: compares deployed image digest against GHCR.
+
+Which tag is watched depends on the configured update channel (config.BEACON_TAG,
+set from BEACON_TAG in .env): "latest" follows the main branch, "stable" follows
+tagged releases. docker-compose.yml interpolates the same variable, so the tag
+checked here is always the tag `docker compose pull` installs.
+"""
 import json
 import logging
 import subprocess
@@ -18,9 +24,20 @@ _OWNER = "acebmxer"
 _IMAGE = "beacon-web"
 _CHECK_INTERVAL = 86400  # 24 hours
 
+# Stand-in for the deployed digest after a channel switch. Never equals a real
+# digest, so the comparison below keeps reporting an update until one is applied
+# and run_update() writes the true digest back.
+_CHANNEL_SWITCHED = "channel-switched"
+
 
 def _ghcr_latest_digest() -> str | None:
-    """Return the current :latest manifest digest from GHCR, or None on error."""
+    """Return the tracked tag's manifest digest from GHCR, or None on error.
+
+    A missing tag (404) is indistinguishable here from a network failure — both
+    return None and leave the recorded state alone. That is deliberate: pointing
+    BEACON_TAG at a tag that does not exist yet must not clear a real pending
+    update, and must not report "up to date" when nothing was actually checked.
+    """
     try:
         token_url = (
             f"https://ghcr.io/token"
@@ -30,7 +47,7 @@ def _ghcr_latest_digest() -> str | None:
             token = json.loads(r.read())["token"]
 
         req = urllib.request.Request(
-            f"https://ghcr.io/v2/{_OWNER}/{_IMAGE}/manifests/latest",
+            f"https://ghcr.io/v2/{_OWNER}/{_IMAGE}/manifests/{config.BEACON_TAG}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": (
@@ -58,8 +75,30 @@ def check_for_updates() -> bool:
         digest = _ghcr_latest_digest()
 
         if digest is None:
-            # Network unreachable — keep whatever state was last recorded.
+            # Network unreachable, or the tag does not exist yet — keep whatever
+            # state was last recorded rather than guessing.
             return get_setting(db, "update_available", "0") == "1"
+
+        # The recorded digest belongs to whichever channel was tracked when it
+        # was written, so a channel switch invalidates it. Replace it with a
+        # sentinel rather than the new digest: the containers are still running
+        # the *previous* channel's images, so an update genuinely is pending —
+        # `docker compose pull` has to run to move onto this channel. (Switching
+        # main -> stable is therefore reported as an available update even though
+        # it installs an older, released build. The action needed is the same.)
+        #
+        # An empty previous channel means a fresh install, or one upgrading from
+        # a build predating channels. Neither is a switch, so just record it and
+        # let the normal comparison below decide.
+        prev_channel = get_setting(db, "update_channel", "")
+        if prev_channel != config.BEACON_TAG:
+            set_setting(db, "update_channel", config.BEACON_TAG)
+            if prev_channel:
+                log.info(
+                    "Update channel changed %s -> %s; update pending",
+                    prev_channel, config.BEACON_TAG,
+                )
+                set_setting(db, "update_known_digest", _CHANNEL_SWITCHED)
 
         known = get_setting(db, "update_known_digest", "")
         if not known:

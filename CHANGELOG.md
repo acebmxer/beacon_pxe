@@ -22,6 +22,13 @@ to do differently. Internal refactors that change nothing observable are omitted
   ISO as a CD under UEFI, so SMB is how Setup reaches the media.
 - `PROJECT_DIR` in `.env`, giving the web container the host project path so
   self-update resolves relative volume paths (`./data`, etc.) correctly.
+- Selectable update channel via `BEACON_TAG` in `.env`: `latest` tracks the
+  rolling `main` branch (the previous, only behaviour), `stable` tracks tagged
+  releases so the stack sits still between versions. Compose and the web app's
+  update check read the same variable, so the check can never report an update
+  that `docker compose pull` would not install. A new `:stable` image tag is
+  published on release tags only — it first appears with this release, so
+  `stable` is not selectable before then.
 
 ### Fixed
 

@@ -1,9 +1,12 @@
 # Beacon
 
+[![Publish images](https://github.com/acebmxer/beacon_pxe/actions/workflows/publish.yml/badge.svg)](https://github.com/acebmxer/beacon_pxe/actions/workflows/publish.yml)
+[![Latest release](https://img.shields.io/github/v/release/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/releases/latest)
+[![Container images](https://img.shields.io/badge/ghcr.io-beacon-2496ED?logo=docker&logoColor=white)](https://github.com/acebmxer?tab=packages&repo_name=beacon_pxe)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A self-hosted PXE/iPXE boot server with a modern, colourful boot menu and a
-login-protected web management console. It netboots **both BIOS and UEFI**
+A self-hosted PXE/iPXE boot server with a login-protected web management
+console. It netboots **both BIOS and UEFI**
 clients from a **single boot menu**, manages OS images uploaded as **ISO**, and
 supports **admin / user** accounts.
 
@@ -17,8 +20,9 @@ Runs as a small Docker Compose stack.
   binaries (`undionly.kpxe` for BIOS, `ipxe.efi` for UEFI) — that part is
   unavoidable — but after that handoff every client loads the **same**
   `http://<server>/boot.ipxe` menu.
-- **Modern boot menu** — colour scheme + a generated gradient background image
-  (not white-on-black).
+- **Menu built from your images** — upload an ISO and it appears as an entry;
+  no hand-editing boot scripts. Entries are sorted by name and can be disabled
+  individually without deleting the image.
 - **Web UI** (FastAPI) gated by a login screen, with light/dark themes.
 - **Default admin** created on first run; password supplied via `.env` or
   **auto-generated** and printed to the logs.
@@ -212,7 +216,7 @@ qemu-system-x86_64 -m 2048 -boot n \
   -netdev bridge,id=net0,br=br0 -device e1000,netdev=net0
 ```
 
-Both should pull their respective iPXE binary and land on the same colourful
+Both should pull their respective iPXE binary and land on the same
 `boot.ipxe` menu. (`-netdev user` won't see the proxyDHCP server — use a bridge
 to the real network.)
 
@@ -302,6 +306,29 @@ docker compose pull && docker compose up -d --build   # update
 docker compose down                                   # stop (keeps data)
 docker compose down -v                                # stop + drop bootroot/nfsroot volumes
 ```
+
+### Update channels
+
+`BEACON_TAG` in `.env` picks which published images the stack tracks — both what
+`docker compose pull` installs and what the web UI's update check watches:
+
+| `BEACON_TAG` | Tracks | Updates when |
+| --- | --- | --- |
+| `latest` (default) | rolling `main` branch | any commit merged to `main` |
+| `stable` | tagged releases | a new version is released |
+
+Choose `stable` if you want the boot server to sit still between releases;
+`latest` if you want fixes as they land. The update check follows whichever tag
+is set, so it never reports an update that `pull` would not install.
+
+Switching channels takes effect on the next update: the UI reports an update
+available, and applying it moves the stack onto the new channel. Note that going
+`latest` → `stable` installs an *older*, released build — the change is applied
+through the normal update path either way.
+
+> `:stable` is first published by the release following this feature. Until that
+> release exists, only `latest` can be pulled; setting `stable` sooner fails the
+> pull with `manifest unknown`.
 
 **Always update the whole stack with `docker compose`, not a per-container UI.**
 The `dnsmasq` and `nfs` services run with `network_mode: host` (required:

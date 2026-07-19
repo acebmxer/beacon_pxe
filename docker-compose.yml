@@ -9,6 +9,11 @@
 # Images are published to GitHub Container Registry (GHCR) and pulled on up.
 # To build locally from source instead, use docker-compose.dev.yml.
 #
+# BEACON_TAG selects the update channel and defaults to "latest" (rolling main
+# branch). Set BEACON_TAG=stable in .env to track tagged releases instead. The
+# web app reads the same variable, so its update check always watches the tag
+# this file pulls.
+#
 # Services:
 #   web     - FastAPI management UI + API (auth, settings, images, users)
 #   nginx   - HTTP boot root served to iPXE clients (menu, kernels, initrds, ISOs)
@@ -22,7 +27,7 @@
 
 services:
   web:
-    image: ghcr.io/acebmxer/beacon-web:latest
+    image: ghcr.io/acebmxer/beacon-web:${BEACON_TAG:-latest}
     container_name: beacon_web
     restart: unless-stopped
     env_file: .env
@@ -61,7 +66,7 @@ services:
       - "${WEB_PORT:-8080}:8080"
 
   nginx:
-    image: ghcr.io/acebmxer/beacon-nginx:latest
+    image: ghcr.io/acebmxer/beacon-nginx:${BEACON_TAG:-latest}
     container_name: beacon_nginx
     restart: unless-stopped
     volumes:
@@ -72,7 +77,7 @@ services:
       - "80:80"
 
   dnsmasq:
-    image: ghcr.io/acebmxer/beacon-dnsmasq:latest
+    image: ghcr.io/acebmxer/beacon-dnsmasq:${BEACON_TAG:-latest}
     container_name: beacon_dnsmasq
     restart: unless-stopped
     network_mode: host
@@ -88,7 +93,7 @@ services:
   # Needs host networking + privileged for the in-kernel NFS server; the host
   # must provide the nfsd kernel module (standard on Linux).
   nfs:
-    image: ghcr.io/acebmxer/beacon-nfs:latest
+    image: ghcr.io/acebmxer/beacon-nfs:${BEACON_TAG:-latest}
     container_name: beacon_nfs
     restart: unless-stopped
     network_mode: host
@@ -102,7 +107,7 @@ services:
   # ISO as a CD under UEFI, so SMB is how Setup reaches sources/install.wim.
   # Host networking so WinPE reaches it by the server IP on the boot LAN.
   smb:
-    image: ghcr.io/acebmxer/beacon-smb:latest
+    image: ghcr.io/acebmxer/beacon-smb:${BEACON_TAG:-latest}
     container_name: beacon_smb
     restart: unless-stopped
     network_mode: host
@@ -112,7 +117,7 @@ services:
   # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker
   # socket into the web app: this sidecar owns the privileged restart instead.
   reload:
-    image: ghcr.io/acebmxer/beacon-reload:latest
+    image: ghcr.io/acebmxer/beacon-reload:${BEACON_TAG:-latest}
     container_name: beacon_reload
     restart: unless-stopped
     volumes:

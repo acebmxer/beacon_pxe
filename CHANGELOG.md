@@ -10,6 +10,8 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-19
+
 ### Added
 
 - **The running version and update channel now show in the topbar** on every
@@ -17,6 +19,16 @@ to do differently. Internal refactors that change nothing observable are omitted
   Previously this only appeared in Settings → Updates, which is admin-only; the
   topbar shows it to every user. Locally built images read `Running dev build`
   rather than a version number.
+
+### Changed
+
+- **The `dnsmasq`, `nfs`, and `smb` images now build on Alpine 3.24** instead of
+  Alpine 3.20, which reached end of life in April 2026 and had stopped receiving
+  security updates. The bundled daemons move with it: Samba 4.19.9 → 4.23.8
+  (4.19 was also past upstream end of life), dnsmasq 2.90 → 2.92, and nfs-utils
+  to a newer 2.6.4 revision. Nothing in Beacon's configuration changes, but
+  operators serving Windows install media over SMB should re-test a WinPE boot
+  after updating, since the Samba jump spans four minor releases.
 
 ## [0.2.2] - 2026-07-19
 
@@ -246,7 +258,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.2...v0.2.0

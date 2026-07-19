@@ -32,7 +32,7 @@ Installed from PyPI per [`web/requirements.txt`](web/requirements.txt):
 |-------------------------|---------------------------------------------------|
 | `python:3.12-slim`      | PSF (Python) + Debian package licenses            |
 | `debian:bookworm-slim`  | Mixed (mostly GPL/LGPL/BSD/MIT) per Debian        |
-| `alpine:3.20`           | Mostly MIT/BSD; busybox is GPL-2.0                 |
+| `alpine:3.24`           | Mostly MIT/BSD; busybox is GPL-2.0                 |
 | `nginx:alpine`          | nginx is BSD-2-Clause; on Alpine base             |
 | `docker:cli`            | Apache-2.0                                         |
 

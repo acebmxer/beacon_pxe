@@ -220,6 +220,42 @@ to the real network.)
 
 ## Troubleshooting
 
+- **Client times out fetching the boot file (`PXE-E18`, `NBP filesize is 0
+  Bytes`) even though every container is healthy.** The host firewall is
+  dropping the traffic. Every service Beacon needs except the web UI and NFS
+  listens **below port 1025**, and default policies on Fedora/RHEL (firewalld)
+  and Ubuntu (ufw) block that range — so TFTP, DHCP, HTTP, and SMB all fail
+  while `docker compose ps` shows everything `Up`. Containers using host
+  networking are *not* exempt: Docker only punches through for published ports.
+
+  Ports needed: **69/udp** (TFTP), **67/udp** + **4011/udp** (DHCP/proxyDHCP),
+  **80/tcp** (boot menu, kernels, `boot.wim`), **139+445/tcp** (SMB, Windows
+  only), **111/tcp+udp**, **2049/tcp**, **20048/tcp+udp** (NFS + rpcbind +
+  mountd, live Linux images only).
+
+  ```bash
+  # firewalld (Fedora/RHEL) — use the zone your boot interface is in
+  sudo firewall-cmd --permanent --zone=FedoraWorkstation \
+    --add-service=tftp --add-service=dhcp --add-service=http \
+    --add-service=samba --add-service=nfs --add-service=rpc-bind \
+    --add-service=mountd
+  sudo firewall-cmd --reload
+  ```
+
+  Note `samba-client` is the *outbound* client service and does not open 445;
+  the server service is `samba`. Confirm with `firewall-cmd --list-all`, then
+  check `docker compose exec web cat /dnsmasq/dnsmasq.log` — a successful boot
+  logs `sent /tftp/ipxe.efi to <client>`. If that log shows no client
+  transactions at all, packets are still being dropped before dnsmasq sees them.
+
+- **Client boots iPXE but then fetches `boot.ipxe` from the wrong IP and times
+  out.** Another DHCP server on the LAN is also answering with PXE options and
+  iPXE preferred its response. Beacon's log will show it served the correct URL
+  (`bootfile name: http://<server-ip>/boot.ipxe`) while the client's screen
+  shows a different address. Clear the `next-server` / option 66/67 settings on
+  whatever hands out leases for that subnet, or move Beacon to an isolated boot
+  VLAN and run it in full DHCP mode.
+
 - **`No space left on device` / `Unable to find a live file system on the
   network`, dropping to an `(initramfs)` shell.** The image is still using the
   old download-the-whole-ISO-to-RAM boot method. Switch it to NFS: clear the
@@ -316,3 +352,7 @@ Contributions are welcome. By submitting a pull request you agree that your
 contribution is licensed under the project's MIT License. Please keep changes
 focused and describe what you tested (the README's QEMU section is handy for
 verifying boot changes without real hardware).
+
+Add user-facing changes to the **Unreleased** section of
+[CHANGELOG.md](CHANGELOG.md) — anything an operator gains, loses, or has to do
+differently. Internal refactors that change nothing observable can be skipped.

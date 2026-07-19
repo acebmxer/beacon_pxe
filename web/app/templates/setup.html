@@ -19,7 +19,14 @@
       <select id="dhcp_mode" name="dhcp_mode">
         <option value="proxy" {{ 'selected' if settings.dhcp_mode=='proxy' }}>proxyDHCP — recommended, runs beside your router/existing DHCP</option>
         <option value="full" {{ 'selected' if settings.dhcp_mode=='full' }}>Full DHCP — this box assigns IP addresses</option>
+        <option value="external" {{ 'selected' if settings.dhcp_mode=='external' }}>External DHCP — your DHCP server already sets next-server/filename</option>
       </select>
+      <p class="muted" style="margin-top:6px;">
+        Pick <b>proxyDHCP</b> unless your DHCP server has network boot fields you
+        have already filled in. In <b>External DHCP</b> Beacon answers no DHCP and
+        only serves the boot files; point your server at
+        <span class="mono">ipxe.efi</span> (UEFI) on this box's IP.
+      </p>
 
       <div class="row" style="margin-top:6px;">
         <div><label>DHCP range start (full mode)</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}" placeholder="192.168.1.100"></div>

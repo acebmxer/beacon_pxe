@@ -25,8 +25,22 @@ dhcp-match=set:ipxe,175
 """
 
 
+def _tftp_block() -> str:
+    """Serve the iPXE binaries over TFTP.
+
+    Deliberately independent of the DHCP service: with an external DHCP server
+    driving the boot (next-server/filename set there), TFTP is the only thing
+    this box needs to provide, so disabling DHCP must not disable TFTP too.
+    """
+    return (
+        "# --- TFTP: serves the iPXE binaries ---\n"
+        "enable-tftp\n"
+        "tftp-root=/tftp"
+    )
+
+
 def _boot_block(server_ip: str, tftp_enabled: bool) -> str:
-    """Firmware -> iPXE handoff.
+    """Firmware -> iPXE handoff. Only meaningful when we answer DHCP.
 
     Uses pxe-service (not dhcp-boot) for the binary handoff because that is the
     mechanism dnsmasq honours in proxyDHCP mode: raw firmware is chainloaded the
@@ -36,9 +50,6 @@ def _boot_block(server_ip: str, tftp_enabled: bool) -> str:
     lines = []
     if tftp_enabled:
         lines += [
-            "enable-tftp",
-            "tftp-root=/tftp",
-            "",
             "# Raw firmware (not yet iPXE): chainload the matching iPXE binary.",
             "pxe-prompt=\"Loading iPXE...\",1",
             "pxe-service=tag:!ipxe,x86PC,\"iPXE (BIOS)\",undionly.kpxe",
@@ -46,7 +57,10 @@ def _boot_block(server_ip: str, tftp_enabled: bool) -> str:
             "pxe-service=tag:!ipxe,BC_EFI,\"iPXE (UEFI)\",ipxe.efi",
             "",
         ]
-    # Once iPXE is running, chain it to the single HTTP menu.
+    # Once iPXE is running, chain it to the single HTTP menu. The embedded
+    # script prefers this URL over ${next-server} (see dnsmasq/Dockerfile):
+    # in proxyDHCP the client's own DHCP server owns next-server, and routers
+    # commonly point it at themselves.
     lines.append("# iPXE clients: load the HTTP boot menu.")
     lines.append(f"dhcp-boot=tag:ipxe,http://{menu_host}/boot.ipxe")
     return "\n".join(lines)
@@ -68,7 +82,24 @@ def build_config(settings: dict) -> str:
         parts.append("except-interface=lo")
     parts.append(ARCH_DETECT)
 
-    if dhcp_on:
+    if tftp_on:
+        parts.append(_tftp_block())
+
+    # External DHCP: the admin's own DHCP server hands out next-server/filename,
+    # so we must not answer DHCP at all -- not even as a proxy, which would race
+    # the very server that is already doing the job. TFTP above is the whole
+    # contribution. Deliberately independent of svc_dhcp: picking this mode IS
+    # the statement that something else owns DHCP.
+    if mode == "external":
+        parts.append(
+            "# --- External DHCP: your own DHCP server drives the boot ---\n"
+            "# This box answers no DHCP whatsoever; it only serves the iPXE\n"
+            "# binaries over TFTP. Point your DHCP server at:\n"
+            f"#     next-server = {server_ip or '<this server IP>'}\n"
+            "#     filename    = ipxe.efi        (UEFI clients)\n"
+            "#     filename    = undionly.kpxe   (legacy BIOS clients)"
+        )
+    elif dhcp_on:
         if mode == "full":
             parts.append(
                 "# --- Full DHCP: this server assigns IP addresses ---\n"
@@ -87,7 +118,11 @@ def build_config(settings: dict) -> str:
             )
         parts.append(_boot_block(server_ip, tftp_on))
     else:
-        parts.append("# DHCP service disabled in Server Settings.")
+        parts.append(
+            "# DHCP service disabled in Server Settings. TFTP above (if enabled)\n"
+            "# still serves the iPXE binaries, so an external DHCP server can\n"
+            "# boot clients by pointing next-server/filename at this box."
+        )
 
     return "\n".join(parts) + "\n"
 

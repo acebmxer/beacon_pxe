@@ -364,12 +364,18 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
         # Bounded retry (DHCP may not be ready on the first try). Show the real
         # `net use` error on each attempt instead of silently looping forever —
         # a silent infinite loop just makes the firmware reboot with no clue why.
+        #
+        # 40 tries ~= 2 minutes. It needs to be this long because of error 53
+        # after a reset mid-install: the server still holds the previous session's
+        # TCP socket, WinPE reuses the same ephemeral port, and its SYN is answered
+        # with a challenge ACK until that socket is reaped (~25s -- see the
+        # keepalive socket options in smb/smb.conf). A 30s window lost that race.
         "set /a tries=0",
         ":retry",
         "set /a tries+=1",
         rf'net use Y: {share} /user:guest ""',
         "if exist Y:\\setup.exe goto run",
-        "if %tries% geq 10 goto failed",
+        "if %tries% geq 40 goto failed",
         "echo   mount attempt %tries% failed; retrying in 3s ...",
         "ping -n 4 127.0.0.1 >nul",
         "goto retry",

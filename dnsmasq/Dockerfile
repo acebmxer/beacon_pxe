@@ -25,7 +25,21 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN git clone https://github.com/ipxe/ipxe.git /ipxe \
     && git -C /ipxe checkout "$IPXE_REF"
 WORKDIR /ipxe/src
-RUN printf '#!ipxe\ndhcp || dhcp\nchain http://${next-server}/boot.ipxe || shell\n' > chain.ipxe
+# ${next-server} alone is NOT safe here. Under proxyDHCP the client's own DHCP
+# server owns that field and routers routinely stamp it with their own address,
+# so iPXE would chain to the router and get a 403 instead of our menu. iPXE
+# exposes the proxyDHCP offer separately as ${proxydhcp/*}, which is only set
+# when a proxy actually answered -- so prefer it, and fall back to ${next-server}
+# for the external-DHCP case where the admin points next-server at this box.
+# Note we never chain ${filename}: with an external DHCP server that is
+# "ipxe.efi", which would reload iPXE into an infinite loop.
+RUN cat > chain.ipxe <<'IPXE'
+#!ipxe
+dhcp || dhcp
+set menu-url http://${next-server}/boot.ipxe
+isset ${proxydhcp/next-server} && set menu-url http://${proxydhcp/next-server}/boot.ipxe ||
+chain ${menu-url} || shell
+IPXE
 # Enable iPXE's native USB stack + HID keyboard so the boot menu works on
 # machines whose firmware doesn't hand a USB keyboard to the pre-OS environment.
 # USB_HCD_* are the host-controller drivers (xHCI = USB3, the one modern desktops

@@ -25,12 +25,32 @@
 
   <div class="card" style="margin-top:18px;">
     <h2>DHCP</h2>
-    <div class="sub">proxyDHCP runs safely beside an existing DHCP server. Full DHCP makes this box assign IP addresses too.</div>
+    <div class="sub">proxyDHCP runs safely beside an existing DHCP server. Full DHCP makes this box assign IP addresses too. External DHCP leaves DHCP entirely to your own server.</div>
     <label for="dhcp_mode">DHCP mode</label>
-    <select id="dhcp_mode" name="dhcp_mode">
+    <select id="dhcp_mode" name="dhcp_mode" onchange="dhcpModeChanged()">
       <option value="proxy" {{ 'selected' if settings.dhcp_mode=='proxy' }}>proxyDHCP (recommended — beside existing DHCP)</option>
       <option value="full" {{ 'selected' if settings.dhcp_mode=='full' }}>Full DHCP (this server assigns addresses)</option>
+      <option value="external" {{ 'selected' if settings.dhcp_mode=='external' }}>External DHCP (your DHCP server sets next-server/filename)</option>
     </select>
+
+    <div class="alert info" id="external-help" style="margin-top:12px;display:none;">
+      <b>Set these on your own DHCP server.</b> Beacon will answer no DHCP at all
+      in this mode — it only serves the boot files.
+      <table style="margin-top:8px;border-collapse:collapse;">
+        <tr><td style="padding:2px 12px 2px 0;">Next server / TFTP server</td>
+            <td><span class="mono">{{ settings.server_ip or '(set Server IP above)' }}</span></td></tr>
+        <tr><td style="padding:2px 12px 2px 0;">Boot file — UEFI clients</td>
+            <td><span class="mono">ipxe.efi</span></td></tr>
+        <tr><td style="padding:2px 12px 2px 0;">Boot file — legacy BIOS clients</td>
+            <td><span class="mono">undionly.kpxe</span></td></tr>
+      </table>
+      <p class="muted" style="margin-bottom:0;">
+        Most DHCP servers allow only one boot filename. If yours can't pick per
+        client architecture, set <span class="mono">ipxe.efi</span> and boot your
+        clients in UEFI mode — or use proxyDHCP, which detects the architecture
+        for you.
+      </p>
+    </div>
     <div class="row" style="margin-top:6px;">
       <div><label>Range start</label><input name="dhcp_range_start" value="{{ settings.dhcp_range_start }}"></div>
       <div><label>Range end</label><input name="dhcp_range_end" value="{{ settings.dhcp_range_end }}"></div>
@@ -41,12 +61,23 @@
       <div><label>DNS server</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}"></div>
     </div>
     <p class="muted">Range/gateway/DNS apply only in <b>Full DHCP</b> mode.</p>
+    <script>
+      // Only surface the External DHCP instructions when that mode is picked --
+      // they are actionable config the admin has to copy elsewhere, so showing
+      // them in the other modes would just read as noise.
+      function dhcpModeChanged() {
+        var external = document.getElementById('dhcp_mode').value === 'external';
+        document.getElementById('external-help').style.display = external ? '' : 'none';
+        document.getElementById('svc_dhcp_note').style.display = external ? '' : 'none';
+      }
+      dhcpModeChanged();
+    </script>
   </div>
 
   <div class="card" style="margin-top:18px;">
     <h2>Services</h2>
     <div class="sub">Enable or disable individual boot services</div>
-    <div class="checkbox"><input type="checkbox" id="svc_dhcp" name="svc_dhcp" {{ 'checked' if settings.svc_dhcp=='1' }}><label for="svc_dhcp">DHCP / proxyDHCP</label></div>
+    <div class="checkbox"><input type="checkbox" id="svc_dhcp" name="svc_dhcp" {{ 'checked' if settings.svc_dhcp=='1' }}><label for="svc_dhcp">DHCP / proxyDHCP <span class="muted" id="svc_dhcp_note" style="display:none;">— ignored in External DHCP mode</span></label></div>
     <div class="checkbox"><input type="checkbox" id="svc_tftp" name="svc_tftp" {{ 'checked' if settings.svc_tftp=='1' }}><label for="svc_tftp">TFTP (serves iPXE binaries)</label></div>
     <div class="checkbox"><input type="checkbox" id="svc_http" name="svc_http" {{ 'checked' if settings.svc_http=='1' }}><label for="svc_http">HTTP boot files (informational — served by nginx)</label></div>
   </div>

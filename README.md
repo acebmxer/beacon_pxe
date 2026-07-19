@@ -119,6 +119,26 @@ Set during the first-run wizard and changeable any time under **Server Settings*
 - **Full DHCP.** This box becomes the DHCP server and assigns addresses from the
   configured range. Use only if you have **no other DHCP server** on the
   segment — two full DHCP servers will conflict.
+- **External DHCP.** Your own DHCP server drives the boot: Beacon answers no
+  DHCP at all and only serves the iPXE binaries over TFTP. Use this when your
+  DHCP server has network-boot fields and you would rather configure them there
+  than run a proxy. Point it at:
+
+  | Setting | Value |
+  |---------|-------|
+  | Next server / TFTP server | this box's IP (the **Server IP** setting) |
+  | Boot file, UEFI clients | `ipxe.efi` |
+  | Boot file, legacy BIOS clients | `undionly.kpxe` |
+
+  Most DHCP servers allow only one boot filename. Because Beacon isn't answering
+  DHCP in this mode it cannot detect the client architecture for you, so a
+  single-filename server means picking one: set `ipxe.efi` and boot clients in
+  UEFI mode, or use proxyDHCP, which serves the right binary per client.
+
+Which one you want, in short: **proxyDHCP** if your DHCP server has no
+network-boot fields (most consumer routers and mesh systems), **External DHCP**
+if it does and you have filled them in, **Full DHCP** if you have no DHCP server
+at all.
 
 ---
 

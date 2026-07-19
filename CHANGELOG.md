@@ -10,6 +10,44 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- **External DHCP mode.** A third DHCP mode for networks whose own DHCP server
+  already supplies next-server/filename. Beacon answers no DHCP whatsoever and
+  serves only the iPXE binaries over TFTP, so it cannot race the server that is
+  already doing the job. The Settings page shows the exact values to enter on
+  your DHCP server. Existing deployments are unaffected — the default is still
+  proxyDHCP.
+
+### Fixed
+
+- **Windows installs no longer fail with "System error 53" on the boot after a
+  successful one.** A client reset mid-install never closes its SMB session, so
+  the server kept that TCP socket ESTABLISHED for up to two hours. WinPE reuses
+  the same ephemeral port on every cold boot, so the next attempt's SYN hit the
+  stale socket and got an RFC 5961 challenge ACK instead of a SYN-ACK; WinPE
+  never sends the RST that would clear it, so the mount failed until the socket
+  aged out. Because a *successful* install is what creates the stale socket, this
+  presented as Windows booting fine one time and failing the next, and looked
+  convincingly like corrupt install media — reprocessing the ISO never helped,
+  because nothing was wrong with it. The SMB service now reaps dead connections
+  in ~25s via per-socket keepalive timers, and WinPE retries the mount for ~2
+  minutes instead of 30s, so the socket is always gone before the client gives up.
+- **proxyDHCP boots now complete when your DHCP server has network boot turned
+  off.** iPXE loaded correctly but then chained to `http://<your-router>/boot.ipxe`
+  and failed with a permission error, because the embedded chain script trusted
+  `${next-server}` — a field the client's own DHCP server owns, and which routers
+  commonly stamp with their own address. The script now prefers the address the
+  proxyDHCP server actually answered from (`${proxydhcp/next-server}`), falling
+  back to `${next-server}` for setups where an external DHCP server points it at
+  Beacon deliberately. **Requires a rebuilt/repulled `dnsmasq` image**, since the
+  script is embedded in the iPXE binaries at build time.
+- **Turning off DHCP no longer silently turns off TFTP.** `enable-tftp` was
+  emitted only when the DHCP service was enabled, so disabling "DHCP / proxyDHCP"
+  in Server Settings left clients with no TFTP server — breaking exactly the
+  setup where an external DHCP server supplies next-server/filename itself. TFTP
+  now follows its own service toggle.
+
 ## [0.2.1] - 2026-07-19
 
 **Upgrading to this release requires two manual steps.** The self-update fixes

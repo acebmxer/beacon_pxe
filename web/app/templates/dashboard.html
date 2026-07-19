@@ -77,8 +77,12 @@
       <tr><td>Boot interface</td><td class="mono">{{ settings.boot_interface }}</td></tr>
       <tr><td>DHCP mode</td><td>
         <span class="badge {{ 'ready' if settings.dhcp_mode=='proxy' else 'pending' }}">
-          {{ 'proxyDHCP' if settings.dhcp_mode=='proxy' else 'full DHCP' }}</span></td></tr>
-      <tr><td>DHCP service</td><td>{{ 'enabled' if settings.svc_dhcp=='1' else 'disabled' }}</td></tr>
+          {% if settings.dhcp_mode=='proxy' %}proxyDHCP
+          {%- elif settings.dhcp_mode=='external' %}external DHCP
+          {%- else %}full DHCP{% endif %}</span></td></tr>
+      <tr><td>DHCP service</td><td>
+        {%- if settings.dhcp_mode=='external' %}not answering (external DHCP)
+        {%- else %}{{ 'enabled' if settings.svc_dhcp=='1' else 'disabled' }}{% endif %}</td></tr>
       <tr><td>TFTP service</td><td>{{ 'enabled' if settings.svc_tftp=='1' else 'disabled' }}</td></tr>
     </table>
   </div>

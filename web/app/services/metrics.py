@@ -37,6 +37,26 @@ def _read(name: str) -> str:
     return (PROC / name).read_text()
 
 
+def _net_dev_path() -> Path:
+    """Path to the *host's* net/dev, not this container's.
+
+    /proc/net is a symlink to self/net, and a task's net/ directory follows its
+    network namespace -- so reading HOST_PROC/net/dev from inside the container
+    still reports the container's own veth, not the host NIC. That made the
+    dashboard's network graph show only its own dashboard polling traffic while
+    the disk graph (diskstats isn't namespaced) correctly showed image pushes.
+    PID 1 in the host's /proc is the host init, which lives in the root netns,
+    so its net/dev has the real interface counters. Falls back to the plain
+    path if the host /proc isn't mounted or PID 1 isn't readable.
+    """
+    host_init = PROC / "1" / "net" / "dev"
+    try:
+        host_init.read_text()
+        return host_init
+    except OSError:
+        return PROC / "net" / "dev"
+
+
 def _cpu_totals() -> tuple[int, int]:
     """Return (idle_plus_iowait, total) jiffies from the aggregate cpu line."""
     line = _read("stat").splitlines()[0]          # "cpu  u n s idle iowait irq ..."
@@ -83,10 +103,13 @@ def _disk_bytes() -> tuple[int, int]:
     return read, write
 
 
+_NET_DEV = _net_dev_path()
+
+
 def _net_bytes() -> tuple[int, int]:
     """Sum (rx_bytes, tx_bytes) across physical interfaces."""
     rx = tx = 0
-    for line in _read("net/dev").splitlines():
+    for line in _NET_DEV.read_text().splitlines():
         if ":" not in line:
             continue
         name, _, data = line.partition(":")

@@ -10,6 +10,18 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Fixed
+
+- **The dashboard's network graph now shows the whole machine's traffic**
+  instead of only the web container's own. Deploying an image lit up the disk
+  graph but left the network graph nearly flat, showing just the few KB/s of
+  dashboard polling — the image data pushed by the `nginx`, `nfs`, and `smb`
+  services never appeared. The web container reads the host's `/proc`, but
+  `/proc/net` is per-network-namespace, so those counters still came from the
+  container's own veth; disk was unaffected because `/proc/diskstats` is not
+  namespaced. Beacon now reads the host init process's interface counters, so
+  the network graph tracks a deployment the way the disk graph already did.
+
 ## [0.2.3] - 2026-07-19
 
 ### Added

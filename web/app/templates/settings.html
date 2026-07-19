@@ -121,7 +121,7 @@
     renderBuild(d);
 
     if (d.in_progress) {
-      statusEl.textContent = "Update in progress — pulling images…";
+      statusEl.textContent = "Update in progress — pulling images and restarting services…";
       statusEl.className = "";
       applyBtn.style.display = "none";
       checkBtn.disabled = true;

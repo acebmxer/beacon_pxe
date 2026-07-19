@@ -28,6 +28,10 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 def on_startup():
     init_db()
     bootstrap.run()
+    # Reaching startup with an update in flight means this process is the
+    # container the update just created, which is the confirmation the update
+    # actually landed. Runs before the checker so the state is settled first.
+    update_svc.finish_pending_update()
     update_svc.start_background_checker()
 
 

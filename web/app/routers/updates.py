@@ -17,6 +17,9 @@ router = APIRouter()
 
 @router.get("/api/update/status")
 def update_status(user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    # An update whose recreation never happened leaves this container running
+    # with the flag still set; catch it here rather than spinning forever.
+    update_svc.reap_stalled_update(db)
     return {
         "available": get_setting(db, "update_available", "0") == "1",
         "in_progress": get_setting(db, "update_in_progress", "0") == "1",

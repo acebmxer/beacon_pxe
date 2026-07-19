@@ -32,6 +32,13 @@ _CHECK_INTERVAL = 86400  # 24 hours
 # attempt or an explicit dismissal.
 _SUCCESS_TTL = 1800  # 30 minutes
 
+# Name of the throwaway container that performs the recreation, and how long to
+# wait for it to replace this container before declaring the update stalled.
+# Generous: it has to pull nothing (images are already local) but may restart
+# six services on slow storage.
+_UPDATER_NAME = "beacon_updater"
+_RECREATE_TIMEOUT = 300  # 5 minutes
+
 # Stand-in for the deployed digest after a channel switch. Never equals a real
 # digest, so the comparison below keeps reporting an update until one is applied
 # and run_update() writes the true digest back.
@@ -183,16 +190,120 @@ def check_for_updates() -> bool:
         db.close()
 
 
+def _spawn_recreator(image: str, project_dir: str) -> str | None:
+    """Start a throwaway container to run `docker compose up -d`.
+
+    The recreation cannot run in this process. `docker compose up -d` detaches
+    the *containers* it starts, not itself — it stays in the foreground doing
+    the recreation, and one of the containers it must replace is the one this
+    code is running in. Stopping it kills the compose process mid-run, which is
+    why the update appeared to succeed while nothing was replaced.
+
+    So hand the job to a container outside the compose project, which nothing in
+    the stack can take down. It runs the web image (just pulled, so guaranteed
+    present, and it already carries the docker CLI + compose plugin for exactly
+    this reason) with the project directory mounted at its own path, so compose
+    derives the same project name and resolves relative volume paths the way the
+    original `up` did.
+
+    Returns None once the container is launched, or an error string.
+    """
+    # A leftover from a previous run would make `docker run --name` fail.
+    subprocess.run(["docker", "rm", "-f", _UPDATER_NAME],
+                   capture_output=True, text=True, timeout=30)
+
+    launch = subprocess.run(
+        [
+            "docker", "run", "--detach", "--rm",
+            "--name", _UPDATER_NAME,
+            "-v", "/var/run/docker.sock:/var/run/docker.sock",
+            "-v", f"{project_dir}:{project_dir}",
+            "-w", project_dir,
+            image,
+            # --remove-orphans only touches containers labelled with this
+            # compose project; this container carries no such label, so it
+            # cannot delete itself out from under the recreation.
+            "docker", "compose", "up", "-d", "--remove-orphans",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    if launch.returncode != 0:
+        return (launch.stderr or launch.stdout or "unknown error").strip()[:300]
+    return None
+
+
+def finish_pending_update() -> None:
+    """Resolve an in-flight update at startup.
+
+    Called from the app's startup hook. Reaching this point with an update
+    in progress means this process is the *replacement* container: the previous
+    one was stopped by the recreation, and the new image is now running. That
+    is the only trustworthy confirmation available, since the process that
+    started the update does not survive to see it finish.
+    """
+    db = SessionLocal()
+    try:
+        if get_setting(db, "update_in_progress", "0") != "1":
+            return
+
+        # Digest recorded before the recreation, so no network call on startup.
+        pending = get_setting(db, "update_pending_digest", "")
+        if pending:
+            set_setting(db, "update_known_digest", pending)
+        set_setting(db, "update_pending_digest", "")
+        set_setting(db, "update_available", "0")
+        set_setting(db, "update_in_progress", "0")
+        _set_result(db, "success")
+        log.info("Update completed; now running the recreated container")
+    finally:
+        db.close()
+
+
+def reap_stalled_update(db) -> None:
+    """Fail an update that started but never replaced this container.
+
+    If the recreation dies, this process keeps running with the update still
+    marked in progress, and the UI would spin on "pulling images" forever. The
+    replacement path clears the flag on startup, so anything still set here well
+    past that point means the recreation never happened.
+    """
+    if get_setting(db, "update_in_progress", "0") != "1":
+        return
+
+    started = get_setting(db, "update_started_at", "")
+    if not started:
+        return
+    try:
+        age = (datetime.now(timezone.utc) - datetime.fromisoformat(started)).total_seconds()
+    except ValueError:
+        return
+    if age < _RECREATE_TIMEOUT:
+        return
+
+    set_setting(db, "update_in_progress", "0")
+    _set_result(
+        db,
+        "recreate_failed: images were pulled but the containers were not "
+        "recreated. Run `docker compose up -d` on the host to finish.",
+    )
+    log.warning("Update stalled: containers were not recreated after %.0fs", age)
+
+
 def run_update() -> None:
     """
-    Pull new images then trigger container recreation via docker compose up -d.
+    Pull new images, then hand container recreation to a throwaway container.
 
-    Writes the success state to the DB *before* issuing up -d, because the
-    web container itself gets replaced and this thread won't survive the kill.
+    Deliberately records no success here. This process is about to be killed by
+    the recreation, so it cannot observe the outcome; writing "success" before
+    starting the work is what previously reported updates that never landed.
+    The replacement container confirms it instead, in finish_pending_update().
     """
     db = SessionLocal()
     try:
         set_setting(db, "update_in_progress", "1")
+        set_setting(db, "update_started_at", datetime.now(timezone.utc).isoformat())
         _set_result(db, "")
 
         compose_file = str(config.COMPOSE_FILE)
@@ -218,23 +329,32 @@ def run_update() -> None:
             set_setting(db, "update_in_progress", "0")
             return
 
-        # Record success *before* launching up -d so the state is persisted
-        # even after the web container is replaced.
+        # Stash the digest now, while the network call is cheap and this process
+        # is still alive; finish_pending_update() promotes it after the restart.
         new_digest = _ghcr_latest_digest()
-        if new_digest:
-            set_setting(db, "update_known_digest", new_digest)
-        set_setting(db, "update_available", "0")
-        set_setting(db, "update_in_progress", "0")
-        _set_result(db, "success")
+        set_setting(db, "update_pending_digest", new_digest or "")
 
-        # Recreate containers with new images. -d means the compose CLI
-        # hands off to the daemon and exits quickly — well before the web
-        # container is actually stopped, so this Popen returns immediately.
-        subprocess.Popen(
-            base_cmd + ["up", "-d", "--remove-orphans"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        # The recreation needs a project directory on the host to run from.
+        # Without it compose would resolve relative volume paths and the project
+        # name against the wrong directory and build a parallel stack.
+        if not project_dir:
+            _set_result(
+                db,
+                "recreate_failed: PROJECT_DIR is not set in .env, so the update "
+                "cannot recreate containers. Add it (see .env.example) and run "
+                "`docker compose up -d` on the host.",
+            )
+            set_setting(db, "update_in_progress", "0")
+            return
+
+        error = _spawn_recreator(image_ref(), project_dir)
+        if error:
+            _set_result(db, f"recreate_failed: {error}")
+            set_setting(db, "update_in_progress", "0")
+            return
+
+        # This container is now living on borrowed time — the recreation will
+        # stop it shortly. Its replacement writes the success state.
 
     except subprocess.TimeoutExpired:
         _set_result(db, "timeout: pull took too long")

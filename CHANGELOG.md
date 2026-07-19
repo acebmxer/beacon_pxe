@@ -10,17 +10,50 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-19
+
+**Upgrading to this release requires two manual steps.** The self-update fixes
+below cannot apply themselves: clicking Apply in a 0.2.0 (or earlier) deployment
+runs the *old*, broken updater, which reports success without recreating
+anything. Before updating, check `.env` against `.env.example` and add anything
+missing — `PROJECT_DIR` (required; the update cannot recreate containers without
+it) and `BEACON_TAG` (optional; picks the update channel, defaults to `latest`
+when absent). Then update from the host:
+
+```bash
+docker compose pull && docker compose up -d
+```
+
+Once 0.2.1 is running, the in-app update button works as intended.
+
 ### Added
 
-- The Updates panel in Settings now reports what is deployed and where updates
-  come from: the running version (`v0.2.0` on a release, `main (<sha>)` on a
-  rolling build, `dev build` when built locally), the active channel, and the
-  full image reference being watched. Previously an admin could only see
-  whether an update existed, not which build they were on or which channel it
-  would come from.
+- The Updates panel in Settings now reports what is deployed and which channel
+  it came from: the running version (`v0.2.1` on a release, `main (<sha>)` on a
+  rolling build, `dev build` when built locally) alongside the active channel.
+  Previously an admin could see only whether an update existed, not which build
+  they were on or where it would come from.
 
 ### Fixed
 
+- Self-update now actually recreates the containers. `docker compose up -d` was
+  run from inside the web container, but that command performs the recreation
+  in the foreground — so stopping the web container killed the update midway,
+  usually before the web service itself was replaced. The recreation is now
+  handed to a short-lived container outside the stack, which nothing in the
+  stack can take down.
+- Self-update no longer reports success before it has done anything. The result
+  and the new image digest were written to the database *before* recreation was
+  attempted, and that command's output was discarded, so a failed update still
+  showed "Update applied successfully. Services are restarting." and left the
+  UI reporting "Up to date" while the old images kept running. Success is now
+  recorded by the replacement container once it starts, which is the only
+  trustworthy confirmation; an update that never replaces it is reported as
+  failed after five minutes.
+- Self-update fails with an explanation when `PROJECT_DIR` is unset in `.env`
+  instead of silently doing nothing — without it the recreation cannot resolve
+  the stack's project directory. Deployments that predate `PROJECT_DIR` need to
+  add it (see `.env.example`).
 - "Update applied successfully. Services are restarting." no longer persists
   indefinitely. The message was written to the database and never cleared, so
   it reappeared on every visit to Settings long after the restart finished —
@@ -111,7 +144,8 @@ to do differently. Internal refactors that change nothing observable are omitted
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.0...v0.1.1

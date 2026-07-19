@@ -307,6 +307,17 @@ docker compose down                                   # stop (keeps data)
 docker compose down -v                                # stop + drop bootroot/nfsroot volumes
 ```
 
+The admin UI can also update the stack in place (Settings → Updates), which
+pulls new images and recreates the containers for you.
+
+> **Upgrading from 0.2.0 or earlier to 0.2.1 must be done from the host, using
+> the commands above.** The in-app update button is broken in those versions —
+> it reports success without recreating anything — and the fix only takes effect
+> once 0.2.1 is running. First compare `.env` against `.env.example` and add
+> anything missing: `PROJECT_DIR` is required (the update cannot recreate
+> containers without it), and `BEACON_TAG` selects the update channel
+> (deployments without it stay on `latest`).
+
 ### Update channels
 
 `BEACON_TAG` in `.env` picks which published images the stack tracks — both what

@@ -10,6 +10,8 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-07-19
+
 ### Added
 
 - Fedora 42+ live and Archiso HTTP netboot support — these distros dropped the
@@ -91,7 +93,8 @@ to do differently. Internal refactors that change nothing observable are omitted
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.2...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acebmxer/beacon_pxe/releases/tag/v0.1.0

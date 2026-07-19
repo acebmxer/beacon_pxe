@@ -314,21 +314,21 @@ docker compose down -v                                # stop + drop bootroot/nfs
 
 | `BEACON_TAG` | Tracks | Updates when |
 | --- | --- | --- |
-| `latest` (default) | rolling `main` branch | any commit merged to `main` |
 | `stable` | tagged releases | a new version is released |
+| `latest` | rolling `main` branch | any commit merged to `main` |
 
 Choose `stable` if you want the boot server to sit still between releases;
 `latest` if you want fixes as they land. The update check follows whichever tag
 is set, so it never reports an update that `pull` would not install.
 
+New installs get `stable` from `.env.example`. Deployments that predate update
+channels have no `BEACON_TAG` set and stay on `latest`, which is what they were
+already tracking — add the variable to `.env` to move onto releases.
+
 Switching channels takes effect on the next update: the UI reports an update
 available, and applying it moves the stack onto the new channel. Note that going
 `latest` → `stable` installs an *older*, released build — the change is applied
 through the normal update path either way.
-
-> `:stable` is first published by the release following this feature. Until that
-> release exists, only `latest` can be pulled; setting `stable` sooner fails the
-> pull with `manifest unknown`.
 
 **Always update the whole stack with `docker compose`, not a per-container UI.**
 The `dnsmasq` and `nfs` services run with `network_mode: host` (required:

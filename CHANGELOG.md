@@ -39,6 +39,18 @@ through the proxy. Existing databases are migrated automatically on start.
   4.0.x and the automated bumper now knows to leave it there. Tagged releases
   (v0.4.0 and earlier) were never affected — if you follow `latest`, pull
   again to pick up the repaired image.
+- **Updating manually on the host no longer confuses the Updates panel.** The
+  update check used to compare GHCR against a digest it remembered from its
+  own last apply, so a `docker compose pull && up -d` run by hand (or a
+  channel switch) left it insisting an update was available when none was;
+  pressing **Apply update** then found nothing to recreate, waited five
+  minutes for a restart that could never come, and reported `recreate_failed`.
+  The check now reads what is actually deployed from the running container,
+  the status page retracts a stale "Update available" badge on its own, and
+  Apply recognizes the already-current case and reports success immediately.
+  As a bonus, Apply now properly finishes a half-done manual update (images
+  pulled but containers never recreated), and a failed recreation reports the
+  updater's actual error output instead of a generic timeout.
 
 ### Security
 

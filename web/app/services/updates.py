@@ -4,6 +4,12 @@ Which tag is watched depends on the configured update channel (config.BEACON_TAG
 set from BEACON_TAG in .env): "latest" follows the main branch, "stable" follows
 tagged releases. docker-compose.yml interpolates the same variable, so the tag
 checked here is always the tag `docker compose pull` installs.
+
+What is *deployed* is read from the running web container itself (through the
+docker socket) rather than remembered in the database. Bookkeeping desyncs the
+moment the admin updates manually with `docker compose pull && up -d` on the
+host — which is exactly what every failure message here tells them to do — and
+then keeps advertising an update that is already installed.
 """
 import json
 import logging
@@ -39,10 +45,14 @@ _SUCCESS_TTL = 1800  # 30 minutes
 _UPDATER_NAME = "beacon_updater"
 _RECREATE_TIMEOUT = 300  # 5 minutes
 
-# Stand-in for the deployed digest after a channel switch. Never equals a real
-# digest, so the comparison below keeps reporting an update until one is applied
-# and run_update() writes the true digest back.
+# Legacy sentinel that older builds wrote into update_known_digest on a channel
+# switch. It never equals a real digest, so left alone it would report an update
+# forever; the fallback path below treats it as "no baseline" instead.
 _CHANNEL_SWITCHED = "channel-switched"
+
+# The web container's fixed name (container_name in docker-compose.yml): how
+# this process finds its own container, and the image it runs, via the socket.
+_WEB_CONTAINER = "beacon_web"
 
 
 def _set_result(db, value: str) -> None:
@@ -152,6 +162,50 @@ def _ghcr_latest_digest() -> str | None:
         return None
 
 
+def _docker(args: list[str]) -> str | None:
+    """Run a docker CLI command; trimmed stdout, or None on any failure."""
+    try:
+        proc = subprocess.run(
+            ["docker"] + args, capture_output=True, text=True, timeout=30
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout.strip()
+
+
+def _deployed_digests() -> set[str] | None:
+    """Registry digests of the image the running web container was created from.
+
+    Asking docker beats any recorded value: it stays correct through a manual
+    `docker compose pull && up -d` on the host and through a channel switch,
+    neither of which passes through this code. The digests come from the
+    *container's* image, not from what the tag currently points at, so a pull
+    that has not been followed by a recreation still (correctly) counts as
+    not yet deployed.
+
+    Returns None when no digest can be determined: a locally built dev image
+    (no RepoDigests), or docker not answering. An image accumulates one entry
+    per digest it was pulled by, hence a set.
+    """
+    image_id = _docker(["inspect", _WEB_CONTAINER, "--format", "{{.Image}}"])
+    if not image_id:
+        return None
+    raw = _docker(
+        ["image", "inspect", image_id, "--format", "{{json .RepoDigests}}"]
+    )
+    if not raw:
+        return None
+    try:
+        entries = json.loads(raw)
+    except ValueError:
+        return None
+    prefix = f"ghcr.io/{_OWNER}/{_IMAGE}@"
+    digests = {e[len(prefix):] for e in entries if e.startswith(prefix)}
+    return digests or None
+
+
 def check_for_updates() -> bool:
     """Query GHCR and record result in DB. Returns True if an update is available."""
     db = SessionLocal()
@@ -166,40 +220,74 @@ def check_for_updates() -> bool:
             # state was last recorded rather than guessing.
             return get_setting(db, "update_available", "0") == "1"
 
-        # The recorded digest belongs to whichever channel was tracked when it
-        # was written, so a channel switch invalidates it. Replace it with a
-        # sentinel rather than the new digest: the containers are still running
-        # the *previous* channel's images, so an update genuinely is pending —
-        # `docker compose pull` has to run to move onto this channel. (Switching
-        # main -> stable is therefore reported as an available update even though
-        # it installs an older, released build. The action needed is the same.)
-        #
-        # An empty previous channel means a fresh install, or one upgrading from
-        # a build predating channels. Neither is a switch, so just record it and
-        # let the normal comparison below decide.
-        prev_channel = get_setting(db, "update_channel", "")
-        if prev_channel != config.BEACON_TAG:
-            set_setting(db, "update_channel", config.BEACON_TAG)
-            if prev_channel:
-                log.info(
-                    "Update channel changed %s -> %s; update pending",
-                    prev_channel, config.BEACON_TAG,
-                )
-                set_setting(db, "update_known_digest", _CHANNEL_SWITCHED)
+        # Remembered so refresh_available() can retract a stale "update
+        # available" between checks without its own network call.
+        set_setting(db, "update_remote_digest", digest)
 
-        known = get_setting(db, "update_known_digest", "")
-        if not known:
-            # First run: record current GHCR digest as the deployed baseline.
-            # The image was just pulled, so GHCR digest == what's running.
-            set_setting(db, "update_known_digest", digest)
-            set_setting(db, "update_available", "0")
-            return False
+        deployed = _deployed_digests()
+        if deployed is not None:
+            # The container either is or is not the image the tracked tag
+            # points at; no bookkeeping to go stale. A channel switch needs no
+            # special case — the running digest belongs to the old channel, so
+            # this reports an update even when the "update" is the older,
+            # released build. The action needed is the same.
+            available = digest not in deployed
+            if not available:
+                # Keep the fallback baseline in sync while the authoritative
+                # answer is obtainable, so a later docker hiccup falls back to
+                # something current rather than a digest from months ago.
+                set_setting(db, "update_known_digest", digest)
+        else:
+            # No digest to compare against — a dev build, or docker is
+            # misbehaving. Fall back to the last remembered baseline: not
+            # authoritative, but it keeps a dev build from flagging an update
+            # on every check while GHCR sits unchanged.
+            known = get_setting(db, "update_known_digest", "")
+            if known == _CHANNEL_SWITCHED:
+                known = ""
+            if not known:
+                # First sight of this deployment: record the current GHCR
+                # digest as the baseline and report up to date.
+                set_setting(db, "update_known_digest", digest)
+                set_setting(db, "update_available", "0")
+                return False
+            available = digest != known
 
-        available = digest != known
         set_setting(db, "update_available", "1" if available else "0")
         return available
     finally:
         db.close()
+
+
+def refresh_available(db) -> None:
+    """Retract a recorded "update available" that local reality contradicts.
+
+    The daily check records availability, but a manual `docker compose pull &&
+    up -d` on the host changes what is deployed without telling anyone; until
+    the next check the UI would keep advertising an update that is already
+    installed. Comparing the running container against the digest remembered
+    from the last GHCR check costs two local docker calls and no network, so
+    the status endpoint can afford it on every page load.
+
+    Deliberately one-directional: clearing a stale flag needs only local
+    facts, but *raising* one requires fresh knowledge of the registry, and
+    that is check_for_updates()'s job.
+    """
+    if get_setting(db, "update_in_progress", "0") == "1":
+        # The 3s status poll during an update would hammer a docker daemon
+        # that is busy recreating the stack.
+        return
+    if get_setting(db, "update_available", "0") != "1":
+        return
+    remote = get_setting(db, "update_remote_digest", "")
+    if not remote:
+        return
+    deployed = _deployed_digests()
+    if deployed is not None and remote in deployed:
+        set_setting(db, "update_available", "0")
+        set_setting(db, "update_known_digest", remote)
+        log.info("Deployed image now matches the last checked digest; "
+                 "clearing stale update flag")
 
 
 def _spawn_recreator(image: str, project_dir: str) -> str | None:
@@ -220,13 +308,15 @@ def _spawn_recreator(image: str, project_dir: str) -> str | None:
 
     Returns None once the container is launched, or an error string.
     """
-    # A leftover from a previous run would make `docker run --name` fail.
+    # The previous run's exited container is expected here — no --rm below, so
+    # its exit code and logs stay inspectable after it finishes. Clear it now
+    # or `docker run --name` fails.
     subprocess.run(["docker", "rm", "-f", _UPDATER_NAME],
                    capture_output=True, text=True, timeout=30)
 
     launch = subprocess.run(
         [
-            "docker", "run", "--detach", "--rm",
+            "docker", "run", "--detach",
             "--name", _UPDATER_NAME,
             "-v", "/var/run/docker.sock:/var/run/docker.sock",
             "-v", f"{project_dir}:{project_dir}",
@@ -260,11 +350,8 @@ def finish_pending_update() -> None:
         if get_setting(db, "update_in_progress", "0") != "1":
             return
 
-        # Digest recorded before the recreation, so no network call on startup.
-        pending = get_setting(db, "update_pending_digest", "")
-        if pending:
-            set_setting(db, "update_known_digest", pending)
-        set_setting(db, "update_pending_digest", "")
+        # No digest bookkeeping needed: the next check reads what is deployed
+        # from this very container. Only the outcome needs recording.
         set_setting(db, "update_available", "0")
         set_setting(db, "update_in_progress", "0")
         _set_result(db, "success")
@@ -307,10 +394,13 @@ def run_update() -> None:
     """
     Pull new images, then hand container recreation to a throwaway container.
 
-    Deliberately records no success here. This process is about to be killed by
-    the recreation, so it cannot observe the outcome; writing "success" before
-    starting the work is what previously reported updates that never landed.
-    The replacement container confirms it instead, in finish_pending_update().
+    When the pull moved this container's own image, no success is recorded
+    here: this process is about to be killed by the recreation and cannot
+    observe the outcome — writing "success" before starting the work is what
+    previously reported updates that never landed. The replacement container
+    confirms it instead, in finish_pending_update(). Only when this
+    container's image is unchanged, so nothing will replace it, does this
+    process survive to watch the recreator and record the outcome itself.
     """
     db = SessionLocal()
     try:
@@ -341,11 +431,6 @@ def run_update() -> None:
             set_setting(db, "update_in_progress", "0")
             return
 
-        # Stash the digest now, while the network call is cheap and this process
-        # is still alive; finish_pending_update() promotes it after the restart.
-        new_digest = _ghcr_latest_digest()
-        set_setting(db, "update_pending_digest", new_digest or "")
-
         # The recreation needs a project directory on the host to run from.
         # Without it compose would resolve relative volume paths and the project
         # name against the wrong directory and build a parallel stack.
@@ -359,17 +444,69 @@ def run_update() -> None:
             set_setting(db, "update_in_progress", "0")
             return
 
+        # Will the recreation replace *this* container? Only if the pull moved
+        # the tag off the image this container runs. When it did not — the
+        # admin already updated manually on the host, or nothing new was
+        # actually published — `docker compose up -d` recreates nothing here,
+        # and the wait-to-be-replaced protocol below would sit out its full
+        # timeout and then declare a perfectly healthy stack recreate_failed.
+        running = _docker(["inspect", _WEB_CONTAINER, "--format", "{{.Image}}"])
+        pulled = _docker(["image", "inspect", image_ref(), "--format", "{{.Id}}"])
+        web_unchanged = bool(running and pulled and running == pulled)
+
         error = _spawn_recreator(image_ref(), project_dir)
         if error:
             _set_result(db, f"recreate_failed: {error}")
             set_setting(db, "update_in_progress", "0")
             return
 
+        if web_unchanged:
+            # This process survives the recreation (other services may still
+            # be replaced), so the recreator can be watched directly to its
+            # exit. If compose recreates this container anyway — a config-only
+            # change — this thread dies mid-wait and the replacement confirms
+            # success on boot exactly like the normal path below.
+            try:
+                wait = subprocess.run(
+                    ["docker", "wait", _UPDATER_NAME],
+                    capture_output=True, text=True, timeout=_RECREATE_TIMEOUT,
+                )
+            except subprocess.TimeoutExpired:
+                _set_result(
+                    db,
+                    "recreate_failed: the recreation is still running after "
+                    f"{_RECREATE_TIMEOUT}s. Check `docker logs {_UPDATER_NAME}` "
+                    "on the host.",
+                )
+                set_setting(db, "update_in_progress", "0")
+                return
+
+            code = (wait.stdout or "").strip()
+            if wait.returncode == 0 and code == "0":
+                # docker wait guarantees it has exited, so this rm cannot kill
+                # a recreation in progress.
+                subprocess.run(["docker", "rm", _UPDATER_NAME],
+                               capture_output=True, text=True, timeout=30)
+                set_setting(db, "update_available", "0")
+                set_setting(db, "update_in_progress", "0")
+                _set_result(db, "success")
+                log.info("Update finished; this container was already current")
+            else:
+                logs = subprocess.run(
+                    ["docker", "logs", "--tail", "5", _UPDATER_NAME],
+                    capture_output=True, text=True, timeout=30,
+                )
+                detail = ((logs.stderr or "") + (logs.stdout or "")).strip()
+                detail = detail or f"updater exit code {code or wait.returncode}"
+                _set_result(db, f"recreate_failed: {detail[:300]}")
+                set_setting(db, "update_in_progress", "0")
+            return
+
         # This container is now living on borrowed time — the recreation will
         # stop it shortly. Its replacement writes the success state.
 
     except subprocess.TimeoutExpired:
-        _set_result(db, "timeout: pull took too long")
+        _set_result(db, "timeout: a docker command took too long")
         set_setting(db, "update_in_progress", "0")
     except Exception as exc:
         _set_result(db, f"error: {str(exc)[:200]}")

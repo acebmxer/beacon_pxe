@@ -20,6 +20,10 @@ def update_status(user: User = Depends(require_admin), db: Session = Depends(get
     # An update whose recreation never happened leaves this container running
     # with the flag still set; catch it here rather than spinning forever.
     update_svc.reap_stalled_update(db)
+    # A manual `docker compose pull && up -d` on the host installs the update
+    # behind this code's back; retract a stale "update available" before
+    # reporting it. Local docker calls only — no network on the status path.
+    update_svc.refresh_available(db)
     return {
         "available": get_setting(db, "update_available", "0") == "1",
         "in_progress": get_setting(db, "update_in_progress", "0") == "1",

@@ -14,3 +14,10 @@ updates:
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # passlib 1.7.4 (unmaintained) breaks with bcrypt >=4.1: 4.1–4.x emit a
+      # noisy warning, and 5.x crashes the app at startup (hashpw() raises on
+      # >72-byte secrets, which passlib's load-time self-test triggers). Keep
+      # bcrypt on 4.0.x until passlib is replaced with direct bcrypt usage.
+      - dependency-name: bcrypt
+        versions: [">=4.1"]

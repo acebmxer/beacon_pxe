@@ -17,6 +17,7 @@ Prebuilt images are on GHCR, so you only need the compose file and an `.env`:
 mkdir beacon && cd beacon
 curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/.env.example
+sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(openssl rand -hex 32)|" .env  # else everyone is signed out on each restart
 # edit .env: SERVER_IP, BOOT_INTERFACE, ADMIN_PASSWORD (leave blank to auto-generate)
 mkdir -p data/drivers
 docker compose up -d

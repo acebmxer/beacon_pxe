@@ -31,6 +31,15 @@ through the proxy. Existing databases are migrated automatically on start.
   alive at the first Setup screen, and like all `share` drivers it applies to
   every Windows image on the next boot — no re-processing.
 
+### Fixed
+
+- **The `latest`-channel web container crash-looped on startup** after a
+  dependency bump to bcrypt 5.0, which is incompatible with passlib and made
+  password hashing fail before the app could bind. bcrypt is pinned back to
+  4.0.x and the automated bumper now knows to leave it there. Tagged releases
+  (v0.4.0 and earlier) were never affected — if you follow `latest`, pull
+  again to pick up the repaired image.
+
 ### Security
 
 - **The session cookie can be marked `Secure`** (`SESSION_SECURE=true`) so the

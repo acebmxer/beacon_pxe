@@ -333,6 +333,11 @@ _WIM_SETUP_INDEX = 2
 # Samba share name exported by the smb service (see smb/smb.conf).
 _SMB_SHARE = "install"
 
+# Writable Samba share the smb service exports for diagnostics: WinPE copies the
+# Windows Setup logs here after Setup exits, so a failed install can be diagnosed
+# from the Beacon host instead of the client's screen. See smb/smb.conf.
+_CAPTURE_SHARE = "capture"
+
 # Drop-in driver folder inside that share, shared by every Windows image (it sits
 # beside the per-image media dirs, so re-extracting an image never clears it).
 _SMB_DRIVERS = "drivers"
@@ -374,17 +379,24 @@ _NIC_WINPE_DIR = r"X:\BeaconNic"
 #
 # processorArchitecture is amd64: Beacon's Windows images are x64. (An arm64 image
 # would need "arm64" here, but Beacon doesn't build those.)
-def _unattend_xml(with_nic: bool) -> str:
-    """The answer file, optionally also handing Setup the baked NIC drivers.
+def _unattend_xml() -> str:
+    """The answer file handing Setup the drop-in STORAGE drivers.
 
-    The X:\\BeaconNic path is listed only when drivers are actually baked in —
-    a DriverPaths entry pointing at a missing folder makes Setup's windowsPE
-    pass error out. _LOCAL_DRIVERS is always listed; beacon-setup.cmd creates
-    the folder before launching Setup, so the path always exists even when the
-    SMB share had nothing to copy. Baked NIC drivers in DriverPaths mean the
-    installed OS keeps its network driver too, not just WinPE.
+    Only _LOCAL_DRIVERS (the local copy of the SMB share) is listed. It always
+    exists — beacon-setup.cmd creates it before launching Setup — so the pass
+    never errors on a missing path, and an empty folder just injects nothing.
+
+    Baked NIC drivers are deliberately NOT listed here. DriverPaths runs in the
+    windowsPE pass and re-services matching devices; on a machine booting its
+    install media over that very NIC (an Intel NUC on I225, say), re-servicing
+    the live adapter drops the SMB connection Setup is reading from and WinPE
+    bugchecks the instant Setup starts. The NIC driver is already loaded in
+    WinPE for connectivity (see _beacon_setup_cmd), which is all the install
+    needs; the installed OS gets its NIC driver from Windows Update or inbox.
+    Storage drivers don't have this problem — nothing is booting over the disk
+    controller — so they stay.
     """
-    paths = [_LOCAL_DRIVERS] + ([_NIC_WINPE_DIR] if with_nic else [])
+    paths = [_LOCAL_DRIVERS]
     entries = "".join(
         f'        <PathAndCredentials wcm:action="add" wcm:keyValue="{i}">\r\n'
         f'          <Path>{p}</Path>\r\n'
@@ -418,26 +430,30 @@ def _driver_lines(drivers_share: str) -> list[str]:
     drives". The media is fine; WinPE just can't see the controller. (Linux is
     unaffected: it has both NVMe and VMD support in-kernel.)
 
-    Two things happen here, and they are deliberately different in scope:
+    The drivers are staged locally and handed to Setup via an answer file
+    (_unattend_xml -> `setup.exe /unattend`). Setup's windowsPE pass loads them
+    as it starts — which is what populates the disk list — and reflects the
+    matching boot-critical driver into the *installed* OS so it boots
+    (otherwise: INACCESSIBLE_BOOT_DEVICE / 0x7B). DriverPaths is PnP-matched
+    and PnP-ranked: only the best driver for hardware actually present is
+    used, which keeps a folder holding several vendors — or several versions —
+    of a package safe. The copy is local so the pass never reads over SMB.
 
-    1. `drvload` every .inf on the share. This makes the disk appear *now*, in
-       this WinPE session, so Setup's disk list is populated. It is transient and
-       per-session, so loading unrelated .infs is harmless — a non-matching driver
-       simply doesn't bind — hence the dumb "load everything" sweep.
+    We deliberately do NOT `drvload` these .infs ourselves anymore. The first
+    version of this script force-loaded every storage .inf before launching
+    Setup, and on real VMD machines (11th-gen NUC, a VMD laptop; 2026-07)
+    WinPE bugchecked the moment Setup's window appeared: the sweep live-binds
+    a boot-critical miniport, then Setup's windowsPE driver pass re-services
+    the same bound controller. A VM without VMD never crashed — nothing bound.
+    The answer file alone is the supported mechanism (it's how MDT/SCCM inject
+    these drivers) and makes the disks visible just as early. The baked NIC
+    sweep in _beacon_setup_cmd is different on purpose: it runs before
+    networking exists, nothing is using the NIC yet, and NICs aren't
+    boot-critical to WinPE (X: is a ramdisk).
 
-    2. Copy the whole set to a local RAM-disk folder and hand it to Setup via an
-       answer file (_UNATTEND_XML -> `setup.exe /unattend`). This is what carries
-       a boot-critical driver into the *installed* OS so it boots (otherwise:
-       INACCESSIBLE_BOOT_DEVICE / 0x7B). Unlike step 1 this PERSISTS, so it must
-       be selective — and it is: DriverPaths is PnP-matched, so Setup installs and
-       reflects only the driver for hardware actually present. That keeps a
-       multi-vendor folder safe (an AMD driver is never forced onto an Intel box).
-       The copy is local so the windowsPE pass never reads over SMB.
-
-    We do NOT use `setup.exe /ReflectDrivers`: empirically it aborts the file-copy
-    at ~5-8% with a generic "installation has failed" (a VM that installs cleanly
-    with plain setup.exe fails the instant the flag is added). /unattend
-    DriverPaths achieves the same reflect without that.
+    We also do NOT use `setup.exe /ReflectDrivers`: empirically it aborts the
+    file-copy at ~5-8% with a generic "installation has failed" (a VM that
+    installs cleanly with plain setup.exe fails the instant the flag is added).
 
     All of it is skipped when the share is absent or holds no .inf, so an empty
     drivers folder costs nothing and Setup runs exactly as before.
@@ -447,22 +463,13 @@ def _driver_lines(drivers_share: str) -> list[str]:
         rf'net use Z: {drivers_share} /user:guest "" >nul 2>&1',
         "if not exist Z:\\ goto nodrv",
         "dir /b /s Z:\\*.inf >nul 2>&1 || goto nodrv",
-        "echo Loading drop-in drivers from Z: ...",
-        'for /r Z:\\ %%f in (*.inf) do drvload "%%f"',
-        # Stage a local copy and point Setup's answer file at it (PnP-matched, so
-        # only present-hardware drivers reflect into the installed OS).
+        "echo Staging storage drivers for Setup ...",
+        # Local copy + answer file; Setup loads these itself (PnP-ranked) as it
+        # starts. No drvload here — see the docstring for the bugcheck story.
         rf"md {_LOCAL_DRIVERS} >nul 2>&1",
         rf"xcopy Z:\ {_LOCAL_DRIVERS}\ /E /I /Y /Q >nul",
         rf"set SETUPOPT=/unattend:{_UNATTEND_WINPE_PATH}",
         ":nodrv",
-        # Baked-in NIC drivers alone also warrant the answer file — DriverPaths
-        # is how the *installed* OS keeps the network driver WinPE just used.
-        # The answer file always lists X:\Drivers, so make sure it exists even
-        # when the share had nothing to copy into it.
-        rf"if not exist {_NIC_WINPE_DIR}\ goto nonic",
-        rf"md {_LOCAL_DRIVERS} >nul 2>&1",
-        rf"set SETUPOPT=/unattend:{_UNATTEND_WINPE_PATH}",
-        ":nonic",
     ]
 
 
@@ -488,13 +495,19 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
     drivers = rf"\\{host}\{_SMB_SHARE}\{_SMB_DRIVERS}"
     lines = [
         "@echo off",
+        # If anything bugchecks, hold the stop screen instead of instantly
+        # rebooting — WinPE's default auto-restart turns a diagnosable BSOD
+        # into "it just rebooted", which is how the drvload-vs-Setup storage
+        # crash stayed invisible across three machines.
+        r"reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl"
+        r" /v AutoReboot /t REG_DWORD /d 0 /f >nul 2>&1",
         # Baked-in NIC drivers load BEFORE wpeinit so its DHCP runs on the new
         # driver — this is the machine whose NIC stock WinPE doesn't know (the
         # SMB share can't help; it's on the far side of that network). Loading
         # every variant is safe here: a wrong-OS .inf just refuses (platform
         # decoration), and nothing is using the NIC yet, so a re-bind when two
         # variants match is a non-event — unlike storage drivers under a live
-        # Setup, which is why the Z: sweep stays PnP-guarded via the unattend.
+        # Setup, which is why the Z: staging is PnP-guarded via the unattend.
         rf"if not exist {_NIC_WINPE_DIR}\ goto nonicload",
         "echo Loading baked-in network drivers ...",
         rf'for /r {_NIC_WINPE_DIR} %%f in (*.inf) do drvload "%%f"',
@@ -547,13 +560,57 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
     else:
         lines += _driver_lines(drivers)
         lines += [
+            # Pre-mount the diagnostics share and create this run's folder BEFORE
+            # Setup, so Setup can write its own logs there via /copylogs at the
+            # moment it fails — robust even when a failure reboots the machine
+            # (our post-exit :capture only runs if setup.exe returns to us). This
+            # is what makes a 0x80070035 ("network path not found") mid-install
+            # diagnosable: Setup re-copies its logs at failure time.
+            rf'net use N: \\{host}\{_CAPTURE_SHARE} /user:guest "" >nul 2>&1',
+            rf"set CAPDIR=N:\img{image_id}-%RANDOM%",
+            "set COPYLOGS=",
+            "if exist N:\\ md %CAPDIR% >nul 2>&1",
+            "if exist N:\\ set COPYLOGS=/copylogs %CAPDIR%",
             "echo Starting Windows Setup ...",
             # %SETUPOPT% is empty unless drop-in drivers were staged above, in
             # which case it is "/unattend:<answer file>" (PnP driver injection).
-            "Y:\\setup.exe %SETUPOPT%",
+            # %COPYLOGS% points Setup's own log-copy at the capture folder.
+            "Y:\\setup.exe %SETUPOPT% %COPYLOGS%",
+            # Setup returns here only when it exits WITHOUT rebooting — i.e. it
+            # failed early. Add the WinPE-side logs Setup's /copylogs doesn't.
+            "call :capture",
         ]
     lines.append(":end")
+    lines.append("goto :eof")
+    lines += _capture_lines(host, image_id)
     return "\r\n".join(lines) + "\r\n"
+
+
+def _capture_lines(host: str, image_id: int) -> list[str]:
+    """A :capture subroutine that copies WinPE's own Setup logs to the capture
+    share, complementing Setup's /copylogs (which handles the reboot-on-failure
+    case). Best-effort: every step swallows its error, so a missing log or an
+    unreachable share never blocks or hangs the (already failed) install.
+
+    Re-mounts the share in case the failure that triggered this dropped it, and
+    reuses this run's %CAPDIR% (set before Setup) so both log sets land together.
+    """
+    cap = rf"\\{host}\{_CAPTURE_SHARE}"
+    bt = r"X:\$WINDOWS.~BT\Sources\Panther"
+    return [
+        ":capture",
+        rf'net use N: {cap} /user:guest "" >nul 2>&1',
+        "if not exist N:\\ goto capdone",
+        rf'if "%CAPDIR%"=="" set CAPDIR=N:\img{image_id}-%RANDOM%',
+        "md %CAPDIR%\\winpe >nul 2>&1",
+        r"copy X:\Windows\Panther\setupact.log %CAPDIR%\winpe\ >nul 2>&1",
+        r"copy X:\Windows\Panther\setuperr.log %CAPDIR%\winpe\ >nul 2>&1",
+        rf'xcopy "{bt}\*.log" %CAPDIR%\winpe\BT\ /I /Y /Q >nul 2>&1',
+        r"echo Beacon saved the Setup logs. It is safe to power off now.",
+        "net use N: /delete >nul 2>&1",
+        ":capdone",
+        "goto :eof",
+    ]
 
 
 def _patch_boot_wim(wim: Path, server_ip: str, image_id: int) -> None:
@@ -579,7 +636,7 @@ def _patch_boot_wim(wim: Path, server_ip: str, image_id: int) -> None:
         ini = Path(tmp) / "winpeshl.ini"
         ini.write_text(_WINPESHL_INI, newline="")
         xml = Path(tmp) / "beacon-unattend.xml"
-        xml.write_text(_unattend_xml(with_nic), newline="")
+        xml.write_text(_unattend_xml(), newline="")
         # `add <source> <dest-in-wim>`; overwrites existing files. wimupdate
         # reads its command list from stdin.
         commands = (

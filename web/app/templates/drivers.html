@@ -8,8 +8,9 @@
   <b>Storage drivers for Windows Setup.</b> Stock Windows 11 WinPE has no driver for
   <b>Intel VMD / RST</b> or <b>AMD RAID</b>, so on most laptops from Intel's 11th gen
   onward Setup reaches “Where do you want to install Windows?” with an empty disk
-  list. Drop the vendor's F6 / pre-install driver package here and WinPE will load
-  it before Setup starts, then hand it to Setup so the installed OS keeps booting.
+  list. Drop the vendor's F6 / pre-install driver package here and Beacon hands it
+  to Setup through an answer file as it starts — PnP-matched, so the disk appears
+  in the installer and the finished OS keeps booting.
   Applies to <b>every</b> Windows image, from the next boot — no reprocessing needed.
 </div>
 

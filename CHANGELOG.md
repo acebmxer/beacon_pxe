@@ -10,12 +10,13 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
-**This release changes `docker-compose.yml`.** The new drop-in drivers folder is
-a bind mount, so it only exists once you re-fetch the compose file:
+**This release changes `docker-compose.yml`.** New bind mounts (the drop-in
+storage-drivers folder and the writable diagnostics-capture folder) only exist
+once you re-fetch the compose file:
 
 ```bash
 curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
-mkdir -p data/drivers
+mkdir -p data/drivers data/capture
 docker compose up -d
 ```
 
@@ -27,13 +28,14 @@ docker compose up -d
   laptops from Intel's 11th gen onward — Setup reaches "Where do you want to
   install Windows?" with no disks to choose from, even though the machine has a
   perfectly good SSD. Copy the vendor's F6 driver folder into `./data/drivers`
-  and WinPE now `drvload`s every `.inf` there so the disk appears in Setup's list,
-  then hands the drivers to Setup through an answer file (`setup.exe /unattend`
-  with a PnP-matched `DriverPaths`) so the correct driver is also installed into
-  the finished OS — without which a VMD/RAID machine installs but bugchecks
+  and WinPE hands it to Setup through an answer file (`setup.exe /unattend`
+  with a PnP-matched `DriverPaths`): Setup loads the matching driver as it
+  starts — which is what makes the disk appear in its list — and installs it
+  into the finished OS, without which a VMD/RAID machine installs but bugchecks
   `INACCESSIBLE_BOOT_DEVICE` (0x7B) on first boot. Because `DriverPaths` is
-  PnP-matched, a folder holding several vendors' packages (Intel VMD *and* AMD
-  RAIDXpert2, say) is safe: each machine gets only the driver its hardware needs,
+  PnP-matched and PnP-ranked, a folder holding several vendors' packages (Intel
+  VMD *and* AMD RAIDXpert2, say) — or several versions of one — is safe: each
+  machine gets only the best driver its hardware needs,
   never a wrong-vendor boot driver forced on. The folder is shared by every
   Windows image, survives re-processing, and does nothing when empty. See the
   Windows notes in the README for where to get the driver, the multi-vendor
@@ -63,9 +65,12 @@ docker compose up -d
   with "System error 1231". A network driver can't be served from the SMB
   drivers share — it sits on the far side of the network the NIC can't reach —
   so Beacon now maintains a second driver folder (`./data/nicdrivers`, inside
-  the existing `./data` mount: no compose change) whose contents are baked into
-  every Windows image's `boot.wim` and `drvload`ed before networking starts,
-  then handed to Setup so the installed OS keeps the driver too. Adding or
+  the existing `./data` mount) whose contents are baked into every Windows
+  image's `boot.wim` and `drvload`ed before networking starts, so WinPE can
+  reach the install share. (The driver is loaded for WinPE only, not reflected
+  into the finished OS through Setup: reflecting the very NIC the media is
+  streaming over resets it mid-install and bugchecks WinPE. The installed OS
+  picks the NIC up from Windows Update or inbox support.) Adding or
   removing a pack re-bakes all ready Windows images automatically — no
   reprocessing, live on the next PXE boot. The catalog gains a one-click
   **Intel Ethernet NIC pack** (I225/I226 + X520/X540/X550, per-OS variants for

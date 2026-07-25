@@ -10,6 +10,94 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+**This release changes `docker-compose.yml`.** The new drop-in drivers folder is
+a bind mount, so it only exists once you re-fetch the compose file:
+
+```bash
+curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
+mkdir -p data/drivers
+docker compose up -d
+```
+
+### Added
+
+- **Windows images can now be given storage drivers, fixing installs that stop
+  at an empty disk list.** Stock Windows 11 WinPE carries no driver for Intel
+  VMD / RST or AMD RAID, so on hardware that enables those in firmware — most
+  laptops from Intel's 11th gen onward — Setup reaches "Where do you want to
+  install Windows?" with no disks to choose from, even though the machine has a
+  perfectly good SSD. Copy the vendor's F6 driver folder into `./data/drivers`
+  and WinPE now `drvload`s every `.inf` there so the disk appears in Setup's list,
+  then hands the drivers to Setup through an answer file (`setup.exe /unattend`
+  with a PnP-matched `DriverPaths`) so the correct driver is also installed into
+  the finished OS — without which a VMD/RAID machine installs but bugchecks
+  `INACCESSIBLE_BOOT_DEVICE` (0x7B) on first boot. Because `DriverPaths` is
+  PnP-matched, a folder holding several vendors' packages (Intel VMD *and* AMD
+  RAIDXpert2, say) is safe: each machine gets only the driver its hardware needs,
+  never a wrong-vendor boot driver forced on. The folder is shared by every
+  Windows image, survives re-processing, and does nothing when empty. See the
+  Windows notes in the README for where to get the driver, the multi-vendor
+  layout, the network-driver caveat, and the firmware-level `AHCI` workaround if
+  you'd rather change one machine than stage a driver.
+
+- **The Windows Drivers page can fetch known-good storage drivers for you.**
+  It lists curated packages — Intel RST VMD (a broad build covering 11th gen
+  through Core Ultra Series 2, plus Intel's newest 12th-gen-and-later build)
+  and AMD RAID (`rcbottom`/`rcraid`/`rccfg`) — and one click downloads the
+  WHQL-signed driver CAB from Microsoft's Windows Update CDN, verifies it
+  against a sha256 pinned in the release, and stages it exactly like an
+  upload. Beacon still bundles no drivers (they are proprietary and not
+  redistributable) and downloads nothing until an admin clicks Fetch; a file
+  that no longer matches its pinned hash is refused rather than staged. The
+  fetch needs internet access from the Beacon host — offline deployments keep
+  using upload or the folder on disk, with an identical result. If a vendor
+  ships a newer driver than the catalog pins, upload it as its own pack and
+  delete it when the catalog catches up: Setup PnP-ranks every staged version
+  and gives each machine the best match, so old-next-to-new is safe. Catalog
+  updates ride normal Beacon releases.
+
+- **Machines whose NIC stock WinPE doesn't know can now netinstall Windows:
+  network drivers get baked into `boot.wim`.** The classic case is Intel
+  I225/I226 2.5GbE (Intel NUCs, most 2020+ boards): firmware PXE downloads
+  WinPE fine, then WinPE has no usable NIC and every install-share mount dies
+  with "System error 1231". A network driver can't be served from the SMB
+  drivers share — it sits on the far side of the network the NIC can't reach —
+  so Beacon now maintains a second driver folder (`./data/nicdrivers`, inside
+  the existing `./data` mount: no compose change) whose contents are baked into
+  every Windows image's `boot.wim` and `drvload`ed before networking starts,
+  then handed to Setup so the installed OS keeps the driver too. Adding or
+  removing a pack re-bakes all ready Windows images automatically — no
+  reprocessing, live on the next PXE boot. The catalog gains a one-click
+  **Intel Ethernet NIC pack** (I225/I226 + X520/X540/X550, per-OS variants for
+  Windows 10/11 and Server 2019–2025; Server 2016 is covered for the 10GbE
+  X-series only — Intel never shipped an I225 driver its PE can load), and the
+  upload form gains a driver-kind selector (Storage → SMB share, Network →
+  baked). Fetched from Intel's own mirror, sha256-pinned like every catalog
+  entry.
+
+- **A "Windows Drivers" page for staging those drivers from the browser**, so
+  fixing an empty disk list no longer means shell access to the Beacon host.
+  Upload the vendor's `.zip` and Beacon unpacks it, or select the loose `.inf` /
+  `.sys` / `.cat` files of a package you've already extracted. The page lists
+  what's staged with a per-package `.inf` count, and says so plainly when a
+  package contains none — the usual sign of a self-extracting `.exe` that needs
+  unpacking first. Uploading and deleting are admin-only; other users see the
+  list. It writes to the same `./data/drivers` folder you can still populate by
+  hand, takes effect on the next boot of every Windows image with no
+  re-processing, and needs no container restart.
+
+### Fixed
+
+- **The dashboard's "Recent clients" now updates on every boot instead of
+  freezing.** Its "last seen" time (and the boot IP) came only from parsing
+  dnsmasq's DHCP log, but in proxyDHCP mode a re-boot usually reuses the cached
+  PXE response and appears only as TFTP traffic — with no MAC-bearing DHCP line
+  for the parser to key on. So a machine could boot repeatedly while the table
+  sat at "1h ago" with a blank IP. The view now also folds in `BootEvent` (the
+  per-boot record that already carries MAC, IP and timestamp), so each boot
+  refreshes the row's time and IP, and clients whose log lines have aged out of
+  the parsed window still appear.
+
 ## [0.3.0] - 2026-07-19
 
 **This release changes `docker-compose.yml`.** The in-app update button and

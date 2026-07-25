@@ -333,6 +333,10 @@ _WIM_SETUP_INDEX = 2
 # Samba share name exported by the smb service (see smb/smb.conf).
 _SMB_SHARE = "install"
 
+# Drop-in driver folder inside that share, shared by every Windows image (it sits
+# beside the per-image media dirs, so re-extracting an image never clears it).
+_SMB_DRIVERS = "drivers"
+
 # Set True to drop to a WinPE command prompt (after mounting the share) instead
 # of launching Setup — useful for inspecting the mounted media live.
 _WINPE_DIAGNOSTIC = False
@@ -344,6 +348,122 @@ _WINPESHL_INI = (
     "[LaunchApps]\r\n"
     "%SYSTEMDRIVE%\\Windows\\System32\\beacon-setup.cmd\r\n"
 )
+
+# Where beacon-setup.cmd stages a local copy of the drop-in drivers (the WinPE
+# RAM disk is X:), and where the answer file lands inside boot.wim / at runtime.
+_LOCAL_DRIVERS = r"X:\Drivers"
+_UNATTEND_WINPE_PATH = r"X:\Windows\System32\beacon-unattend.xml"
+_UNATTEND_WIM_DEST = "/Windows/System32/beacon-unattend.xml"
+
+# Boot-critical NIC drivers baked into boot.wim (config.NICDRIVERS_DIR). They
+# are drvloaded BEFORE wpeinit so DHCP comes up on the new driver — the SMB
+# drivers share can't serve this purpose, being on the far side of the network
+# the missing driver is needed to reach. /BeaconNic in the wim == X:\BeaconNic
+# at boot.
+_NIC_WIM_DIR = "/BeaconNic"
+_NIC_WINPE_DIR = r"X:\BeaconNic"
+
+# Answer file handed to `setup.exe /unattend` so Setup injects the drop-in drivers
+# during its windowsPE pass. DriverPaths is PnP-matched: Setup installs — and
+# reflects as boot-critical into the finished OS — ONLY the driver for hardware
+# actually present. That makes a folder holding several vendors' packages safe;
+# an AMD box won't get an Intel boot driver forced onto it (which would bugcheck
+# 0x7B), and vice versa. It points at the LOCAL copy (_LOCAL_DRIVERS), not the SMB
+# share, so the pass never depends on the network. No other settings are present,
+# so everything else in Setup stays interactive.
+#
+# processorArchitecture is amd64: Beacon's Windows images are x64. (An arm64 image
+# would need "arm64" here, but Beacon doesn't build those.)
+def _unattend_xml(with_nic: bool) -> str:
+    """The answer file, optionally also handing Setup the baked NIC drivers.
+
+    The X:\\BeaconNic path is listed only when drivers are actually baked in —
+    a DriverPaths entry pointing at a missing folder makes Setup's windowsPE
+    pass error out. _LOCAL_DRIVERS is always listed; beacon-setup.cmd creates
+    the folder before launching Setup, so the path always exists even when the
+    SMB share had nothing to copy. Baked NIC drivers in DriverPaths mean the
+    installed OS keeps its network driver too, not just WinPE.
+    """
+    paths = [_LOCAL_DRIVERS] + ([_NIC_WINPE_DIR] if with_nic else [])
+    entries = "".join(
+        f'        <PathAndCredentials wcm:action="add" wcm:keyValue="{i}">\r\n'
+        f'          <Path>{p}</Path>\r\n'
+        '        </PathAndCredentials>\r\n'
+        for i, p in enumerate(paths, start=1)
+    )
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\r\n'
+        '<unattend xmlns="urn:schemas-microsoft-com:unattend">\r\n'
+        '  <settings pass="windowsPE">\r\n'
+        '    <component name="Microsoft-Windows-PnpCustomizationsWinPE"\r\n'
+        '               processorArchitecture="amd64"\r\n'
+        '               publicKeyToken="31bf3856ad364e35" language="neutral"\r\n'
+        '               versionScope="nonSxS"\r\n'
+        '               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">\r\n'
+        '      <DriverPaths>\r\n'
+        f'{entries}'
+        '      </DriverPaths>\r\n'
+        '    </component>\r\n'
+        '  </settings>\r\n'
+        '</unattend>\r\n'
+    )
+
+
+def _driver_lines(drivers_share: str) -> list[str]:
+    """Batch lines that stage drop-in storage drivers for Setup.
+
+    Stock Windows 11 WinPE has no driver for Intel VMD / RST (or AMD RAID), so on
+    machines that ship with those enabled in firmware — most laptops from Intel's
+    11th gen on — Setup enumerates zero disks and stops at "we couldn't find any
+    drives". The media is fine; WinPE just can't see the controller. (Linux is
+    unaffected: it has both NVMe and VMD support in-kernel.)
+
+    Two things happen here, and they are deliberately different in scope:
+
+    1. `drvload` every .inf on the share. This makes the disk appear *now*, in
+       this WinPE session, so Setup's disk list is populated. It is transient and
+       per-session, so loading unrelated .infs is harmless — a non-matching driver
+       simply doesn't bind — hence the dumb "load everything" sweep.
+
+    2. Copy the whole set to a local RAM-disk folder and hand it to Setup via an
+       answer file (_UNATTEND_XML -> `setup.exe /unattend`). This is what carries
+       a boot-critical driver into the *installed* OS so it boots (otherwise:
+       INACCESSIBLE_BOOT_DEVICE / 0x7B). Unlike step 1 this PERSISTS, so it must
+       be selective — and it is: DriverPaths is PnP-matched, so Setup installs and
+       reflects only the driver for hardware actually present. That keeps a
+       multi-vendor folder safe (an AMD driver is never forced onto an Intel box).
+       The copy is local so the windowsPE pass never reads over SMB.
+
+    We do NOT use `setup.exe /ReflectDrivers`: empirically it aborts the file-copy
+    at ~5-8% with a generic "installation has failed" (a VM that installs cleanly
+    with plain setup.exe fails the instant the flag is added). /unattend
+    DriverPaths achieves the same reflect without that.
+
+    All of it is skipped when the share is absent or holds no .inf, so an empty
+    drivers folder costs nothing and Setup runs exactly as before.
+    """
+    return [
+        "set SETUPOPT=",
+        rf'net use Z: {drivers_share} /user:guest "" >nul 2>&1',
+        "if not exist Z:\\ goto nodrv",
+        "dir /b /s Z:\\*.inf >nul 2>&1 || goto nodrv",
+        "echo Loading drop-in drivers from Z: ...",
+        'for /r Z:\\ %%f in (*.inf) do drvload "%%f"',
+        # Stage a local copy and point Setup's answer file at it (PnP-matched, so
+        # only present-hardware drivers reflect into the installed OS).
+        rf"md {_LOCAL_DRIVERS} >nul 2>&1",
+        rf"xcopy Z:\ {_LOCAL_DRIVERS}\ /E /I /Y /Q >nul",
+        rf"set SETUPOPT=/unattend:{_UNATTEND_WINPE_PATH}",
+        ":nodrv",
+        # Baked-in NIC drivers alone also warrant the answer file — DriverPaths
+        # is how the *installed* OS keeps the network driver WinPE just used.
+        # The answer file always lists X:\Drivers, so make sure it exists even
+        # when the share had nothing to copy into it.
+        rf"if not exist {_NIC_WINPE_DIR}\ goto nonic",
+        rf"md {_LOCAL_DRIVERS} >nul 2>&1",
+        rf"set SETUPOPT=/unattend:{_UNATTEND_WINPE_PATH}",
+        ":nonic",
+    ]
 
 
 def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
@@ -358,12 +478,27 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
     the boot image auto-launches Setup and ignores startnet.cmd, so overriding
     winpeshl is the only way to inject our own pre-Setup steps.
 
+    It also drvloads any drop-in drivers from the share before starting Setup —
+    see _DRIVER_LINES.
+
     CRLF line endings — this runs as a Windows batch file.
     """
     host = server_ip or "%SERVER_IP%"
     share = rf"\\{host}\{_SMB_SHARE}\{image_id}"
+    drivers = rf"\\{host}\{_SMB_SHARE}\{_SMB_DRIVERS}"
     lines = [
         "@echo off",
+        # Baked-in NIC drivers load BEFORE wpeinit so its DHCP runs on the new
+        # driver — this is the machine whose NIC stock WinPE doesn't know (the
+        # SMB share can't help; it's on the far side of that network). Loading
+        # every variant is safe here: a wrong-OS .inf just refuses (platform
+        # decoration), and nothing is using the NIC yet, so a re-bind when two
+        # variants match is a non-event — unlike storage drivers under a live
+        # Setup, which is why the Z: sweep stays PnP-guarded via the unattend.
+        rf"if not exist {_NIC_WINPE_DIR}\ goto nonicload",
+        "echo Loading baked-in network drivers ...",
+        rf'for /r {_NIC_WINPE_DIR} %%f in (*.inf) do drvload "%%f"',
+        ":nonicload",
         "wpeinit",
         rf"echo Connecting to Beacon install share {share} ...",
         # Bounded retry (DHCP may not be ready on the first try). Show the real
@@ -410,9 +545,12 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
             "cmd",
         ]
     else:
+        lines += _driver_lines(drivers)
         lines += [
             "echo Starting Windows Setup ...",
-            "Y:\\setup.exe",
+            # %SETUPOPT% is empty unless drop-in drivers were staged above, in
+            # which case it is "/unattend:<answer file>" (PnP driver injection).
+            "Y:\\setup.exe %SETUPOPT%",
         ]
     lines.append(":end")
     return "\r\n".join(lines) + "\r\n"
@@ -421,23 +559,37 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
 def _patch_boot_wim(wim: Path, server_ip: str, image_id: int) -> None:
     """Override the Setup image (index 2) shell with our winpeshl + script.
 
-    Adds winpeshl.ini and beacon-setup.cmd to \\Windows\\System32 via wimlib's
-    `wimupdate` add command (overwrites in place, no mount, so it works
-    unprivileged in the container). winpeshl.ini makes WinPE run beacon-setup.cmd
-    instead of auto-launching Setup, and that script mounts the SMB share and
-    starts setup.exe from it.
+    Adds winpeshl.ini, beacon-setup.cmd and beacon-unattend.xml to
+    \\Windows\\System32 via wimlib's `wimupdate` add command (overwrites in place,
+    no mount, so it works unprivileged in the container). winpeshl.ini makes WinPE
+    run beacon-setup.cmd instead of auto-launching Setup; that script mounts the
+    SMB share, stages any drop-in drivers, and starts setup.exe from it, handing
+    it beacon-unattend.xml so Setup PnP-injects those drivers into the install.
+
+    Boot-critical NIC drivers (config.NICDRIVERS_DIR) are baked in as
+    /BeaconNic, drvloaded by the script before wpeinit. The tree is deleted and
+    re-added on every patch so a removed pack actually leaves the wim — `add`
+    alone would only ever overlay.
     """
+    nic_dir = config.NICDRIVERS_DIR
+    with_nic = any(nic_dir.rglob("*.inf"))
     with tempfile.TemporaryDirectory() as tmp:
         cmd = Path(tmp) / "beacon-setup.cmd"
         cmd.write_text(_beacon_setup_cmd(server_ip, image_id), newline="")
         ini = Path(tmp) / "winpeshl.ini"
         ini.write_text(_WINPESHL_INI, newline="")
+        xml = Path(tmp) / "beacon-unattend.xml"
+        xml.write_text(_unattend_xml(with_nic), newline="")
         # `add <source> <dest-in-wim>`; overwrites existing files. wimupdate
         # reads its command list from stdin.
         commands = (
+            f"delete --force --recursive '{_NIC_WIM_DIR}'\n"
             f"add '{cmd}' '/Windows/System32/beacon-setup.cmd'\n"
             f"add '{ini}' '/Windows/System32/winpeshl.ini'\n"
+            f"add '{xml}' '{_UNATTEND_WIM_DEST}'\n"
         )
+        if with_nic:
+            commands += f"add '{nic_dir}' '{_NIC_WIM_DIR}'\n"
         subprocess.run(
             ["wimupdate", str(wim), str(_WIM_SETUP_INDEX)],
             input=commands, check=True, capture_output=True, text=True,
@@ -802,14 +954,17 @@ def rebuild_xcpng_grub_all(db) -> None:
             log.warning("Rebuilding XCP-NG GRUB for %s failed: %s", img.name, e)
 
 
-def rebuild_windows_setup_all(db) -> None:
+def rebuild_windows_setup_all(db) -> int:
     """Re-patch the WinPE setup script for every ready Windows image.
 
     The server IP is baked into each boot.wim's beacon-setup.cmd (WinPE has no
-    DNS for our host), so a Server IP change must rewrite it. This only re-patches
-    the already-extracted boot.wim — no slow re-unpacking of the SMB tree.
+    DNS for our host), so a Server IP change must rewrite it; a change to the
+    baked NIC drivers folder must too, since those live inside the wim. This
+    only re-patches the already-extracted boot.wim — no slow re-unpacking of
+    the SMB tree. Returns how many images were re-patched.
     """
     server_ip = all_settings(db).get("server_ip", "")
+    patched = 0
     for img in db.query(Image).filter(
             Image.os_family == "windows", Image.status == "ready").all():
         wim = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id) / "boot.wim"
@@ -817,6 +972,8 @@ def rebuild_windows_setup_all(db) -> None:
             continue  # extracted files gone; a full reprocess is needed instead
         try:
             _patch_boot_wim(wim, server_ip, img.id)
+            patched += 1
         except subprocess.CalledProcessError as e:
             log.warning("Re-patching Windows setup for %s failed: %s",
-                        img.name, e)
+                        img.name, e.stderr or e)
+    return patched

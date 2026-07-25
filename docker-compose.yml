@@ -63,6 +63,10 @@ services:
       - nfsroot:/nfs
       # Unpacked Windows install media, served to WinPE by the smb service.
       - smbroot:/smb
+      # Drop-in storage drivers (Intel VMD/RST etc.) loaded by WinPE before
+      # Setup. A host bind, not part of smbroot, so you can just copy driver
+      # folders into ./data/drivers without going through the container.
+      - ./data/drivers:/smb/drivers
       # Host metrics for the dashboard (read-only).
       - /proc:/host/proc:ro
       # Self-update: Docker socket + this compose file + env file so the web
@@ -127,6 +131,8 @@ services:
       - no-new-privileges:true
     volumes:
       - smbroot:/srv/install:ro
+      # Same drop-in driver folder the web container writes; WinPE maps it as Z:.
+      - ./data/drivers:/srv/install/drivers:ro
 
   # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker
   # socket into the web app: this sidecar owns the privileged restart instead.

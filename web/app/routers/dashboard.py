@@ -1,4 +1,6 @@
 """Dashboard / home with a status overview and live system stats."""
+from datetime import datetime, timedelta, timezone
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select
@@ -33,23 +35,20 @@ def stats(user: User = Depends(require_user), db: Session = Depends(get_db)):
 
     Auth-gated (require_user) so the metrics aren't exposed unauthenticated.
     """
-    rows = clients.recent()
-
-    # In proxyDHCP mode dnsmasq never sees a client IP (the existing DHCP server
-    # assigns it), so the log can't fill the IP column. The /track ping, however,
-    # carries the client's IP -- backfill it by MAC from the latest boot event.
-    macs = [r["mac"] for r in rows if not r.get("ip") and r.get("mac")]
-    if macs:
-        latest_ip: dict[str, str] = {}
-        for mac, ip in db.execute(
-            select(BootEvent.mac, BootEvent.ip)
-            .where(BootEvent.mac.in_(macs), BootEvent.ip != "")
-            .order_by(BootEvent.created_at.asc())
-        ).all():
-            latest_ip[mac] = ip            # asc order => last write wins = newest
-        for r in rows:
-            if not r.get("ip"):
-                r["ip"] = latest_ip.get(r["mac"], "")
+    # Fold BootEvent (the authoritative per-boot record: MAC + IP + timestamp)
+    # into the log-derived rows. In proxyDHCP mode the dnsmasq log never carries a
+    # client IP and a re-boot often shows up only as TFTP (no MAC), so the log
+    # alone leaves the IP blank and "last seen" stuck at the last DHCP exchange --
+    # the boot events refresh both. Bounded to the last week so the poll stays
+    # cheap as the all-time BootEvent history grows; asc order => newest wins.
+    # Naive UTC to match how created_at is stored (SQLite drops the tzinfo).
+    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=7)
+    boot_events = db.execute(
+        select(BootEvent.mac, BootEvent.ip, BootEvent.created_at)
+        .where(BootEvent.mac != "", BootEvent.created_at >= since)
+        .order_by(BootEvent.created_at.asc())
+    ).all()
+    rows = clients.recent(boot_events=boot_events)
 
     total_deploys = db.scalar(select(func.count(BootEvent.id))) or 0
     # Distinct clients ever served (by MAC; ignore events that recorded no MAC).

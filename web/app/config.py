@@ -26,6 +26,18 @@ NFS_DIR = _path("NFS_DIR", "./data/nfs")
 # Unpacked Windows install media, exported read-only by the smb service so WinPE
 # can run setup.exe over SMB (iPXE sanhook can't present the ISO under UEFI).
 SMB_DIR = _path("SMB_DIR", "./data/smb")
+# Drop-in Windows storage drivers (Intel VMD/RST, AMD RAID). Sits inside SMB_DIR
+# so the smb service re-exports it as install\drivers, but it is a separate host
+# bind (./data/drivers in docker-compose.yml) rather than part of the smbroot
+# volume — so re-extracting an image never clears it, and this container can
+# write to it. See services.drivers.
+DRIVERS_DIR = _path("DRIVERS_DIR", str(SMB_DIR / "drivers"))
+# Boot-critical NIC drivers, BAKED INTO each Windows image's boot.wim rather
+# than served over SMB — a driver WinPE needs to reach the network in the first
+# place can't come over the network. Lives under DATA_DIR (already a host bind),
+# so no compose change is needed. Changing its contents re-patches every ready
+# Windows image's boot.wim (services.images.rebuild_windows_setup_all).
+NICDRIVERS_DIR = _path("NICDRIVERS_DIR", str(DATA_DIR / "nicdrivers"))
 
 DB_PATH = DATA_DIR / "pxe.db"
 DB_URL = f"sqlite:///{DB_PATH}"

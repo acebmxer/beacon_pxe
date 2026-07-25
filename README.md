@@ -212,6 +212,108 @@ at all.
   (see Troubleshooting), and each one costs roughly **2× its size on disk** —
   the kept ISO plus the unpacked share.
 
+- **Windows Setup can't see the disk? Drop the storage driver in
+  `./data/drivers`.** Stock Windows 11 WinPE ships no driver for **Intel VMD /
+  RST** (or AMD RAID), which most laptops from Intel's 11th gen onward enable in
+  firmware by default. Setup then reaches "Where do you want to install Windows?"
+  with an empty disk list. This is not a Beacon problem — the same ISO on a USB
+  stick fails identically, and Linux ISOs on the same machine are unaffected
+  because the kernel has NVMe and VMD support built in.
+
+  Two ways out. The quick one is firmware: find `VMD Controller`, `Intel RST`, or
+  `SATA Operation` in setup and switch it to **AHCI**. That's per-machine, and
+  changing it on a disk that already has Windows installed will stop that install
+  booting.
+
+  The scalable one is to hand WinPE the driver, any of three ways:
+
+  - **One click, under Windows Drivers.** The page lists **recommended
+    packages** — Intel RST VMD (a broad build covering 11th gen through Core
+    Ultra Series 2, plus Intel's newest 12th-gen-and-later build) and AMD RAID
+    (`rcbottom`/`rcraid`/`rccfg`) — and Fetch downloads the WHQL-signed driver
+    CAB straight from Microsoft's Windows Update CDN, verifies it against a
+    sha256 pinned in the Beacon release, and stages it. A moved or tampered
+    file is refused, not staged. Beacon bundles no drivers (they aren't
+    redistributable) and downloads nothing until an admin clicks Fetch; the
+    fetch needs internet access *from the Beacon host*, so on an offline
+    network use either way below instead — the result is identical.
+
+  For other hardware, or a driver newer than the catalog pins, get the vendor's
+  F6 / "pre-install" driver package — Intel calls it *Rapid Storage Technology
+  VMD driver*, AMD ships *RAIDXpert2*; Dell, Lenovo and HP all repackage them
+  per model — then:
+
+  - **In the web UI**, under **Windows Drivers**: upload the vendor's `.zip`, or
+    select the loose `.inf` / `.sys` / `.cat` files of an already-extracted
+    package. The page lists what's staged, counts the `.inf` files it found, and
+    warns when a folder has none (a self-extracting `.exe` needs unpacking
+    first). Admins can upload and delete; other users can look.
+  - **On disk**, by copying the folder into `./data/drivers` directly. Same
+    folder the UI writes to, so the two are interchangeable.
+
+  Several vendors can live side by side:
+
+  ```
+  data/drivers/
+    intel-vmd/   iaStorVD.inf  iaStorVD.sys  iaStorVD.cat
+    amd-raid/    rcbottom.inf  rcraid.inf    rccfg.sys  ...
+  ```
+
+  Subfolders are fine — Beacon searches recursively. On boot, WinPE maps the
+  folder as `Z:` and does two things:
+
+  1. **`drvload`s every `.inf`** so the disk appears in Setup's list *now*. This
+     is transient (this WinPE session only); a driver that matches no hardware
+     just doesn't bind, so loading them all is harmless.
+  2. **Hands the drivers to Setup via an answer file** (`setup.exe /unattend`,
+     from a local copy of the folder) so the matching driver is installed into
+     the finished OS — without it, a VMD/RAID machine installs but then bugchecks
+     `INACCESSIBLE_BOOT_DEVICE` (0x7B) on first boot because the OS can't see its
+     own controller.
+
+  **Mixing vendors is safe.** Step 2 uses Windows Setup's PnP `DriverPaths`, which
+  installs — and marks boot-critical — *only* the driver for hardware actually
+  present. So an AMD box won't get an Intel boot driver forced onto it (which
+  itself would 0x7B), and vice versa. Setup picks the right one per machine, the
+  same way MDT/SCCM inject a whole pool of vendors' drivers into one image. (This
+  is why Beacon uses `/unattend`, not `setup.exe /ReflectDrivers` — the latter
+  aborts the file-copy at ~5–8% with "installation has failed", and it reflects
+  bluntly rather than PnP-matched.) The rest of Setup stays interactive.
+
+  > **The `./data/drivers` folder is for storage drivers only.** It is served
+  > over SMB, so it can't provide a driver WinPE needs to reach the *network*
+  > in the first place. Network drivers have their own path, below.
+
+- **Client stuck at "network timeout" / "System error 1231"? Its NIC needs a
+  driver baked into `boot.wim`.** Stock WinPE is missing several common NICs —
+  Intel I225/I226 2.5GbE (NUCs and most 2020+ boards) being the notorious one:
+  the firmware's own PXE stack downloads WinPE fine, then WinPE boots with no
+  usable NIC and every SMB mount fails with error 1231. Since that driver can't
+  come over the network, Beacon bakes it into every Windows image's `boot.wim`
+  (as `X:\BeaconNic`, `drvload`ed **before** networking starts) and also hands
+  it to Setup so the installed OS keeps its network driver.
+
+  Staging works like storage drivers, with one extra property — changes re-bake
+  every ready Windows image automatically, so nothing needs reprocessing:
+
+  - **One click:** fetch the **Intel Ethernet NIC pack** on the Windows Drivers
+    page (I225/I226 2.5GbE + X520/X540/X550 10GbE, with the per-OS driver
+    variants for Windows 10/11 and Server 2019–2025; WinPE picks the variant
+    that matches via INF platform decorations, wrong-OS ones just refuse).
+    Note **Server 2016**: Intel never shipped an I225/I226 driver its PE can
+    load, so that combination is unfixable; the 10GbE X-series covers Server
+    2016 fine.
+  - **Upload** with driver kind set to **Network**, or drop files into
+    `./data/nicdrivers` and hit re-bake by adding/removing anything via the UI.
+
+  Baked drivers load while nothing is using the NIC yet, so staging several
+  vendors/versions is safe — a wrong-OS or wrong-hardware INF simply doesn't
+  load.
+
+  The folder is shared by **every** Windows image and is a plain host directory,
+  so adding drivers needs no re-extraction and re-processing an image never
+  clears it. An empty folder changes nothing about how Setup runs.
+
 If extraction can't find a kernel/initrd, the image shows `error` with a reason;
 fix the boot args or check the ISO layout and hit **Retry**. If an image's
 extracted files are later deleted, it shows `needs reprocess` instead — see
@@ -406,6 +508,15 @@ pulls new images and recreates the containers for you.
 > and re-run `docker compose up -d`. **The CHANGELOG calls out any release that
 > needs this**, and the releases below list what changed:
 >
+> - **0.4.0 — `docker-compose.yml` changed** (new `./data/drivers` bind mount on
+>   the `web` and `smb` services, for drop-in Windows storage drivers). Windows
+>   images keep installing without it, but the drivers folder does nothing until
+>   you re-fetch:
+>   ```bash
+>   curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
+>   mkdir -p data/drivers
+>   docker compose up -d
+>   ```
 > - **0.3.0 — `docker-compose.yml` changed** (container hardening:
 >   `no-new-privileges` on all services, dropped capabilities on the `reload`
 >   sidecar). Existing installs keep running without it; re-fetch to apply the

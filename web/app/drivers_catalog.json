@@ -1,0 +1,84 @@
+{
+  "note": "Known-good Windows storage driver packages Beacon can fetch on demand (see services.drivers.fetch_pack and the Windows Drivers page). Beacon deliberately does NOT bundle these drivers - they are proprietary and not redistributable - so instead each entry pins a WHQL-signed driver CAB served by Microsoft's Windows Update CDN (discovered via catalog.update.microsoft.com) plus its sha256. The fetch refuses a file whose hash does not match, so a moved, replaced, or tampered URL fails loudly instead of staging unknown bytes. Every entry below was verified on 2026-07-24 by downloading the URL, extracting it with 7z, and reading the INF: the PCI device IDs quoted in 'covers' come from the actual .inf contents. When updating an entry, repeat that verification and re-pin the hash. To refresh an entry (e.g. a new chipset generation): search catalog.update.microsoft.com for the driver ('Intel RST VMD' / 'AMD-RAID Bottom Device'), take the update GUID from the result row, POST it to DownloadDialog.aspx as updateIDs=[{\"size\":0,\"languages\":\"\",\"uidInfo\":\"<guid>\",\"updateID\":\"<guid>\"}] to get the direct download.windowsupdate.com CAB URL, then download + 7z-extract it, read the INF's PCI\\VEN/DEV list to confirm coverage, and pin the new sha256. Do not source from downloadmirror.intel.com: Intel discontinued the plain f6flpy zips, SetupRST.exe cannot be unpacked server-side (the payload is a .NET blob, not an archive), and the mirror requires an intel.com Referer and rotates download IDs. Beware coverage drops on version bumps: RST 20.2.4.1019 is the last build that includes 11th-gen 9A0B - newer 20.2.x builds silently dropped it, which is why there are two Intel entries. Entry fields beyond the basics: \"target\": \"boot\" stages into data/nicdrivers and bakes into every Windows boot.wim (NIC drivers - they must exist before the network does) instead of the SMB share; \"include\" limits which folders of a bundle zip are staged; \"referer\" is sent with the download (downloadmirror.intel.com refuses requests without an intel.com Referer). The exception to WU-only sourcing is the Intel Wired_driver zip: WU prunes its Win10-decorated NIC builds, and the zip's per-OS trees (NDIS68 = build 17763+, W11 = 22000+) are the only complete source; find current mirror IDs via Wayback snapshots of the Intel download page when the pinned one rots.",
+  "packs": [
+    {
+      "id": "intel-vmd",
+      "title": "Intel RST VMD",
+      "version": "20.2.4.1019",
+      "covers": "Every Intel VMD generation in one package: 11th-gen Core through Core Ultra Series 2 (device IDs 9A0B, 467F, A77F, 7D0B, AD0B + managed controller 09AB). The one to fetch first for Intel machines - later upstream builds dropped 11th gen.",
+      "source": "Windows Update CDN (WHQL)",
+      "info_url": "https://www.catalog.update.microsoft.com/Search.aspx?q=Intel+RST+VMD",
+      "files": [
+        {
+          "name": "iaStorVD",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2025/02/9ef121be-ce9e-452c-a6dc-6d20b15fb7a1_98f9769d22bff8ad475a7d1f790a7e1bc7fc784e.cab",
+          "sha256": "913a94e9e292ea984f9150d093456ff8595e6cf4aea3943801a5f2801781e00d"
+        }
+      ]
+    },
+    {
+      "id": "intel-vmd-newest",
+      "title": "Intel RST VMD (newest build)",
+      "version": "20.2.13.1038",
+      "covers": "Intel's latest VMD driver - 12th gen and later only (11th-gen 9A0B was dropped upstream). Safe to stage alongside the package above: Setup PnP-ranks per machine, so each box gets the best matching version.",
+      "source": "Windows Update CDN (WHQL)",
+      "info_url": "https://www.catalog.update.microsoft.com/Search.aspx?q=Intel+RST+VMD",
+      "files": [
+        {
+          "name": "iaStorVD",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/04/b11fec46-8446-41c2-9319-c83718387121_3bf99fd1e54b010661a802adba3851fac78a8800.cab",
+          "sha256": "c9de738ffe79fb4b06c4a653fe965b4fc9c00dd942fcee41eabb9f277dda89d3"
+        }
+      ]
+    },
+    {
+      "id": "intel-lan",
+      "target": "boot",
+      "title": "Intel Ethernet NIC pack (baked into boot images)",
+      "version": "30.5.1",
+      "covers": "Wired Intel NICs stock WinPE lacks: I225/I226 2.5GbE (NUCs, most 2020+ boards; no Server 2016 driver exists for these) and X520/X540/X550 10GbE (all PE versions incl. Server 2016). Baked into every Windows image's boot.wim and loaded before networking starts.",
+      "source": "Intel Wired_driver 30.5.1 (WHQL)",
+      "info_url": "https://www.intel.com/content/www/us/en/download/18293/intel-network-adapter-driver-for-windows-10.html",
+      "files": [
+        {
+          "name": "wired",
+          "url": "https://downloadmirror.intel.com/870549/Wired_driver_30.5.1_x64.zip",
+          "sha256": "a7b245aa5be102492f41c1821983944a646c598767aed96be6e0250933ed89d1",
+          "referer": "https://www.intel.com/",
+          "include": [
+            "PRO2500/Winx64/NDIS68",
+            "PRO2500/Winx64/W11",
+            "PROXGB/Winx64/NDIS65",
+            "PROXGB/Winx64/W11",
+            "PROXGB/Winx64/WS2025"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "amd-raid",
+      "title": "AMD RAID (RAIDXpert2)",
+      "version": "9.3.3.329",
+      "covers": "AMD SATA/NVMe RAID for machines with RAID enabled in firmware (AM4/AM5/Threadripper). The full F6 set: rcbottom (claims the disks), rcraid (the array controller), rccfg (configuration).",
+      "source": "Windows Update CDN (WHQL)",
+      "info_url": "https://www.catalog.update.microsoft.com/Search.aspx?q=AMD-RAID",
+      "files": [
+        {
+          "name": "rcbottom",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/05/86a80b9f-168a-488b-a4ac-b46d082b5361_6faaba6065e3ab55f14fa40027914b9c7d81f185.cab",
+          "sha256": "d114460054454b9ffc7c002fd7103de5cac9eb9e554ea71a9a8e5bdafbca2057"
+        },
+        {
+          "name": "rcraid",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/05/e0342b93-5994-4214-8744-72a2f7485507_1c1110794da2f12d6a00ca88839642b78f31d7a5.cab",
+          "sha256": "f01de79b2a10cadde8a2135cad9c29489b298f8879d5743cd0f46fa450b1ac18"
+        },
+        {
+          "name": "rccfg",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/05/42d37f72-c33a-423f-87c8-4cc27bde7edb_889d2138396328e23bb48304c3dc4342a757462f.cab",
+          "sha256": "066aba5227b99d2122dff85abcbedc8439eedf3d3a5f8bbf34e199a09ddee383"
+        }
+      ]
+    }
+  ]
+}

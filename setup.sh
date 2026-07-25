@@ -45,7 +45,7 @@ else
   fi
 fi
 
-mkdir -p data data/images
+mkdir -p data data/images data/drivers
 
 echo "Pulling images and starting containers ..."
 docker compose pull

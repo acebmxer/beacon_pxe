@@ -13,7 +13,8 @@ from .db import init_db, SessionLocal
 from .deps import RedirectException
 from .store import get_setting
 from .services import bootstrap
-from .routers import auth, dashboard, settings, images, users, setup, track, updates
+from .routers import (auth, dashboard, settings, images, drivers, users, setup,
+                      track, updates)
 from .services import updates as update_svc
 
 logging.basicConfig(level=logging.INFO,
@@ -106,6 +107,7 @@ app.include_router(setup.router)
 app.include_router(dashboard.router)
 app.include_router(settings.router)
 app.include_router(images.router)
+app.include_router(drivers.router)
 app.include_router(users.router)
 app.include_router(track.router)
 app.include_router(updates.router)

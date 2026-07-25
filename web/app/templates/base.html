@@ -16,6 +16,7 @@
     <nav class="nav">
       <a href="/" class="{{ 'active' if active=='dashboard' }}"><span class="ico">▣</span><span>Dashboard</span></a>
       <a href="/images" class="{{ 'active' if active=='images' }}"><span class="ico">💿</span><span>Images</span></a>
+      <a href="/drivers" class="{{ 'active' if active=='drivers' }}"><span class="ico">🧩</span><span>Windows Drivers</span></a>
       {% if user.is_admin %}
       <a href="/settings" class="{{ 'active' if active=='settings' }}"><span class="ico">⚙</span><span>Server Settings</span></a>
       <a href="/users" class="{{ 'active' if active=='users' }}"><span class="ico">👥</span><span>User Accounts</span></a>

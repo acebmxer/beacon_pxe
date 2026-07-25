@@ -65,11 +65,20 @@ def _parse_ts(line: str) -> datetime | None:
         return None
 
 
-def recent(limit: int = 25) -> list[dict]:
+def recent(limit: int = 25, boot_events=None) -> list[dict]:
     """Return recently-seen PXE clients, most-recent first.
 
     One entry per MAC, enriched with the last hostname, requested IP, firmware
     type and whether we served it a boot file -- whatever the log revealed.
+
+    boot_events: optional iterable of (mac, ip, when) rows from the BootEvent
+    table. The dnsmasq log advances a client's "last seen" only on a MAC-bearing
+    DHCP line, but in proxyDHCP mode a re-boot usually reuses the cached PXE
+    answer and shows up only as TFTP (no MAC) -- so the log alone freezes the row
+    at the first full DHCP exchange and never carries an IP. BootEvent records
+    every menu boot with a real timestamp + MAC + IP, so folding it in refreshes
+    "last seen", supplies the IP, and surfaces clients whose log lines have aged
+    out of the tail. Callers without DB access omit it and get log-only behaviour.
     """
     try:
         with open(LOG_PATH, "rb") as fh:
@@ -151,6 +160,25 @@ def recent(limit: int = 25) -> list[dict]:
             for k in ("ip", "hostname", "firmware"):
                 if t[k] and not c[k]:
                     c[k] = t[k]
+
+    # Fold in BootEvent rows so proxyDHCP re-boots (TFTP-only in the log) still
+    # refresh the row, and clients whose log lines aged out of the tail reappear.
+    for mac, ip, when in (boot_events or ()):
+        if not mac or when is None:
+            continue
+        mac = mac.lower()
+        if when.tzinfo is not None:            # stored UTC; compare naive-to-naive
+            when = when.astimezone(timezone.utc).replace(tzinfo=None)
+        c = clients.setdefault(mac, {
+            "mac": mac, "ip": "", "hostname": "", "firmware": "",
+            "last_seen": None,
+        })
+        if c["last_seen"] is None or when >= c["last_seen"]:
+            c["last_seen"] = when
+            if ip:
+                c["ip"] = ip
+        elif ip and not c["ip"]:
+            c["ip"] = ip
 
     def _key(c: dict):
         return c["last_seen"] or datetime.min

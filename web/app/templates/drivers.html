@@ -1,0 +1,254 @@
+{% extends "base.html" %}
+{% block heading %}Windows Drivers{% endblock %}
+{% block content %}
+{% if error %}<div class="alert error">{{ error }}</div>{% endif %}
+{% if notice %}<div class="alert info">{{ notice }}</div>{% endif %}
+
+<div class="alert info">
+  <b>Storage drivers for Windows Setup.</b> Stock Windows 11 WinPE has no driver for
+  <b>Intel VMD / RST</b> or <b>AMD RAID</b>, so on most laptops from Intel's 11th gen
+  onward Setup reaches “Where do you want to install Windows?” with an empty disk
+  list. Drop the vendor's F6 / pre-install driver package here and WinPE will load
+  it before Setup starts, then hand it to Setup so the installed OS keeps booting.
+  Applies to <b>every</b> Windows image, from the next boot — no reprocessing needed.
+</div>
+
+{% if catalog %}
+<div class="card">
+  <h2>Recommended drivers</h2>
+  <div class="sub">Known-good packages Beacon can fetch for you — WHQL-signed
+    driver CABs downloaded straight from Microsoft's Windows Update CDN and
+    verified against a pinned checksum before anything is staged. Beacon never
+    bundles these drivers; nothing is downloaded until you ask.</div>
+  <table>
+    <thead><tr><th>Package</th><th>Version</th><th></th></tr></thead>
+    <tbody>
+    {% for p in catalog %}
+      <tr>
+        <td>
+          <b>{{ p.title }}</b>
+          {% if p.info_url %}<a href="{{ p.info_url }}" target="_blank"
+            rel="noopener" class="muted" title="Source">↗</a>{% endif %}
+          {% if p.target == "boot" %}<span class="badge ready">boot.wim</span>
+          {% endif %}
+          <br><span class="muted">{{ p.covers }}</span>
+        </td>
+        <td class="mono">{{ p.version }}<br><span class="muted">{{ p.source }}</span></td>
+        <td>
+          {% if p.staged %}
+            <span class="badge ready">staged</span>
+          {% elif user.is_admin %}
+            <form class="inline-form drv-fetch" method="post" action="/drivers/fetch">
+              <input type="hidden" name="pack" value="{{ p.id }}">
+              <button class="btn sm" type="submit">Fetch</button>
+            </form>
+          {% else %}
+            <span class="muted">ask an admin</span>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <div class="sub" style="margin-top:10px;">Fetching needs internet access
+    <i>from the Beacon host</i>. On an offline network, download the package on
+    another machine and use the upload form instead — the result is identical.
+    A staged pack updates like any other: delete it, then fetch (or upload) the
+    newer one. If both an older and a newer version are staged, Setup
+    PnP-ranks them and each machine gets the best match, so there's no rush.</div>
+</div>
+{% endif %}
+
+{% if user.is_admin %}
+<div class="card" style="margin-top:18px;">
+  <h2>Add drivers</h2>
+  <div class="sub">Upload the vendor's <b>.zip</b>, or select the loose
+    <span class="mono">.inf</span> / <span class="mono">.sys</span> /
+    <span class="mono">.cat</span> files of an already-extracted package.</div>
+  <form id="drv-form" method="post" action="/drivers/upload" enctype="multipart/form-data">
+    <div class="row">
+      <div>
+        <label for="name">Folder name (optional)</label>
+        <input id="name" name="name" placeholder="e.g. intel-vmd">
+      </div>
+      <div>
+        <label for="files">Driver files</label>
+        <input id="files" name="files" type="file" multiple required>
+      </div>
+      <div>
+        <label for="target">Driver kind</label>
+        <select id="target" name="target">
+          <option value="share">Storage — served over SMB, live immediately</option>
+          <option value="boot">Network — baked into boot.wim</option>
+        </select>
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn" id="drv-btn" type="submit">Upload</button>
+    </div>
+    <div class="progress" id="drv-progress">
+      <div class="bar-track"><div class="bar-fill" id="drv-bar"></div></div>
+      <div class="bar-label" id="drv-label">Uploading…</div>
+    </div>
+    <div class="alert error" id="drv-error" style="display:none;margin-top:14px;"></div>
+  </form>
+  <div class="alert warn" style="margin-top:16px;">
+    <b>Pick the kind that matches the driver.</b> <b>Storage</b> packs go on the
+    SMB share — live on the next boot, no re-baking, but useless for a NIC (they
+    sit on the far side of the network the NIC can't reach). <b>Network</b> packs
+    are baked into every Windows image's <span class="mono">boot.wim</span> and
+    loaded before networking starts; adding one re-bakes the boot images
+    automatically.
+    <br>Mixing vendors is safe — Setup PnP-matches, so only the driver for hardware
+    actually present is installed.
+  </div>
+</div>
+{% endif %}
+
+<div class="card" style="margin-top:18px;">
+  <h2>Installed drivers</h2>
+  <div class="sub">{{ entries|length }} item{{ '' if entries|length == 1 else 's' }} ·
+    {{ total_infs }} <span class="mono">.inf</span> found</div>
+  {% if not entries %}
+    <p class="muted">Nothing here yet. Windows Setup runs exactly as before —
+      an empty folder costs nothing.{% if user.is_admin %} Add a package above if
+      Setup can't see the disk.{% endif %}</p>
+  {% else %}
+    {% if total_infs == 0 %}
+    <div class="alert warn">No <span class="mono">.inf</span> file anywhere in this
+      folder, so WinPE has nothing to load and these files do nothing. Driver
+      packages that ship as a self-extracting <span class="mono">.exe</span> need to
+      be extracted first.</div>
+    {% endif %}
+  <table>
+    <thead><tr><th>Name</th><th>Contents</th><th>Size</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for e in entries %}
+      <tr>
+        <td><b class="mono">{{ e.name }}</b>{% if not e.is_dir %}
+          <br><span class="muted">loose file</span>{% endif %}</td>
+        <td>
+          {# The .inf count is only meaningful for a package. Badging an
+             individual loose .sys or .dll "no .inf" is just noise — the
+             per-folder total above already says whether anything will load. #}
+          {% if e.is_dir %}
+            {{ e.files }} file{{ '' if e.files == 1 else 's' }}
+            {% if e.infs %}<span class="badge ready">{{ e.infs }} .inf</span>
+            {% else %}<span class="badge error">no .inf</span>{% endif %}
+          {% elif e.infs %}<span class="badge ready">.inf</span>
+          {% else %}<span class="muted">—</span>{% endif %}
+        </td>
+        <td class="mono">{{ human_size(e.size) }}</td>
+        {% if user.is_admin %}
+        <td>
+          <form class="inline-form" method="post" action="/drivers/delete"
+                onsubmit="return confirm('Delete {{ e.name }} from the drivers folder?');">
+            <input type="hidden" name="entry" value="{{ e.name }}">
+            <input type="hidden" name="target" value="share">
+            <button class="btn danger sm" type="submit">Delete</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<div class="card" style="margin-top:18px;">
+  <h2>Network drivers baked into boot images</h2>
+  <div class="sub">A NIC driver can't come from the network it is needed to
+    reach, so these are baked into every Windows image's
+    <span class="mono">boot.wim</span> and loaded before networking starts.
+    Adding or deleting here re-bakes all ready Windows images automatically —
+    the next PXE boot carries the change, no reprocessing needed.</div>
+  {% if not boot_entries %}
+    <p class="muted">Nothing baked in. Machines whose NIC stock WinPE already
+      knows are unaffected either way.{% if user.is_admin %} If a client sits
+      at “network timeout / System error 1231”, fetch the Intel NIC pack above
+      or upload a pack with kind “Network”.{% endif %}</p>
+  {% else %}
+  <table>
+    <thead><tr><th>Name</th><th>Contents</th><th>Size</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
+    <tbody>
+    {% for e in boot_entries %}
+      <tr>
+        <td><b class="mono">{{ e.name }}</b></td>
+        <td>{{ e.files }} file{{ '' if e.files == 1 else 's' }}
+          {% if e.infs %}<span class="badge ready">{{ e.infs }} .inf</span>
+          {% else %}<span class="badge error">no .inf</span>{% endif %}</td>
+        <td class="mono">{{ human_size(e.size) }}</td>
+        {% if user.is_admin %}
+        <td>
+          <form class="inline-form" method="post" action="/drivers/delete"
+                onsubmit="return confirm('Remove {{ e.name }} and re-bake the boot images without it?');">
+            <input type="hidden" name="entry" value="{{ e.name }}">
+            <input type="hidden" name="target" value="boot">
+            <button class="btn danger sm" type="submit">Delete</button>
+          </form>
+        </td>
+        {% endif %}
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<script>
+(function () {
+  // Fetch buttons: the POST takes a few seconds (download + verify), so show
+  // that something is happening and stop a second click starting a second one.
+  document.querySelectorAll("form.drv-fetch").forEach(function (f) {
+    f.addEventListener("submit", function () {
+      var b = f.querySelector("button");
+      b.disabled = true;
+      b.textContent = "Fetching…";
+    });
+  });
+
+  // Upload with a live progress bar — a plain form POST gives no feedback, and a
+  // driver zip is big enough for the wait to look like a hang.
+  var form = document.getElementById("drv-form");
+  if (!form) return;
+  var btn = document.getElementById("drv-btn");
+  var wrap = document.getElementById("drv-progress");
+  var bar = document.getElementById("drv-bar");
+  var label = document.getElementById("drv-label");
+  var errBox = document.getElementById("drv-error");
+
+  form.addEventListener("submit", function (e) {
+    var input = document.getElementById("files");
+    if (!input || !input.files.length) return;  // let native required kick in
+
+    e.preventDefault();
+    errBox.style.display = "none";
+    var xhr = new XMLHttpRequest();
+    xhr.open("POST", form.action);
+    xhr.upload.addEventListener("progress", function (ev) {
+      if (!ev.lengthComputable) return;
+      var pct = Math.round((ev.loaded / ev.total) * 100);
+      bar.style.width = pct + "%";
+      label.textContent = "Uploading… " + pct + "%";
+    });
+    xhr.addEventListener("load", function () {
+      bar.style.width = "100%";
+      // Success and rejection both redirect back to /drivers; a rejection shows
+      // its reason there via the session flash.
+      window.location = "/drivers";
+    });
+    xhr.addEventListener("error", function () {
+      btn.disabled = false;
+      errBox.textContent = "Upload failed. Please try again.";
+      errBox.style.display = "block";
+    });
+    btn.disabled = true;
+    wrap.style.display = "block";
+    bar.style.width = "0%";
+    label.textContent = "Uploading…";
+    xhr.send(new FormData(form));
+  });
+})();
+</script>
+{% endblock %}

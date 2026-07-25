@@ -10,7 +10,7 @@ sqlalchemy==2.0.36
 passlib[bcrypt]==1.7.4
 # Pinned to 4.0.x: passlib 1.7.4 can't read the version of bcrypt >=4.1, which
 # emits a noisy (harmless) warning. 4.0.1 is detected cleanly.
-bcrypt==4.0.1
+bcrypt==5.0.0
 # 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
 python-multipart==0.0.32
 itsdangerous==2.2.0

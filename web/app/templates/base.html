@@ -24,7 +24,9 @@
       <a href="/profile" class="{{ 'active' if active=='profile' }}"><span class="ico">🔑</span><span>My Profile</span></a>
     </nav>
     <div class="sidebar-foot">
-      <a class="btn ghost sm" href="/logout" style="width:100%;justify-content:center;">Log out</a>
+      <form method="post" action="/logout">
+        <button class="btn ghost sm" type="submit" style="width:100%;justify-content:center;">Log out</button>
+      </form>
     </div>
   </aside>
 
@@ -55,7 +57,7 @@
   {% block bare %}{% endblock %}
 {% endif %}
 {% if user and user.is_admin %}
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
   var badge = document.getElementById("update-badge");
   if (!badge) return;
@@ -66,5 +68,24 @@
 })();
 </script>
 {% endif %}
+<script nonce="{{ csp_nonce }}">
+// Unobtrusive replacements for the inline handlers a nonce-based CSP forbids:
+//   <form data-confirm="…">   -> confirm() before submit (cancel blocks it)
+//   <select data-autosubmit>  -> submit the form when the value changes
+(function () {
+  document.addEventListener("submit", function (e) {
+    var f = e.target;
+    if (f && f.dataset && f.dataset.confirm && !window.confirm(f.dataset.confirm)) {
+      e.preventDefault();
+    }
+  });
+  document.addEventListener("change", function (e) {
+    var el = e.target;
+    if (el && el.hasAttribute && el.hasAttribute("data-autosubmit") && el.form) {
+      el.form.submit();
+    }
+  });
+})();
+</script>
 </body>
 </html>

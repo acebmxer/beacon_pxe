@@ -1,5 +1,6 @@
 """FastAPI application entrypoint."""
 import logging
+import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -45,27 +46,35 @@ async def _redirect_handler(request: Request, exc: RedirectException):
     return RedirectResponse(exc.location, status_code=303)
 
 
-# Security headers applied to every response. The CSP still permits inline
-# script/style because the templates rely on them; it locks down framing
-# (clickjacking), plugins, and the base URI, and is a meaningful backstop
-# against injected markup. Tightening to a nonce-based CSP (dropping
-# 'unsafe-inline') is a possible follow-up but needs a template refactor.
-_CSP = (
-    "default-src 'self'; "
-    "script-src 'self' 'unsafe-inline'; "
-    "style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; "
-    "object-src 'none'; "
-    "base-uri 'self'; "
-    "frame-ancestors 'none'; "
-    "form-action 'self'"
-)
+# Security headers applied to every response. Scripts are allowed ONLY via a
+# per-request nonce (no 'unsafe-inline'), so injected inline <script> markup will
+# not execute even if it slips past output escaping — the real XSS backstop. The
+# nonce is minted per request below and stamped onto every inline <script> the
+# templates emit (see deps.render -> csp_nonce). Styles still allow 'unsafe-inline'
+# on purpose: the templates use inline style="" attributes throughout, which a
+# nonce cannot cover (nonces apply to <style>/<script> elements, not attributes),
+# and injected CSS is a far weaker vector than injected script.
+def _csp(nonce: str) -> str:
+    return (
+        "default-src 'self'; "
+        f"script-src 'self' 'nonce-{nonce}'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "object-src 'none'; "
+        "base-uri 'self'; "
+        "frame-ancestors 'none'; "
+        "form-action 'self'"
+    )
 
 
 @app.middleware("http")
 async def security_headers(request: Request, call_next):
+    # Mint a per-request nonce before the route runs so the template can stamp it
+    # on its inline scripts; the same value goes into the CSP header below.
+    nonce = secrets.token_urlsafe(16)
+    request.state.csp_nonce = nonce
     response = await call_next(request)
-    response.headers.setdefault("Content-Security-Policy", _CSP)
+    response.headers.setdefault("Content-Security-Policy", _csp(nonce))
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("X-Content-Type-Options", "nosniff")
     response.headers.setdefault("Referrer-Policy", "same-origin")
@@ -98,8 +107,12 @@ async def first_run_redirect(request: Request, call_next):
 # request as the logged-in admin. "strict" would harden this slightly further
 # but drops the cookie on ordinary top-level navigations into the app (e.g. a
 # bookmarked deep link would appear logged out), which isn't worth it here.
+# https_only adds the Secure flag so the browser only returns the cookie over
+# HTTPS. Off by default (plain-HTTP trusted LAN); enabled via SESSION_SECURE when
+# Beacon is behind a TLS-terminating proxy.
 app.add_middleware(SessionMiddleware, secret_key=config.SECRET_KEY,
-                   max_age=60 * 60 * 12, same_site="lax")
+                   max_age=60 * 60 * 12, same_site="lax",
+                   https_only=config.SESSION_SECURE)
 
 
 app.include_router(auth.router)

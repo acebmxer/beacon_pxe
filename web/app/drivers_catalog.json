@@ -1,5 +1,5 @@
 {
-  "note": "Known-good Windows storage driver packages Beacon can fetch on demand (see services.drivers.fetch_pack and the Windows Drivers page). Beacon deliberately does NOT bundle these drivers - they are proprietary and not redistributable - so instead each entry pins a WHQL-signed driver CAB served by Microsoft's Windows Update CDN (discovered via catalog.update.microsoft.com) plus its sha256. The fetch refuses a file whose hash does not match, so a moved, replaced, or tampered URL fails loudly instead of staging unknown bytes. Every entry below was verified on 2026-07-24 by downloading the URL, extracting it with 7z, and reading the INF: the PCI device IDs quoted in 'covers' come from the actual .inf contents. When updating an entry, repeat that verification and re-pin the hash. To refresh an entry (e.g. a new chipset generation): search catalog.update.microsoft.com for the driver ('Intel RST VMD' / 'AMD-RAID Bottom Device'), take the update GUID from the result row, POST it to DownloadDialog.aspx as updateIDs=[{\"size\":0,\"languages\":\"\",\"uidInfo\":\"<guid>\",\"updateID\":\"<guid>\"}] to get the direct download.windowsupdate.com CAB URL, then download + 7z-extract it, read the INF's PCI\\VEN/DEV list to confirm coverage, and pin the new sha256. Do not source from downloadmirror.intel.com: Intel discontinued the plain f6flpy zips, SetupRST.exe cannot be unpacked server-side (the payload is a .NET blob, not an archive), and the mirror requires an intel.com Referer and rotates download IDs. Beware coverage drops on version bumps: RST 20.2.4.1019 is the last build that includes 11th-gen 9A0B - newer 20.2.x builds silently dropped it, which is why there are two Intel entries. Entry fields beyond the basics: \"target\": \"boot\" stages into data/nicdrivers and bakes into every Windows boot.wim (NIC drivers - they must exist before the network does) instead of the SMB share; \"include\" limits which folders of a bundle zip are staged; \"referer\" is sent with the download (downloadmirror.intel.com refuses requests without an intel.com Referer). The exception to WU-only sourcing is the Intel Wired_driver zip: WU prunes its Win10-decorated NIC builds, and the zip's per-OS trees (NDIS68 = build 17763+, W11 = 22000+) are the only complete source; find current mirror IDs via Wayback snapshots of the Intel download page when the pinned one rots.",
+  "note": "Known-good Windows driver packages (storage, NIC, laptop-input I2C) Beacon can fetch on demand (see services.drivers.fetch_pack and the Windows Drivers page). Beacon deliberately does NOT bundle these drivers - they are proprietary and not redistributable - so instead each entry pins a WHQL-signed driver CAB served by Microsoft's Windows Update CDN (discovered via catalog.update.microsoft.com) plus its sha256. The fetch refuses a file whose hash does not match, so a moved, replaced, or tampered URL fails loudly instead of staging unknown bytes. Every entry below was verified at pin time (storage/NIC packs on 2026-07-24, the Serial IO / AMD I2C touchpad packs on 2026-07-25) by downloading the URL, extracting it with 7z, and reading the INF: the PCI device IDs quoted in 'covers' come from the actual .inf contents. When updating an entry, repeat that verification and re-pin the hash. To refresh an entry (e.g. a new chipset generation): search catalog.update.microsoft.com for the driver ('Intel RST VMD' / 'AMD-RAID Bottom Device') - searching by hardware ID also works and is the precise way to find bus-driver packages ('INT34C5', 'AMDI0010', 'VEN_8086&DEV_A0E8'), take the update GUID from the result row, POST it to DownloadDialog.aspx as updateIDs=[{\"size\":0,\"languages\":\"\",\"uidInfo\":\"<guid>\",\"updateID\":\"<guid>\"}] to get the direct download.windowsupdate.com CAB URL, then download + 7z-extract it, read the INF's PCI\\VEN/DEV list to confirm coverage, and pin the new sha256. Do not source from downloadmirror.intel.com: Intel discontinued the plain f6flpy zips, SetupRST.exe cannot be unpacked server-side (the payload is a .NET blob, not an archive), and the mirror requires an intel.com Referer and rotates download IDs. Beware coverage drops on version bumps: RST 20.2.4.1019 is the last build that includes 11th-gen 9A0B - newer 20.2.x builds silently dropped it, which is why there are two Intel entries. Entry fields beyond the basics: \"target\": \"boot\" stages into data/nicdrivers and bakes into every Windows boot.wim (NIC drivers - they must exist before the network does) instead of the SMB share; \"include\" limits which folders of a bundle zip are staged; \"referer\" is sent with the download (downloadmirror.intel.com refuses requests without an intel.com Referer). The exception to WU-only sourcing is the Intel Wired_driver zip: WU prunes its Win10-decorated NIC builds, and the zip's per-OS trees (NDIS68 = build 17763+, W11 = 22000+) are the only complete source; find current mirror IDs via Wayback snapshots of the Intel download page when the pinned one rots.",
   "packs": [
     {
       "id": "intel-vmd",
@@ -77,6 +77,81 @@
           "name": "rccfg",
           "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/05/42d37f72-c33a-423f-87c8-4cc27bde7edb_889d2138396328e23bb48304c3dc4342a757462f.cab",
           "sha256": "066aba5227b99d2122dff85abcbedc8439eedf3d3a5f8bbf34e199a09ddee383"
+        }
+      ]
+    },
+    {
+      "id": "intel-serial-io",
+      "title": "Intel Serial IO (laptop touchpad)",
+      "version": "30.100.2010.1-2531.33",
+      "covers": "Laptop touchpads are HID-over-I2C: WinPE has the touchpad driver (hidi2c) inbox but nothing for the Intel Serial IO GPIO/I2C controllers underneath it, so during Setup only a USB mouse works. One CAB per platform generation - Skylake/Kaby Lake (6th-7th gen), Cannon/Comet Lake (8th-10th), Ice Lake, Tiger Lake LP+H (11th), Alder/Raptor Lake incl. N-series (12th-14th), Meteor+Arrow Lake, and Lunar Lake - each verified to carry the GPIO2 and I2C INFs. Setup PnP-matches per machine, so staging every generation at once is safe.",
+      "source": "Windows Update CDN (WHQL)",
+      "info_url": "https://www.catalog.update.microsoft.com/Search.aspx?q=Intel+Serial+IO",
+      "files": [
+        {
+          "name": "skl-kbl",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2020/07/dd0ad676-9bd1-4aeb-acb6-aee52f21a24d_dceb3b3fd1833c2b74a58c04ea59f4f79817e1f8.cab",
+          "sha256": "39c94fa209e5320fc8596172abce04c0ec85e5e7397f4b70b7d6e12470ce3669"
+        },
+        {
+          "name": "cnl-cml",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2021/11/6205d33d-a420-4dfc-9724-27999a3de111_ad6c425b1e3f5f70df82554d8300a80e1cca3921.cab",
+          "sha256": "8db4ec8b96d4bd46e666bedf040b61631f8901b946426fc4c34411993495650c"
+        },
+        {
+          "name": "icl",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2025/11/a81976bd-7a4d-4f9b-9c54-479ba17f9102_2ac91522767c4d567d1652454cd60894b99c6ca8.cab",
+          "sha256": "436e7ec1b796e217d65f022b478218c04988f18c5d7ea176a22c48411a7e8e4b"
+        },
+        {
+          "name": "tgl",
+          "url": "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2024/07/65185b93-d429-4697-b900-8b72472fab80_cd79e9da19f7050501e701f51f4246d9b6862ae8.cab",
+          "sha256": "ad428af0538d1870276f60169a0b4f634e4ac0effa96e0751a5b51b26dd40c2c"
+        },
+        {
+          "name": "adl-rpl",
+          "url": "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/11/fc633db2-319c-4acb-815c-877902b824ff_8e228ba0068deff3460565a3294e27cdd428ac5c.cab",
+          "sha256": "19ef4ce58c1a3db1647aea9a97ee118ecab46bb56403a8db5123838bbb444b2d"
+        },
+        {
+          "name": "adl-n",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/01/7f54a526-4a27-4295-aeb7-ad67fd90d8de_5b69e6eec7361b21b7c3ee2d9400a700bc0fa7b0.cab",
+          "sha256": "a7b2b1ecb6eb2dd83b35e4db78d9eb196bd059e16274591fad739cc74ac6b469"
+        },
+        {
+          "name": "mtl-arl",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2025/12/a4eb379e-388d-4e35-a3b7-46db4d39d7a2_dd0a2716d345dd00ea1ab0daca68eacda1dc7a4c.cab",
+          "sha256": "f77325ff80e84ecc665af3068ba05f9e362dfd591190308e323882b691d791f9"
+        },
+        {
+          "name": "lnl",
+          "url": "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/12/b0365065-c1d7-4dbd-ae84-6169d93f204a_de1f6aa772d0addfbe1364988229188981b6b50a.cab",
+          "sha256": "d176161bef6ec69701c129aa48e8c531d60b8823e7cfb50dcdc408d0fa55525b"
+        }
+      ]
+    },
+    {
+      "id": "amd-i2c",
+      "title": "AMD I2C/GPIO (laptop touchpad)",
+      "version": "1.2.0.126 / 2.2.0.137 / 3.0.5.0",
+      "covers": "The AMD side of the touchpad story: amdi2c claims the I2C bus every Ryzen laptop touchpad hangs off (ACPI AMDI0010/AMD0010), and the two GPIO drivers cover the interrupt controller across Ryzen generations (amdgpio2 for AMDI0030/0031, amdgpio3 for AMDIF030/031 on the newest platforms). With these staged, WinPE's inbox hidi2c driver brings the touchpad up when Setup starts.",
+      "source": "Windows Update CDN (WHQL)",
+      "info_url": "https://www.catalog.update.microsoft.com/Search.aspx?q=AMDI0010",
+      "files": [
+        {
+          "name": "amdi2c",
+          "url": "https://catalog.s.download.windowsupdate.com/d/msdownload/update/driver/drvs/2025/11/d228364c-b249-4777-9ad0-831d8aadde6e_72c39d2ae1255ea470c3e5bc5b798b1f6777a4cc.cab",
+          "sha256": "55a6955bc6cfd83192e346544d8ee8b9fc6b5684864f75d33812deb4b046bb2f"
+        },
+        {
+          "name": "amdgpio2",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/06/e9cdcdce-2a63-440e-9572-f7e4473294b7_13130f431fa3b87e837db01596a1b61f320ce7ba.cab",
+          "sha256": "8ebdaa4687d788daea8ce76e3236b221a651be62e56a3e2563bfd0445da42a5e"
+        },
+        {
+          "name": "amdgpio3",
+          "url": "https://catalog.s.download.windowsupdate.com/c/msdownload/update/driver/drvs/2026/03/d26a95eb-6e00-4dee-b1f8-cb3f3e2e27a5_1320aabcd4a1e73053e550f1ae2b37d76ec81d49.cab",
+          "sha256": "3c28b3c014811904bd9d0d907c0dc9c87119b40b8b00d010147ff86c2f874f72"
         }
       ]
     }

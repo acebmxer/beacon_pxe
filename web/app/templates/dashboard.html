@@ -56,7 +56,7 @@
       <h2>Top deployed images</h2>
       {% if user and user.is_admin %}
       <form method="post" action="/stats/reset"
-            onsubmit="return confirm('Reset all deployment statistics? This clears clients served, total deployments, top deployed images, and the recent clients list. This cannot be undone.');">
+            data-confirm="Reset all deployment statistics? This clears clients served, total deployments, top deployed images, and the recent clients list. This cannot be undone.">
         <button class="btn ghost sm" type="submit">Reset statistics</button>
       </form>
       {% endif %}
@@ -98,7 +98,7 @@
   </div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
   function fmtBps(n) {
     if (!n) return "0 B/s";

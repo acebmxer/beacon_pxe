@@ -27,7 +27,7 @@
     <h2>DHCP</h2>
     <div class="sub">proxyDHCP runs safely beside an existing DHCP server. Full DHCP makes this box assign IP addresses too. External DHCP leaves DHCP entirely to your own server.</div>
     <label for="dhcp_mode">DHCP mode</label>
-    <select id="dhcp_mode" name="dhcp_mode" onchange="dhcpModeChanged()">
+    <select id="dhcp_mode" name="dhcp_mode">
       <option value="proxy" {{ 'selected' if settings.dhcp_mode=='proxy' }}>proxyDHCP (recommended — beside existing DHCP)</option>
       <option value="full" {{ 'selected' if settings.dhcp_mode=='full' }}>Full DHCP (this server assigns addresses)</option>
       <option value="external" {{ 'selected' if settings.dhcp_mode=='external' }}>External DHCP (your DHCP server sets next-server/filename)</option>
@@ -61,7 +61,7 @@
       <div><label>DNS server</label><input name="dhcp_dns" value="{{ settings.dhcp_dns }}"></div>
     </div>
     <p class="muted">Range/gateway/DNS apply only in <b>Full DHCP</b> mode.</p>
-    <script>
+    <script nonce="{{ csp_nonce }}">
       // Only surface the External DHCP instructions when that mode is picked --
       // they are actionable config the admin has to copy elsewhere, so showing
       // them in the other modes would just read as noise.
@@ -70,6 +70,7 @@
         document.getElementById('external-help').style.display = external ? '' : 'none';
         document.getElementById('svc_dhcp_note').style.display = external ? '' : 'none';
       }
+      document.getElementById('dhcp_mode').addEventListener('change', dhcpModeChanged);
       dhcpModeChanged();
     </script>
   </div>
@@ -110,13 +111,13 @@
   </div>
   <div id="upd-status" class="muted">Checking…</div>
   <div class="toolbar" style="margin-top:14px;">
-    <button class="btn ghost sm" id="btn-check" onclick="updCheck()">Check now</button>
-    <button class="btn" id="btn-apply" onclick="updApply()" style="display:none;">Apply update</button>
+    <button class="btn ghost sm" id="btn-check">Check now</button>
+    <button class="btn" id="btn-apply" style="display:none;">Apply update</button>
   </div>
   <div id="upd-log" style="display:none;margin-top:14px;" class="alert info"></div>
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
   var statusEl = document.getElementById("upd-status");
   var buildEl  = document.getElementById("upd-build");
@@ -159,11 +160,15 @@
     logEl.className = cls;
     logEl.innerHTML =
       '<span>' + esc(msg) + '</span>' +
-      '<button type="button" class="btn ghost sm" onclick="updDismiss()"' +
+      '<button type="button" class="btn ghost sm js-dismiss"' +
       ' style="margin-left:16px;flex:none;">Dismiss</button>';
     logEl.style.display = "flex";
     logEl.style.alignItems = "center";
     logEl.style.justifyContent = "space-between";
+    // Wire the just-created button here rather than via an inline onclick, which
+    // a nonce-based CSP forbids.
+    var d = logEl.querySelector(".js-dismiss");
+    if (d) d.addEventListener("click", updDismiss);
   }
 
   function render(d) {
@@ -220,7 +225,7 @@
     if (polling) { clearInterval(polling); polling = null; }
   }
 
-  window.updCheck = function () {
+  function updCheck() {
     checkBtn.disabled = true;
     statusEl.textContent = "Checking…";
     statusEl.className = "muted";
@@ -230,13 +235,13 @@
       .catch(function () { checkBtn.disabled = false; });
   };
 
-  window.updDismiss = function () {
+  function updDismiss() {
     logEl.style.display = "none";
     fetch("/api/update/dismiss", { method: "POST", headers: { Accept: "application/json" } })
       .catch(function () {});
   };
 
-  window.updApply = function () {
+  function updApply() {
     var msg = "Pull new Docker images and redeploy all Beacon services?\n\n" +
       "The page will briefly become unavailable while services restart.";
     if (isDev) {
@@ -271,6 +276,8 @@
       });
   };
 
+  checkBtn.addEventListener("click", updCheck);
+  applyBtn.addEventListener("click", updApply);
   load();
 })();
 </script>

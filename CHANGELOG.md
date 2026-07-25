@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe user-facing changes: what a Beacon operator gains, loses, or has
 to do differently. Internal refactors that change nothing observable are omitted.
 
+## [Unreleased]
+
+**Security hardening.** No action is needed for a normal trusted-LAN install and
+`docker-compose.yml` is unchanged. If you serve Beacon over **HTTPS behind a
+reverse proxy**, add two optional settings to your `.env` (both shown in
+`.env.example`): `SESSION_SECURE=true` marks the session cookie Secure, and
+`TRUSTED_PROXIES=<proxy ip/cidr>` lets the login throttle see the real client
+through the proxy. Existing databases are migrated automatically on start.
+
+### Added
+
+- **Laptop touchpads now work in Windows Setup.** Modern trackpads are
+  HID-over-I2C: WinPE carries the touchpad driver but no driver for the I2C/GPIO
+  controllers underneath it, so until now only an external USB mouse worked
+  during an interactive install (the keyboard is unaffected — it's PS/2). Two
+  new one-click packs on the **Windows Drivers** page supply the missing bus
+  drivers, sha256-pinned from the Windows Update CDN like the rest of the
+  catalog: **Intel Serial IO** (one CAB per generation, 6th-gen Core through
+  Meteor/Arrow/Lunar Lake) and **AMD I2C/GPIO** (all Ryzen laptop generations).
+  Setup PnP-loads only the driver matching the machine, the touchpad comes
+  alive at the first Setup screen, and like all `share` drivers it applies to
+  every Windows image on the next boot — no re-processing.
+
+### Security
+
+- **The session cookie can be marked `Secure`** (`SESSION_SECURE=true`) so the
+  admin session is never transmitted over plain HTTP when Beacon is fronted by
+  an HTTPS reverse proxy.
+- **A reverse proxy can no longer collapse the login lockout onto one address.**
+  The failed-login throttle now identifies the real client via `TRUSTED_PROXIES`
+  instead of keying every request to the proxy — previously a few failures from
+  anyone could lock out the admin.
+- **Changing a password now signs out that account's other sessions.** A reset
+  no longer leaves an old or stolen session valid until it expires.
+- **Content-Security-Policy now uses a per-request script nonce** instead of
+  permitting all inline scripts, so injected markup cannot execute script.
+- **Sign-out is now a POST**, so a cross-site page can't silently log an admin
+  out.
+- **The boot-tracking endpoint (`/track`) is rate-limited** and records only
+  real, enabled images, so it can't be flooded to grow the database.
+- **The optional diagnostics capture share writes as an unprivileged user**
+  rather than root.
+- **Published images now build from commit-pinned GitHub Actions**, closing a
+  supply-chain vector in how the images are produced.
+
 ## [0.4.0] - 2026-07-25
 
 **This release changes `docker-compose.yml`** (new `./data/drivers` bind mount

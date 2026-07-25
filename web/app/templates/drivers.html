@@ -143,7 +143,7 @@
         {% if user.is_admin %}
         <td>
           <form class="inline-form" method="post" action="/drivers/delete"
-                onsubmit="return confirm('Delete {{ e.name }} from the drivers folder?');">
+                data-confirm="Delete {{ e.name }} from the drivers folder?">
             <input type="hidden" name="entry" value="{{ e.name }}">
             <input type="hidden" name="target" value="share">
             <button class="btn danger sm" type="submit">Delete</button>
@@ -183,7 +183,7 @@
         {% if user.is_admin %}
         <td>
           <form class="inline-form" method="post" action="/drivers/delete"
-                onsubmit="return confirm('Remove {{ e.name }} and re-bake the boot images without it?');">
+                data-confirm="Remove {{ e.name }} and re-bake the boot images without it?">
             <input type="hidden" name="entry" value="{{ e.name }}">
             <input type="hidden" name="target" value="boot">
             <button class="btn danger sm" type="submit">Delete</button>
@@ -197,7 +197,7 @@
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
   // Fetch buttons: the POST takes a few seconds (download + verify), so show
   // that something is happening and stop a second click starting a second one.

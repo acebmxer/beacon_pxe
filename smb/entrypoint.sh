@@ -20,7 +20,11 @@ if [ "${ENABLE_DIAG_CAPTURE:-false}" = "true" ]; then
    read only = no
    guest ok = yes
    guest only = yes
-   force user = root
+   # Write as the unprivileged 'nobody', never root: this is a guest-writable
+   # share reachable by any host on the boot LAN, so files a client drops here
+   # must not land root-owned. The dir stays world-writable (below) so the forced
+   # user can create files in it regardless of the bind mount's owner.
+   force user = nobody
    create mask = 0664
    directory mask = 0775
 EOF

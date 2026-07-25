@@ -71,3 +71,29 @@ def reset(key: str) -> None:
     with _lock:
         _failures.pop(key, None)
         _locked_until.pop(key, None)
+
+
+# --- Generic sliding-window throttle -------------------------------------- #
+# Separate from the login lockout above: this only caps how many events a key
+# may record per window, with no lockout. Used to bound abuse of unauthenticated
+# endpoints (e.g. /track) without ever blocking the caller's real work — callers
+# treat a False as "skip the side effect", not "reject the request".
+_events: dict[str, list[float]] = {}
+
+
+def allow(key: str, limit: int, window: float = 60.0) -> bool:
+    """True if an event for `key` is within `limit` per `window`, and record it."""
+    now = time.monotonic()
+    with _lock:
+        recent = [t for t in _events.get(key, ()) if now - t < window]
+        if len(recent) >= limit:
+            _events[key] = recent
+            return False
+        recent.append(now)
+        _events[key] = recent
+        # Opportunistic cleanup so one-off keys can't grow the dict without bound.
+        if len(_events) > 4096:
+            for k in [k for k, v in _events.items()
+                      if not any(now - t < window for t in v)]:
+                _events.pop(k, None)
+        return True

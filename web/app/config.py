@@ -55,6 +55,33 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "").strip()
 # restart, which is acceptable for a single-node admin tool).
 SECRET_KEY = os.environ.get("SECRET_KEY", "").strip() or secrets.token_hex(32)
 
+# Mark the session cookie Secure (browser only sends it over HTTPS). Off by
+# default so the trusted-LAN plain-HTTP flow keeps working; set SESSION_SECURE=
+# true when Beacon is served through a TLS-terminating reverse proxy.
+SESSION_SECURE = os.environ.get("SESSION_SECURE", "").strip().lower() in (
+    "1", "true", "yes", "on")
+
+
+def _parse_trusted_proxies(raw: str) -> list[str]:
+    """Split a comma/space-separated list of proxy IPs or CIDRs; ignore junk."""
+    import ipaddress
+    out: list[str] = []
+    for tok in raw.replace(",", " ").split():
+        try:
+            ipaddress.ip_network(tok, strict=False)
+        except ValueError:
+            continue
+        out.append(tok)
+    return out
+
+
+# Reverse-proxy hops whose X-Forwarded-For we trust to name the real client.
+# Empty (default) means "no proxy": the socket peer is the client. Set this to
+# the proxy's IP/CIDR when Beacon sits behind one, so the login throttle keys on
+# the actual client instead of the proxy (otherwise one address — the proxy —
+# owns every request and a handful of failures locks out everyone).
+TRUSTED_PROXIES = _parse_trusted_proxies(os.environ.get("TRUSTED_PROXIES", ""))
+
 WEB_PORT = int(os.environ.get("WEB_PORT", "8080"))
 
 # Self-update: docker compose file + env mounted into the container by

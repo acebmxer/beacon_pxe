@@ -86,7 +86,7 @@
             </form>
             {% endif %}
             <form class="inline-form" method="post" action="/images/{{ img.id }}/delete"
-                  onsubmit="return confirm('Delete {{ img.name }} and its boot files?');">
+                  data-confirm="Delete {{ img.name }} and its boot files?">
               <button class="btn danger sm" type="submit">Delete</button>
             </form>
           </div>
@@ -99,7 +99,7 @@
   {% endif %}
 </div>
 
-<script>
+<script nonce="{{ csp_nonce }}">
 (function () {
   // --- Upload with a live progress bar (plain form POST gives no feedback) ---
   var form = document.getElementById("upload-form");

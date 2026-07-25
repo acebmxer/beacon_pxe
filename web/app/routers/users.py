@@ -55,7 +55,13 @@ def reset_password(user_id: int, request: Request, password: str = Form(...),
     if pw_err:
         return users_page(request, user, db, error=pw_err)
     target.password_hash = hash_password(password)
+    # Invalidate the target's existing sessions (see deps.current_user). If the
+    # admin reset their own password here, keep this session alive by adopting
+    # the new epoch.
+    target.session_epoch = (target.session_epoch or 0) + 1
     db.commit()
+    if target.id == user.id:
+        request.session["ep"] = target.session_epoch
     return RedirectResponse("/users", status_code=303)
 
 
@@ -109,5 +115,9 @@ def change_own_password(request: Request, current_password: str = Form(...),
     if pw_err:
         return profile_page(request, user, db, error=pw_err)
     user.password_hash = hash_password(new_password)
+    # Log out this account's OTHER sessions (see deps.current_user), but keep the
+    # one making the change by adopting the new epoch.
+    user.session_epoch = (user.session_epoch or 0) + 1
     db.commit()
+    request.session["ep"] = user.session_epoch
     return profile_page(request, user, db, ok="Password updated.")

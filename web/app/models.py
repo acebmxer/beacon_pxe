@@ -19,6 +19,10 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     # "admin" or "user".
     role: Mapped[str] = mapped_column(String(16), default="user")
+    # Bumped whenever the password changes, so existing signed sessions (which
+    # carry the epoch they were minted with) stop authenticating — a password
+    # reset then actually logs a stolen/old session out. See deps.current_user.
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
     @property

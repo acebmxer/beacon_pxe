@@ -40,7 +40,14 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User | None
     uid = request.session.get("uid")
     if not uid:
         return None
-    return db.get(User, uid)
+    user = db.get(User, uid)
+    # Reject a session for a deleted user, or one minted before the user's
+    # password last changed (epoch bumped on every password change). Clear the
+    # now-invalid cookie so the browser stops presenting it.
+    if user is None or request.session.get("ep") != user.session_epoch:
+        request.session.clear()
+        return None
+    return user
 
 
 def require_user(request: Request, db: Session = Depends(get_db)) -> User:
@@ -64,6 +71,9 @@ def render(request: Request, db: Session, template: str, **ctx):
     base = {
         "request": request,
         "user": user,
+        # Per-request CSP nonce (set by the security_headers middleware); stamped
+        # on every inline <script> so it runs under the nonce-based policy.
+        "csp_nonce": getattr(request.state, "csp_nonce", ""),
         "theme": get_setting(db, "theme"),
         "menu_title": get_setting(db, "menu_title"),
         "asset_version": _asset_version(),

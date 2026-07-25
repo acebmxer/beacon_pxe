@@ -33,9 +33,9 @@ SMB_DIR = _path("SMB_DIR", "./data/smb")
 # write to it. See services.drivers.
 DRIVERS_DIR = _path("DRIVERS_DIR", str(SMB_DIR / "drivers"))
 # Windows Setup logs dropped by WinPE after a failed install (see smb/smb.conf's
-# writable [capture] share and services.images._capture_lines). A host bind so
-# both the smb container (writes) and web (reads, for the Diagnostics page) see
-# it; under DATA_DIR, so no extra compose mount for web.
+# optional [capture] share and services.images._capture_lines). A host bind so
+# both the smb container (writes) and web (reads) see it; under DATA_DIR, so no
+# extra compose mount for web. Only populated when ENABLE_DIAG_CAPTURE=true.
 CAPTURE_DIR = _path("CAPTURE_DIR", str(DATA_DIR / "capture"))
 # Boot-critical NIC drivers, BAKED INTO each Windows image's boot.wim rather
 # than served over SMB — a driver WinPE needs to reach the network in the first

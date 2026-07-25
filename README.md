@@ -18,7 +18,7 @@ mkdir beacon && cd beacon
 curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/.env.example
 # edit .env: SERVER_IP, BOOT_INTERFACE, ADMIN_PASSWORD (leave blank to auto-generate)
-mkdir -p data/drivers data/capture
+mkdir -p data/drivers
 docker compose up -d
 ```
 

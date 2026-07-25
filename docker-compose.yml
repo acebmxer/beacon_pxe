@@ -129,12 +129,16 @@ services:
     network_mode: host
     security_opt:
       - no-new-privileges:true
+    environment:
+      # Expose the guest-writable Setup-log capture share only when explicitly
+      # enabled (for debugging a failed Windows install). Off by default.
+      ENABLE_DIAG_CAPTURE: ${ENABLE_DIAG_CAPTURE:-false}
     volumes:
       - smbroot:/srv/install:ro
       # Same drop-in driver folder the web container writes; WinPE maps it as Z:.
       - ./data/drivers:/srv/install/drivers:ro
-      # Writable diagnostics share: WinPE drops Windows Setup logs here after a
-      # failed install. Under ./data, so the web container already sees it.
+      # Diagnostics capture target (Windows Setup logs). Shared only when
+      # ENABLE_DIAG_CAPTURE=true; under ./data so the web container sees it too.
       - ./data/capture:/srv/capture
 
   # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker

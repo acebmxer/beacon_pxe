@@ -42,8 +42,9 @@ Delete the existing partitions at Setup's "Where do you want to install Windows?
 screen (down to unallocated space) and continue. A cluttered disk can knock loose
 the drive letter Setup uses for the SMB install media mid-apply. Standard
 dirty-disk behaviour — the same ISO on a USB stick behaves identically; a fresh
-disk installs without the step. Failed attempts leave Windows Setup's own logs in
-`./data/capture` on the host.
+disk installs without the step. To see exactly where Setup stopped, set
+`ENABLE_DIAG_CAPTURE=true` in `.env` and re-run the install — WinPE drops Setup's
+logs into `./data/capture` on the host.
 
 ## Windows "System error 1231" / network timeout in WinPE
 

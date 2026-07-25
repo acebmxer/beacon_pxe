@@ -439,17 +439,15 @@ def _driver_lines(drivers_share: str) -> list[str]:
     used, which keeps a folder holding several vendors — or several versions —
     of a package safe. The copy is local so the pass never reads over SMB.
 
-    We deliberately do NOT `drvload` these .infs ourselves anymore. The first
-    version of this script force-loaded every storage .inf before launching
-    Setup, and on real VMD machines (11th-gen NUC, a VMD laptop; 2026-07)
-    WinPE bugchecked the moment Setup's window appeared: the sweep live-binds
-    a boot-critical miniport, then Setup's windowsPE driver pass re-services
-    the same bound controller. A VM without VMD never crashed — nothing bound.
-    The answer file alone is the supported mechanism (it's how MDT/SCCM inject
-    these drivers) and makes the disks visible just as early. The baked NIC
-    sweep in _beacon_setup_cmd is different on purpose: it runs before
-    networking exists, nothing is using the NIC yet, and NICs aren't
-    boot-critical to WinPE (X: is a ramdisk).
+    We deliberately do NOT `drvload` these .infs ourselves. Force-loading a
+    storage .inf live-binds a boot-critical miniport, and Setup's own windowsPE
+    driver pass then re-services that same bound controller — which bugchecks
+    WinPE on a real VMD/RAID machine the instant Setup starts (a VM without the
+    controller never binds, so it never shows). The answer file alone is the
+    supported path (it's how MDT/SCCM inject these) and populates the disk list
+    just as early. The baked NIC sweep in _beacon_setup_cmd is different on
+    purpose: it runs before networking exists, nothing is using the NIC yet, and
+    NICs aren't boot-critical to WinPE (X: is a ramdisk).
 
     We also do NOT use `setup.exe /ReflectDrivers`: empirically it aborts the
     file-copy at ~5-8% with a generic "installation has failed" (a VM that
@@ -495,10 +493,8 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
     drivers = rf"\\{host}\{_SMB_SHARE}\{_SMB_DRIVERS}"
     lines = [
         "@echo off",
-        # If anything bugchecks, hold the stop screen instead of instantly
-        # rebooting — WinPE's default auto-restart turns a diagnosable BSOD
-        # into "it just rebooted", which is how the drvload-vs-Setup storage
-        # crash stayed invisible across three machines.
+        # Hold a bugcheck's stop screen instead of letting WinPE auto-reboot, so
+        # a driver crash is a readable stop code rather than a silent reboot loop.
         r"reg add HKLM\SYSTEM\CurrentControlSet\Control\CrashControl"
         r" /v AutoReboot /t REG_DWORD /d 0 /f >nul 2>&1",
         # Baked-in NIC drivers load BEFORE wpeinit so its DHCP runs on the new
@@ -565,7 +561,9 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
             # moment it fails — robust even when a failure reboots the machine
             # (our post-exit :capture only runs if setup.exe returns to us). This
             # is what makes a 0x80070035 ("network path not found") mid-install
-            # diagnosable: Setup re-copies its logs at failure time.
+            # diagnosable: Setup re-copies its logs at failure time. The share is
+            # opt-in (smb ENABLE_DIAG_CAPTURE, off by default), so when it isn't
+            # exported the mount just fails and every capture step no-ops.
             rf'net use N: \\{host}\{_CAPTURE_SHARE} /user:guest "" >nul 2>&1',
             rf"set CAPDIR=N:\img{image_id}-%RANDOM%",
             "set COPYLOGS=",

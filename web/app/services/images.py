@@ -403,10 +403,28 @@ def _unattend_xml() -> str:
         '        </PathAndCredentials>\r\n'
         for i, p in enumerate(paths, start=1)
     )
+    # The UserData/ProductKey block is required, not optional: with an answer
+    # file present, the classic Setup resolves the target edition from it
+    # instead of asking, and on multi-edition media without an ei.cfg a missing
+    # ProductKey is a modal "Windows cannot read the <ProductKey> setting"
+    # error before the first screen. An explicitly EMPTY key means "no key
+    # now": Setup shows the normal interactive edition list, keeping the rest
+    # of the install as stock as before.
     return (
         '<?xml version="1.0" encoding="utf-8"?>\r\n'
         '<unattend xmlns="urn:schemas-microsoft-com:unattend">\r\n'
         '  <settings pass="windowsPE">\r\n'
+        '    <component name="Microsoft-Windows-Setup"\r\n'
+        '               processorArchitecture="amd64"\r\n'
+        '               publicKeyToken="31bf3856ad364e35" language="neutral"\r\n'
+        '               versionScope="nonSxS"\r\n'
+        '               xmlns:wcm="http://schemas.microsoft.com/WMIConfig/2002/State">\r\n'
+        '      <UserData>\r\n'
+        '        <ProductKey>\r\n'
+        '          <Key></Key>\r\n'
+        '        </ProductKey>\r\n'
+        '      </UserData>\r\n'
+        '    </component>\r\n'
         '    <component name="Microsoft-Windows-PnpCustomizationsWinPE"\r\n'
         '               processorArchitecture="amd64"\r\n'
         '               publicKeyToken="31bf3856ad364e35" language="neutral"\r\n'
@@ -573,7 +591,26 @@ def _beacon_setup_cmd(server_ip: str, image_id: int) -> str:
             # %SETUPOPT% is empty unless drop-in drivers were staged above, in
             # which case it is "/unattend:<answer file>" (PnP driver injection).
             # %COPYLOGS% points Setup's own log-copy at the capture folder.
-            "Y:\\setup.exe %SETUPOPT% %COPYLOGS%",
+            #
+            # sources\setup.exe is the CLASSIC Setup. The root Y:\setup.exe is
+            # a stub, and on Win11 24H2-and-later media (verified on 25H2) it
+            # launches the new SetupHost ("media setup") flow instead — which
+            # loads an unattend storage driver into live WinPE (so the disk
+            # list fills in) but never
+            # copies it into the installed OS ("DriverCopy: No drivers." in
+            # setupact.log, C:\$Windows.~BT\Drivers\Unattend left empty), so
+            # every VMD/RAID machine bugchecks 0x7B on first boot. The classic
+            # Setup still runs the windowsPE-pass DriverPaths reflection, and
+            # on pre-24H2 media the root stub chained to sources\setup.exe
+            # anyway, so preferring it changes nothing there.
+            "set SETUPEXE=Y:\\setup.exe",
+            "if exist Y:\\sources\\setup.exe set SETUPEXE=Y:\\sources\\setup.exe",
+            # /copylogs is a SetupHost-flow option; the classic Setup rejects it
+            # with a modal "unknown command-line option" error before doing
+            # anything. Classic-flow failures are still collected by :capture,
+            # which runs when Setup exits back to this script.
+            'if not "%SETUPEXE%"=="Y:\\setup.exe" set COPYLOGS=',
+            "%SETUPEXE% %SETUPOPT% %COPYLOGS%",
             # Setup returns here only when it exits WITHOUT rebooting — i.e. it
             # failed early. Add the WinPE-side logs Setup's /copylogs doesn't.
             "call :capture",

@@ -111,10 +111,14 @@ the host paths directly):
   appears in Setup's list *and* the driver installs into the finished OS
   (without it, VMD/RAID machines bugcheck `INACCESSIBLE_BOOT_DEVICE` / 0x7B on
   first boot). Shared by every Windows image; applies on the next boot, no
-  reprocessing. Mixing vendors/versions is safe — Setup installs only the driver
-  the hardware needs. The alternative is per-machine firmware: switch `VMD
-  Controller` / `Intel RST` / `SATA Operation` to **AHCI** (don't do this to a
-  disk that already has Windows on it).
+  reprocessing. Beacon launches the classic Setup (`sources\setup.exe`), so
+  installs show the pre-24H2 UI: the new flow on 24H2-and-later media loads a
+  staged storage driver for its own use but never installs it into the
+  finished OS, which is precisely the 0x7B above. Mixing vendors/versions is
+  safe — Setup installs only the driver the hardware needs. The alternative is
+  per-machine firmware: switch `VMD Controller` / `Intel RST` / `SATA
+  Operation` to **AHCI** (don't do this to a disk that already has Windows on
+  it).
 - **Network** (`./data/nicdrivers`) — a NIC driver can't come over the network
   it's needed to reach, so these are baked into every image's `boot.wim` and
   loaded before networking starts (symptom of a missing one: WinPE mounts fail

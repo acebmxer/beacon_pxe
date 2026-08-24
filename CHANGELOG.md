@@ -33,6 +33,21 @@ through the proxy. Existing databases are migrated automatically on start.
 
 ### Fixed
 
+- **Windows 11 24H2-and-later installs on VMD/RAID machines no longer bugcheck
+  `INACCESSIBLE_BOOT_DEVICE` on first boot.** Starting with 24H2 (25H2 media
+  behaves identically; the fix was validated on 25H2), the root `setup.exe`
+  became a stub for a new Setup flow that loads a staged storage
+  driver into WinPE — the disk list fills in — but never copies it into the
+  OS it installs (`DriverCopy: No drivers.` in its own logs), so the finished
+  install can't see its own disk. WinPE now launches the classic
+  `sources\setup.exe`, which still reflects `DriverPaths` drivers into the
+  installed OS; pre-24H2 media chained the stub to it anyway, so those
+  installs are unchanged. Two knock-on fixes ride along: the answer file
+  carries an explicitly empty `<ProductKey>` (the classic Setup requires the
+  element on multi-edition media and refuses to start without it), and
+  `/copylogs` is only passed to the new-flow stub (the classic Setup rejects
+  the option). Visible change: Windows Setup shows the classic (pre-24H2)
+  UI on all media.
 - **The `latest`-channel web container crash-looped on startup** after a
   dependency bump to bcrypt 5.0, which is incompatible with passlib and made
   password hashing fail before the app could bind. bcrypt is pinned back to

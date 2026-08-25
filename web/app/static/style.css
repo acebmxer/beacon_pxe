@@ -305,6 +305,17 @@ tr.dragging { opacity: 0.4; background: var(--bg-elev-2); }
 .auth-card .tag { text-align: center; color: var(--text-dim); margin-bottom: 22px; font-size: 0.9rem; }
 .auth-card .btn { width: 100%; justify-content: center; margin-top: 20px; }
 
+/* ---------- TOTP enrolment QR ---------- */
+/* The white tile is deliberate in both themes: the QR is black-on-white so a
+   phone camera sees the polarity and quiet zone it expects. */
+.totp-qr {
+  display: inline-block; margin: 14px 0 10px;
+  padding: 10px; background: #fff;
+  border-radius: var(--radius-sm); border: 1px solid var(--border);
+  line-height: 0;
+}
+.totp-qr svg { display: block; }
+
 @media (max-width: 820px) {
   .sidebar { width: 64px; }
   .brand span, .nav a span:not(.ico) { display: none; }

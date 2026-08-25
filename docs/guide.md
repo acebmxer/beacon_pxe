@@ -153,6 +153,37 @@ sudo mount -t nfs nas.local:/exports/pxe /mnt/pxe-images
 Add it to `/etc/fstab` so it survives reboots. Database and settings live in
 `./data/pxe.db`; uploaded ISOs live under `IMAGE_PATH`.
 
+## Accounts, 2FA, and the API
+
+**Two-factor authentication** is per-user, enabled from **My Profile**. Beacon
+generates a TOTP secret (RFC 6238, 30-second steps), shows it as a QR code and as
+text for manual entry, and only activates it once you enter a valid code — a
+mistyped secret can't lock you out. A code from the previous or next window is
+accepted, so reading one just as it rolls over still works. Losing the
+authenticator means losing the account: another admin can delete and recreate the
+user, or clear `totp_enabled` in `data/pxe.db` directly.
+
+**API tokens** are also per-user (one at a time), issued and revoked from **My
+Profile**, and sent as `Authorization: Bearer <token>`. A token authenticates as
+its user with that user's role, and bypasses the 2FA challenge by design — it is
+a credential for machines, so treat it like a password. Any authenticated
+endpoint accepts one:
+
+| Endpoint | Access | Returns |
+| --- | --- | --- |
+| `GET /api/events` | user | Boot records — `image_id`, `since` (ISO 8601 UTC), `limit` (default 100, max 1000) |
+| `GET /api/stats` | user | Live host metrics, recent clients, deploy counters |
+| `GET /api/backup` | admin | The SQLite database as `beacon-backup.db` |
+| `GET /healthz` | none | Liveness plus a database connectivity check |
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" \
+  "http://<server-ip>:8080/api/events?since=2026-01-01T00:00:00&limit=50"
+```
+
+Note that a missing or invalid token gets the browser behaviour — `303` to
+`/login` — rather than a `401`, so check the status code, not just the body.
+
 ## Building from source (development)
 
 ```bash

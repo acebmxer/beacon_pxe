@@ -8,6 +8,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe user-facing changes: what a Beacon operator gains, loses, or has
 to do differently. Internal refactors that change nothing observable are omitted.
 
+## [Unreleased]
+
+**Accounts gain a second factor and API tokens; the boot menu gains ordering and
+an explicit default.** `docker-compose.yml` is unchanged and no action is needed
+on upgrade — existing databases pick up the new user and image columns
+automatically on start.
+
+### Added
+
+- **Two-factor authentication (TOTP).** Each user can enable an authenticator
+  app from **My Profile**: Beacon shows a QR code to scan (plus the secret in
+  text for manual entry), and activation requires a valid code, so a mistyped
+  secret can't lock you out. Once enabled, login asks for the 6-digit code on a
+  second page — the password alone grants no access to any page until the code
+  is confirmed. Codes from the adjacent 30-second window are accepted, so one
+  read just as the code rolls over still works. Disabling 2FA requires the
+  account password.
+- **API tokens for scripted access.** **My Profile** issues an opaque Bearer
+  token that authenticates requests without a browser session
+  (`Authorization: Bearer <token>`), and revokes or regenerates it on demand.
+  One token per account, and it authenticates as that account with its role.
+- **A boot menu you control the shape of.** Images can be dragged into an
+  explicit order on the **Images** page, and one image can be marked the
+  default. The marked image is highlighted, flagged with a ★ in the menu, and
+  is the only thing that starts the countdown — with nothing marked, the menu
+  highlights the first entry but **waits for a human indefinitely rather than
+  booting anything on its own**. The countdown length is configurable under
+  **Server Settings → Appearance & boot menu** (`0` disables it).
+- **Database backup on demand.** **Server Settings** downloads the whole SQLite
+  database as `beacon-backup.db`, copied to a temp file first so the download
+  is consistent even if writes land mid-transfer.
+- **Deployment history and stats.** The dashboard reports total deploys,
+  distinct clients ever served, and the top five images, folding per-boot
+  records into the log-derived client table so a client's IP and last-seen time
+  are right in proxyDHCP mode too. An admin can reset the all-time counters.
+  `GET /api/events` exposes the same boot records for external tooling, with
+  `image_id`, `since`, and `limit` filters.
+- **`GET /healthz`** — an unauthenticated liveness probe that also checks the
+  database is reachable, for monitoring and container health checks.
+- **The web UI works on a phone.** A hamburger menu collapses the sidebar on
+  small screens, and long-running image work now raises a toast instead of
+  requiring you to watch the page.
+- **A test suite** (`web/tests`, pytest) covering auth, the login throttle,
+  iPXE menu rendering, and route access control.
+
+### Changed
+
+- **iPXE is now built from a pinned commit** rather than whatever `master`
+  happened to be on the day you rebuilt. The pin is the revision verified to
+  boot both a UEFI VM and a physical laptop. Move it deliberately with
+  `--build-arg IPXE_REF=<ref>` once you've tested a client boot.
+- **NFS `rpc.mountd` now binds a fixed port** (`20048`, override with
+  `MOUNTD_PORT`) instead of a different ephemeral port on every restart, which
+  makes it possible to put the NFS service behind a host firewall. With one,
+  open `111/tcp+udp`, `2049/tcp`, and `20048/tcp` on the boot interface.
+- **Logs are emitted as one JSON object per line**, so they can be shipped and
+  queried rather than only read by eye.
+
+### Security
+
+- **The failed-login lockout now survives a restart.** It was in-memory, so
+  restarting the container cleared the throttle and handed an attacker a fresh
+  budget of attempts; it is now persisted per client IP in the database.
+
 ## [0.5.0] - 2026-08-24
 
 **Security hardening.** No action is needed for a normal trusted-LAN install and

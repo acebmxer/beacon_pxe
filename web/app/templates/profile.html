@@ -53,10 +53,13 @@
 
     {% if new_totp_secret %}
       <div class="alert info" style="margin-top:14px;">
-        <b>Scan this URI with your authenticator app</b> (Google Authenticator, Aegis, Authy, etc.),
+        <b>Scan this code with your authenticator app</b> (Google Authenticator, Aegis, Authy, etc.),
         or copy the secret and enter it manually.
       </div>
-      <p><a class="btn ghost sm" href="{{ totp_uri }}" target="_blank" rel="noopener">Open in authenticator app</a></p>
+      <div class="totp-qr">{{ totp_qr|safe }}</div>
+      {# otpauth:// only resolves on a device that has an authenticator installed,
+         so this is the path for someone opening Beacon on the phone itself. #}
+      <p class="muted">On a phone? <a href="{{ totp_uri }}" rel="noopener">Open in your authenticator app</a>.</p>
       <label>Secret key (manual entry)</label>
       <input class="mono" type="text" value="{{ new_totp_secret }}" readonly
              style="letter-spacing:0.1em;" onclick="this.select()">

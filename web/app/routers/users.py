@@ -105,7 +105,7 @@ def delete_user(user_id: int, request: Request,
 def profile_page(request: Request, user: User = Depends(require_user),
                  db: Session = Depends(get_db), error: str = "", ok: str = ""):
     return render(request, db, "profile.html", active="profile", error=error, ok=ok,
-                  totp_uri=None, new_totp_secret=None)
+                  totp_uri=None, totp_qr=None, new_totp_secret=None)
 
 
 @router.post("/profile/password")
@@ -116,11 +116,11 @@ def change_own_password(request: Request, current_password: str = Form(...),
     if not verify_password(current_password, user.password_hash):
         return render(request, db, "profile.html", active="profile",
                       error="Current password is incorrect.", ok="",
-                      totp_uri=None, new_totp_secret=None)
+                      totp_uri=None, totp_qr=None, new_totp_secret=None)
     pw_err = password_error(new_password)
     if pw_err:
         return render(request, db, "profile.html", active="profile",
-                      error=pw_err, ok="", totp_uri=None, new_totp_secret=None)
+                      error=pw_err, ok="", totp_uri=None, totp_qr=None, new_totp_secret=None)
     user.password_hash = hash_password(new_password)
     # Log out this account's OTHER sessions (see deps.current_user), but keep the
     # one making the change by adopting the new epoch.
@@ -128,7 +128,7 @@ def change_own_password(request: Request, current_password: str = Form(...),
     db.commit()
     request.session["ep"] = user.session_epoch
     return render(request, db, "profile.html", active="profile",
-                  ok="Password updated.", error="", totp_uri=None, new_totp_secret=None)
+                  ok="Password updated.", error="", totp_uri=None, totp_qr=None, new_totp_secret=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -149,7 +149,8 @@ def totp_setup_start(request: Request, user: User = Depends(require_user),
     request.session["totp_pending"] = secret
     return render(request, db, "profile.html", active="profile",
                   error="", ok="",
-                  totp_uri=uri, new_totp_secret=secret)
+                  totp_uri=uri, totp_qr=totp_svc.provisioning_qr_svg(uri),
+                  new_totp_secret=secret)
 
 
 @router.post("/profile/totp/confirm")
@@ -161,19 +162,20 @@ def totp_setup_confirm(request: Request, code: str = Form(...),
     if not secret:
         return render(request, db, "profile.html", active="profile",
                       error="Setup session expired. Please start again.", ok="",
-                      totp_uri=None, new_totp_secret=None)
+                      totp_uri=None, totp_qr=None, new_totp_secret=None)
     if not totp_svc.verify(secret, code):
         uri = totp_svc.provisioning_uri(secret, user.username)
         return render(request, db, "profile.html", active="profile",
                       error="Code did not match. Try again.", ok="",
-                      totp_uri=uri, new_totp_secret=secret)
+                      totp_uri=uri, totp_qr=totp_svc.provisioning_qr_svg(uri),
+                      new_totp_secret=secret)
     user.totp_secret = secret
     user.totp_enabled = 1
     db.commit()
     request.session.pop("totp_pending", None)
     return render(request, db, "profile.html", active="profile",
                   ok="Two-factor authentication enabled.", error="",
-                  totp_uri=None, new_totp_secret=None)
+                  totp_uri=None, totp_qr=None, new_totp_secret=None)
 
 
 @router.post("/profile/totp/disable")
@@ -183,13 +185,13 @@ def totp_disable(request: Request, current_password: str = Form(...),
     if not verify_password(current_password, user.password_hash):
         return render(request, db, "profile.html", active="profile",
                       error="Current password is incorrect.", ok="",
-                      totp_uri=None, new_totp_secret=None)
+                      totp_uri=None, totp_qr=None, new_totp_secret=None)
     user.totp_secret = None
     user.totp_enabled = 0
     db.commit()
     return render(request, db, "profile.html", active="profile",
                   ok="Two-factor authentication disabled.", error="",
-                  totp_uri=None, new_totp_secret=None)
+                  totp_uri=None, totp_qr=None, new_totp_secret=None)
 
 
 # --------------------------------------------------------------------------- #
@@ -203,7 +205,7 @@ def generate_token(request: Request, user: User = Depends(require_user),
     db.commit()
     return render(request, db, "profile.html", active="profile",
                   ok="New API token generated.", error="",
-                  totp_uri=None, new_totp_secret=None)
+                  totp_uri=None, totp_qr=None, new_totp_secret=None)
 
 
 @router.post("/profile/token/revoke")
@@ -214,4 +216,4 @@ def revoke_token(request: Request, user: User = Depends(require_user),
     db.commit()
     return render(request, db, "profile.html", active="profile",
                   ok="API token revoked.", error="",
-                  totp_uri=None, new_totp_secret=None)
+                  totp_uri=None, totp_qr=None, new_totp_secret=None)

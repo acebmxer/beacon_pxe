@@ -7,6 +7,7 @@ the common case where the user reads the code just before it rolls over.
 from __future__ import annotations
 
 import pyotp
+import segno
 
 
 def generate_secret() -> str:
@@ -17,6 +18,19 @@ def generate_secret() -> str:
 def provisioning_uri(secret: str, username: str, issuer: str = "Beacon") -> str:
     """Return an otpauth:// URI that authenticator apps can import."""
     return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=issuer)
+
+
+def provisioning_qr_svg(uri: str) -> str:
+    """Return the provisioning URI as an inline <svg> QR code.
+
+    Black on white regardless of the UI theme: phone cameras want the maximum
+    contrast and the canonical polarity, so the template frames it in a white
+    tile rather than tinting the modules to match a dark page. The default
+    four-module quiet zone is kept for the same reason. Error correction "M"
+    is what authenticator apps expect for an otpauth URI of this length.
+    """
+    qr = segno.make(uri, error="m")
+    return qr.svg_inline(scale=5, dark="#000000", light="#ffffff")
 
 
 def verify(secret: str, code: str) -> bool:

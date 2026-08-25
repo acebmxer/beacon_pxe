@@ -57,7 +57,9 @@ async def upload(request: Request, background: BackgroundTasks,
             size += len(chunk)
 
     img = Image(
-        name=name.strip() or filename.rsplit(".", 1)[0],
+        # name is written verbatim into boot.ipxe; strip control chars so a
+        # newline can't inject additional iPXE commands into the menu.
+        name=strip_control_chars(name.strip()) or filename.rsplit(".", 1)[0],
         filename=filename,
         status="pending",
         size_bytes=size,

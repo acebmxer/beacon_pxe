@@ -1,16 +1,17 @@
 """FastAPI application entrypoint."""
+import json
 import logging
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import config
-from .db import init_db, SessionLocal
+from .db import init_db, SessionLocal, get_db
 from .deps import RedirectException
 from .store import get_setting
 from .services import bootstrap
@@ -18,8 +19,32 @@ from .routers import (auth, dashboard, settings, images, drivers, users, setup,
                       track, updates)
 from .services import updates as update_svc
 
-logging.basicConfig(level=logging.INFO,
-                    format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+
+class _JsonFormatter(logging.Formatter):
+    """Emit one JSON object per log record."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        payload = {
+            "ts": self.formatTime(record, "%Y-%m-%dT%H:%M:%S"),
+            "level": record.levelname,
+            "logger": record.name,
+            "msg": record.getMessage(),
+        }
+        if record.exc_info:
+            payload["exc"] = self.formatException(record.exc_info)
+        return json.dumps(payload)
+
+
+def _setup_logging() -> None:
+    handler = logging.StreamHandler()
+    handler.setFormatter(_JsonFormatter())
+    root = logging.getLogger()
+    root.handlers.clear()
+    root.addHandler(handler)
+    root.setLevel(logging.INFO)
+
+
+_setup_logging()
 
 
 @asynccontextmanager
@@ -44,6 +69,20 @@ app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")
 @app.exception_handler(RedirectException)
 async def _redirect_handler(request: Request, exc: RedirectException):
     return RedirectResponse(exc.location, status_code=303)
+
+
+# ----- Health check (unauthenticated, for monitoring) ---------------------- #
+@app.get("/healthz", include_in_schema=False)
+def healthz():
+    """Liveness probe: verifies the process is up and the DB is reachable."""
+    from sqlalchemy import text as _text
+    from .db import engine as _engine
+    try:
+        with _engine.connect() as conn:
+            conn.execute(_text("SELECT 1"))
+        return JSONResponse({"status": "ok"})
+    except Exception as exc:  # pragma: no cover
+        return JSONResponse({"status": "error", "detail": str(exc)}, status_code=503)
 
 
 # Security headers applied to every response. Scripts are allowed ONLY via a
@@ -74,15 +113,18 @@ async def security_headers(request: Request, call_next):
     nonce = secrets.token_urlsafe(16)
     request.state.csp_nonce = nonce
     response = await call_next(request)
-    response.headers.setdefault("Content-Security-Policy", _csp(nonce))
-    response.headers.setdefault("X-Frame-Options", "DENY")
-    response.headers.setdefault("X-Content-Type-Options", "nosniff")
-    response.headers.setdefault("Referrer-Policy", "same-origin")
+    # Exempt /healthz and /static from CSP (not user-facing HTML pages).
+    if not request.url.path.startswith(("/healthz", "/static")):
+        response.headers.setdefault("Content-Security-Policy", _csp(nonce))
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("Referrer-Policy", "same-origin")
     return response
 
 
 # Force the first-run wizard until it's completed.
-_EXEMPT_PREFIXES = ("/login", "/logout", "/setup", "/static", "/theme", "/track")
+_EXEMPT_PREFIXES = ("/login", "/logout", "/setup", "/static", "/theme", "/track",
+                    "/healthz")
 
 
 @app.middleware("http")

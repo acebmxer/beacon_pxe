@@ -1,11 +1,15 @@
-"""Server settings: DHCP mode, services, boot menu, theme."""
+"""Server settings: DHCP mode, services, boot menu, theme, backup."""
+import os
+import shutil
+import tempfile
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, Depends, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi import APIRouter, BackgroundTasks, Depends, Form, Request
+from fastapi.responses import FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
+from .. import config
 from ..deps import require_admin, require_user, render
 from ..models import User
 from ..store import all_settings, set_setting, strip_control_chars
@@ -19,7 +23,7 @@ BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http"}
 TEXT_KEYS = {
     "server_ip", "boot_interface", "dhcp_mode", "dhcp_range_start",
     "dhcp_range_end", "dhcp_subnet_mask", "dhcp_gateway", "dhcp_dns",
-    "menu_title", "theme",
+    "menu_title", "theme", "boot_timeout",
 }
 
 
@@ -36,7 +40,14 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     form = await request.form()
     for key in TEXT_KEYS:
         if key in form:
-            set_setting(db, key, strip_control_chars(str(form[key]).strip()))
+            raw = strip_control_chars(str(form[key]).strip())
+            # boot_timeout must be a non-negative integer.
+            if key == "boot_timeout":
+                try:
+                    raw = str(max(0, int(raw)))
+                except ValueError:
+                    raw = "30"
+            set_setting(db, key, raw)
     # Checkboxes only appear in the form when checked.
     for key in BOOL_KEYS:
         set_setting(db, key, "1" if key in form else "0")
@@ -70,3 +81,22 @@ def toggle_theme(request: Request, user: User = Depends(require_user),
             if parsed.query:
                 dest += "?" + parsed.query
     return RedirectResponse(dest, status_code=303)
+
+
+@router.get("/api/backup")
+def backup(background: BackgroundTasks, user: User = Depends(require_admin)):
+    """Download the SQLite database as beacon-backup.db.
+
+    Creates a temporary copy of the live DB file so the download is consistent
+    even if writes land during the transfer. The temp file is deleted after the
+    response body is sent.
+    """
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".db")
+    tmp.close()
+    shutil.copy2(config.DB_PATH, tmp.name)
+    background.add_task(os.unlink, tmp.name)
+    return FileResponse(
+        tmp.name,
+        filename="beacon-backup.db",
+        media_type="application/octet-stream",
+    )

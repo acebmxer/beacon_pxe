@@ -1,0 +1,5 @@
+# Development / test dependencies — not installed in the production image.
+# Install alongside requirements.txt:
+#   pip install -r requirements.txt -r requirements-dev.txt
+pytest==8.3.5
+httpx==0.28.1

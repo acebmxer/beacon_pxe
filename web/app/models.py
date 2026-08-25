@@ -1,7 +1,7 @@
-"""Database models: User, Setting, Image."""
+"""Database models: User, Setting, Image, BootEvent, LoginLockout."""
 from datetime import datetime, timezone
 
-from sqlalchemy import String, Integer, DateTime, Text
+from sqlalchemy import String, Integer, DateTime, Text, Float
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .db import Base
@@ -24,10 +24,36 @@ class User(Base):
     # reset then actually logs a stolen/old session out. See deps.current_user.
     session_epoch: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # TOTP second factor. totp_secret is a base32 seed; totp_enabled gates the
+    # login flow. A user with totp_enabled=0 has no second factor regardless of
+    # whether a secret is stored.
+    totp_secret: Mapped[str | None] = mapped_column(String(64), nullable=True, default=None)
+    totp_enabled: Mapped[int] = mapped_column(Integer, default=0)
+    # Opaque Bearer token for API / scripted access. Generated on demand; NULL
+    # means no token has been issued. Unique so the lookup is an index scan.
+    api_token: Mapped[str | None] = mapped_column(String(128), nullable=True,
+                                                   unique=True, default=None)
 
     @property
     def is_admin(self) -> bool:
         return self.role == "admin"
+
+
+class LoginLockout(Base):
+    """Persistent per-IP failed-login state (survives container restarts).
+
+    Keyed by the proxy-aware client IP string. fail_count and last_fail are
+    only used when there is no active lockout (locked_until in the future);
+    once the lockout expires both are reset on the next successful login.
+    All times are Unix epoch floats (wall clock, not monotonic).
+    """
+    __tablename__ = "login_lockouts"
+
+    ip: Mapped[str] = mapped_column(String(64), primary_key=True)
+    fail_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Wall-clock Unix timestamp when the lockout expires (NULL = no active lockout).
+    locked_until: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
+    last_fail: Mapped[float | None] = mapped_column(Float, nullable=True, default=None)
 
 
 class Setting(Base):
@@ -77,3 +103,8 @@ class Image(Base):
     enabled: Mapped[int] = mapped_column(Integer, default=1)
     size_bytes: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Display ordering in the boot menu (NULL = sort after explicit positions,
+    # then alphabetically). Only one image should have is_default=1 at a time;
+    # the first-run render and ipxe.render() both treat it as the default choice.
+    display_order: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
+    is_default: Mapped[int] = mapped_column(Integer, default=0)

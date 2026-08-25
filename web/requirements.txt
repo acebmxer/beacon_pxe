@@ -16,3 +16,5 @@ bcrypt==4.0.1
 # 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
 python-multipart==0.0.32
 itsdangerous==2.2.0
+# TOTP second-factor authentication (RFC 6238).
+pyotp==2.9.0

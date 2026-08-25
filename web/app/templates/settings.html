@@ -84,12 +84,23 @@
   </div>
 
   <div class="card" style="margin-top:18px;">
-    <h2>Appearance</h2>
-    <label for="theme">Theme</label>
-    <select id="theme" name="theme">
-      <option value="dark" {{ 'selected' if settings.theme=='dark' }}>Dark</option>
-      <option value="light" {{ 'selected' if settings.theme=='light' }}>Light</option>
-    </select>
+    <h2>Appearance &amp; boot menu</h2>
+    <div class="row">
+      <div>
+        <label for="theme">Theme</label>
+        <select id="theme" name="theme">
+          <option value="dark" {{ 'selected' if settings.theme=='dark' }}>Dark</option>
+          <option value="light" {{ 'selected' if settings.theme=='light' }}>Light</option>
+        </select>
+      </div>
+      <div>
+        <label for="boot_timeout">Boot menu timeout (seconds)</label>
+        <input id="boot_timeout" name="boot_timeout" type="number" min="0" max="3600"
+               value="{{ settings.boot_timeout or '30' }}"
+               placeholder="30">
+        <p class="muted" style="margin:4px 0 0;">Timeout only applies when a default image is set. 0 = wait indefinitely.</p>
+      </div>
+    </div>
   </div>
 
   <div class="toolbar" style="margin-top:20px;">
@@ -281,4 +292,12 @@
   load();
 })();
 </script>
+
+<div class="card" id="backup" style="margin-top:18px;">
+  <h2>Backup</h2>
+  <div class="sub">Download a snapshot of the Beacon database (settings, users, images, boot events). ISO files and extracted boot files are not included — they live on the volumes and can be re-uploaded or re-processed from the existing ISOs.</div>
+  <div class="toolbar" style="margin-top:14px;">
+    <a class="btn ghost sm" href="/api/backup" download="beacon-backup.db">Download beacon-backup.db</a>
+  </div>
+</div>
 {% endblock %}

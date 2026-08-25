@@ -36,11 +36,29 @@ menu ${menu-title}
 item --gap -- ----------------------- Operating Systems -----------------------
 """
 
-MENU_FOOTER = """item --gap -- ----------------------------------------------------------------
+_MENU_FOOTER_TIMEOUT = """item --gap -- ----------------------------------------------------------------
 item shell        iPXE shell
 item reboot       Reboot
 item exit_ipxe    Continue local boot
-choose --default {default} --timeout 30000 target && goto ${target}
+choose --default {default} --timeout {timeout_ms} target && goto ${target}
+
+:shell
+echo Type 'exit' to return to the menu.
+shell
+goto start
+
+:reboot
+reboot
+
+:exit_ipxe
+exit
+"""
+
+_MENU_FOOTER_NO_TIMEOUT = """item --gap -- ----------------------------------------------------------------
+item shell        iPXE shell
+item reboot       Reboot
+item exit_ipxe    Continue local boot
+choose --default {default} target && goto ${target}
 
 :shell
 echo Type 'exit' to return to the menu.
@@ -123,7 +141,8 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
     labels = []
     for img in images:
         tag = f"os_{img.id}"
-        items.append(f"item {tag}        {img.name}")
+        star = " ★" if img.is_default else ""
+        items.append(f"item {tag}        {img.name}{star}")
         base_url = "${boot-url}"
         args = img.boot_args or ""
         if img.os_family == "xcpng":
@@ -150,24 +169,49 @@ def render(db: Session) -> str:
     server_ip = settings.get("server_ip", "")
     title = settings.get("menu_title", "Beacon")
 
+    # Sort by explicit display_order (NULLs last), then alphabetically.
     images = db.execute(
         select(Image).where(Image.status == "ready", Image.enabled == 1)
-        # Case-insensitive so an uppercase name sorts among the lowercase ones
-        # instead of ahead of them (SQLite's default order is case-sensitive).
-        .order_by(func.lower(Image.name))
+        .order_by(Image.display_order.is_(None), Image.display_order,
+                  func.lower(Image.name))
     ).scalars().all()
 
     items, labels = _image_entries(images)
     if not items:
         items = "item --gap -- (no images uploaded yet — add one in the web UI)"
 
-    default = f"os_{images[0].id}" if images else "exit_ipxe"
+    # Highlighting and auto-booting are separate decisions.
+    #
+    # Highlight: an explicitly marked image if there is one, else the first entry
+    # in menu order, so the selection starts on an OS rather than on "Continue
+    # local boot". This only positions the cursor -- it boots nothing.
+    #
+    # Countdown: ONLY for an explicitly marked image. With nothing marked the
+    # menu waits for a human indefinitely. Never pick a boot target on the
+    # admin's behalf.
+    default_img = next((img for img in images if img.is_default), None)
+    highlight = default_img or (images[0] if images else None)
+    default = f"os_{highlight.id}" if highlight else "exit_ipxe"
+
+    timeout_secs = 0
+    if default_img:
+        try:
+            timeout_secs = max(0, int(settings.get("boot_timeout", "30")))
+        except ValueError:
+            timeout_secs = 30
+
+    if timeout_secs > 0:
+        footer = _MENU_FOOTER_TIMEOUT.replace(
+            "{default}", default).replace(
+            "{timeout_ms}", str(timeout_secs * 1000))
+    else:
+        footer = _MENU_FOOTER_NO_TIMEOUT.replace("{default}", default)
 
     text = (
         _header(server_ip, title)
         + MENU_TOP
         + items + "\n"
-        + MENU_FOOTER.replace("{default}", default)
+        + footer
         + "\n"
         + labels
     )

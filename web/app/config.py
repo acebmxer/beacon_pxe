@@ -125,6 +125,9 @@ DEFAULTS = {
     # UI.
     "theme": "dark",
     "menu_title": "Beacon",
+    # Boot menu: timeout in seconds applied only when a default image is set.
+    # 0 means wait indefinitely (no timeout).
+    "boot_timeout": "30",
     # First-run wizard completion flag.
     "setup_complete": "0",
 }

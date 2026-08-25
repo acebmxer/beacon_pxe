@@ -250,6 +250,50 @@ tr:last-child td { border-bottom: none; }
 .progress .bar-label { margin-top: 6px; font-size: 0.85rem; color: var(--text-dim); }
 .toolbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
+/* ---------- Drag-and-drop upload zone ------------------------------------ */
+.drop-zone {
+  border: 2px dashed var(--border); border-radius: var(--radius);
+  padding: 20px; transition: border-color 0.15s, background 0.15s;
+}
+.drop-zone-over {
+  border-color: var(--accent);
+  background: rgba(0, 180, 216, 0.06);
+}
+.drop-zone-inner {
+  display: flex; align-items: center; gap: 12px;
+  margin-bottom: 4px; color: var(--text-dim); font-size: 0.9rem;
+}
+.drop-zone-icon { font-size: 1.6rem; }
+
+/* ---------- Drag-to-reorder rows ----------------------------------------- */
+.drag-col { width: 28px; padding: 0 6px; }
+.drag-handle {
+  cursor: grab; color: var(--text-dim); font-size: 1.1rem;
+  text-align: center; user-select: none;
+}
+.drag-handle:active { cursor: grabbing; }
+tr.dragging { opacity: 0.4; background: var(--bg-elev-2); }
+
+/* ---------- Default image star ------------------------------------------- */
+.default-star { color: var(--warn); margin-left: 6px; font-size: 0.85rem; }
+.btn-default-active {
+  border-color: var(--warn); color: var(--warn);
+}
+
+/* ---------- Toast notifications ------------------------------------------ */
+#toast-container {
+  position: fixed; bottom: 24px; right: 24px;
+  z-index: 9999; display: flex; flex-direction: column; gap: 10px;
+  pointer-events: none;
+}
+.toast {
+  pointer-events: auto; min-width: 240px; max-width: 360px;
+  opacity: 0; transform: translateY(12px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+  box-shadow: var(--shadow);
+}
+.toast.toast-visible { opacity: 1; transform: translateY(0); }
+
 /* ---------- Auth (login / setup centered) ---------- */
 .auth-wrap { display: grid; place-items: center; min-height: 100vh; padding: 20px; }
 .auth-card {
@@ -265,4 +309,60 @@ tr:last-child td { border-bottom: none; }
   .sidebar { width: 64px; }
   .brand span, .nav a span:not(.ico) { display: none; }
   .grid.cols-4, .grid.cols-3, .grid.cols-2 { grid-template-columns: 1fr; }
+}
+
+/* ---------- Mobile hamburger (< 540px) ----------------------------------- */
+.nav-toggle-input { display: none; }
+.nav-hamburger { display: none; }
+.nav-overlay { display: none; }
+
+@media (max-width: 540px) {
+  .app { display: block; }
+
+  .sidebar {
+    position: fixed; top: 0; left: 0; bottom: 0;
+    width: 240px; z-index: 200;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+    /* Override the 820px rule that collapses icons */
+    display: flex;
+  }
+  .sidebar .brand span,
+  .sidebar .nav a span:not(.ico) { display: inline; }
+
+  .nav-toggle-input:checked ~ .sidebar {
+    transform: translateX(0);
+  }
+  .nav-toggle-input:checked ~ .nav-overlay {
+    display: block;
+    position: fixed; inset: 0; z-index: 199;
+    background: rgba(0, 0, 0, 0.45);
+  }
+
+  .nav-hamburger {
+    display: flex; flex-direction: column; justify-content: center; gap: 5px;
+    position: fixed; top: 14px; left: 14px; z-index: 300;
+    width: 38px; height: 38px; padding: 6px;
+    background: var(--bg-elev); border: 1px solid var(--border);
+    border-radius: var(--radius-sm); cursor: pointer;
+  }
+  .nav-hamburger span {
+    display: block; height: 2px; background: var(--text);
+    border-radius: 2px; transition: all 0.2s ease;
+  }
+  .nav-toggle-input:checked ~ .nav-hamburger span:nth-child(1) {
+    transform: translateY(7px) rotate(45deg);
+  }
+  .nav-toggle-input:checked ~ .nav-hamburger span:nth-child(2) {
+    opacity: 0;
+  }
+  .nav-toggle-input:checked ~ .nav-hamburger span:nth-child(3) {
+    transform: translateY(-7px) rotate(-45deg);
+  }
+
+  .content { margin-left: 0; }
+  .topbar { padding: 14px 14px 14px 60px; flex-wrap: wrap; gap: 8px; }
+  .topbar h1 { font-size: 1rem; }
+  .build-chip { display: none; }
+  main { padding: 14px; }
 }

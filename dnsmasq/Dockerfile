@@ -16,9 +16,17 @@
 # undionly is UNDI-only and carries no native drivers, so it can't drive USB.
 # ---------------------------------------------------------------------------
 FROM debian:bookworm-slim AS ipxe
-# Which iPXE revision to build (branch, tag, or commit). Override for a pinned,
-# reproducible build:  --build-arg IPXE_REF=v1.21.1
-ARG IPXE_REF=master
+# Which iPXE revision to build (branch, tag, or commit).
+#
+# PINNED ON PURPOSE. This tracked "master" until 2026-08-24, which meant every
+# rebuild silently swapped in whatever iPXE HEAD happened to be that day -- the
+# bootloader changing underneath you is not something you want to discover while
+# debugging a boot failure. This commit is the build verified to boot both a UEFI
+# VM and a physical laptop (it reports itself as "iPXE/2.0.0+ (gd86e8)").
+#
+# To move the pin: build with --build-arg IPXE_REF=<ref>, verify a real client
+# boots, then update this default to the full SHA of what you tested.
+ARG IPXE_REF=d86e86dff8c0091bc16b79c3190e6e2f05d4eda9
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git make gcc gcc-multilib binutils perl liblzma-dev mtools ca-certificates \
     && rm -rf /var/lib/apt/lists/*

@@ -9,6 +9,13 @@
 <body>
 {% if user and not hide_chrome %}
 <div class="app">
+  <!-- Mobile hamburger toggle (checkbox hack — no JS needed for open/close) -->
+  <input type="checkbox" id="nav-toggle" class="nav-toggle-input" aria-hidden="true">
+  <label for="nav-toggle" class="nav-hamburger" aria-label="Toggle navigation">
+    <span></span><span></span><span></span>
+  </label>
+  <label for="nav-toggle" class="nav-overlay"></label>
+
   <aside class="sidebar">
     <div class="brand">
       <span class="logo">PX</span><span>PXE Server</span>
@@ -48,6 +55,8 @@
         </span>
       </div>
     </div>
+    <!-- Toast notification area for async events (e.g. image processing complete) -->
+    <div id="toast-container"></div>
     <main>
       {% block content %}{% endblock %}
     </main>
@@ -85,6 +94,28 @@
       el.form.submit();
     }
   });
+  // Close the mobile nav when a link inside it is clicked.
+  var toggle = document.getElementById("nav-toggle");
+  if (toggle) {
+    document.querySelectorAll(".nav a").forEach(function (a) {
+      a.addEventListener("click", function () { toggle.checked = false; });
+    });
+  }
+  // Toast helper: showToast(msg, type) where type is "ok" | "info" | "warn" | "error"
+  window.showToast = function (msg, type) {
+    var container = document.getElementById("toast-container");
+    if (!container) return;
+    var t = document.createElement("div");
+    t.className = "toast alert " + (type || "info");
+    t.textContent = msg;
+    container.appendChild(t);
+    // Animate in
+    requestAnimationFrame(function () { t.classList.add("toast-visible"); });
+    setTimeout(function () {
+      t.classList.remove("toast-visible");
+      setTimeout(function () { t.parentNode && t.parentNode.removeChild(t); }, 350);
+    }, 5000);
+  };
 })();
 </script>
 </body>

@@ -16,3 +16,9 @@ bcrypt==4.0.1
 # 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
 python-multipart==0.0.32
 itsdangerous==2.2.0
+# TOTP second-factor authentication (RFC 6238).
+pyotp==2.9.0
+# QR rendering for the TOTP enrolment screen. Pure Python with no dependencies
+# on 3.10+ (no Pillow, no C extension) and it emits SVG, so the code is inlined
+# into the page — a Beacon with no internet access still shows a scannable QR.
+segno==1.6.6

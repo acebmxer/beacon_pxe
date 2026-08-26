@@ -30,10 +30,11 @@ RUN curl -fsSL -o /usr/local/share/wimboot \
 
 WORKDIR /app
 
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+COPY tests ./tests
 
 # Build provenance, surfaced in the UI's Updates panel so an admin can tell what
 # is actually deployed. Set by the publish workflow from the docker metadata

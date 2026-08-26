@@ -41,8 +41,22 @@ def _migrate():
     hand. Each step checks first, so this is safe to run on every startup.
     """
     with engine.begin() as conn:
-        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
-        if "session_epoch" not in cols:
+        user_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
+        if "session_epoch" not in user_cols:
             conn.execute(text(
                 "ALTER TABLE users ADD COLUMN session_epoch "
                 "INTEGER NOT NULL DEFAULT 0"))
+        if "totp_secret" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN totp_secret TEXT"))
+        if "totp_enabled" not in user_cols:
+            conn.execute(text(
+                "ALTER TABLE users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0"))
+        if "api_token" not in user_cols:
+            conn.execute(text("ALTER TABLE users ADD COLUMN api_token TEXT"))
+
+        img_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(images)"))}
+        if "display_order" not in img_cols:
+            conn.execute(text("ALTER TABLE images ADD COLUMN display_order INTEGER"))
+        if "is_default" not in img_cols:
+            conn.execute(text(
+                "ALTER TABLE images ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"))

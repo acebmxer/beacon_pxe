@@ -11,6 +11,10 @@
     <table>
       <tr><td>Username</td><td><b>{{ user.username }}</b></td></tr>
       <tr><td>Account type</td><td><span class="badge role-{{ user.role }}">{{ user.role }}</span></td></tr>
+      <tr><td>Two-factor auth</td><td>
+        {% if user.totp_enabled %}<span class="badge ready">Enabled</span>
+        {% else %}<span class="badge off">Disabled</span>{% endif %}
+      </td></tr>
     </table>
   </div>
   <div class="card">
@@ -23,6 +27,82 @@
       <input id="new_password" name="new_password" type="password" required>
       <div class="toolbar" style="margin-top:16px;"><button class="btn" type="submit">Update password</button></div>
     </form>
+  </div>
+</div>
+
+<div class="grid cols-2" style="margin-top:18px;">
+  <div class="card">
+    <h2>Two-factor authentication</h2>
+    {% if user.totp_enabled %}
+      <div class="sub">Your account requires an authenticator code at login.</div>
+      {% if new_totp_secret %}
+        {# setup in progress — show QR / secret #}
+      {% else %}
+        <p class="muted">To disable 2FA, confirm your password below.</p>
+        <form method="post" action="/profile/totp/disable">
+          <label for="disable_password">Current password</label>
+          <input id="disable_password" name="current_password" type="password" required>
+          <div class="toolbar" style="margin-top:16px;">
+            <button class="btn danger sm" type="submit">Disable two-factor auth</button>
+          </div>
+        </form>
+      {% endif %}
+    {% else %}
+      <div class="sub">Add a second factor so your account requires an authenticator app code at every login.</div>
+    {% endif %}
+
+    {% if new_totp_secret %}
+      <div class="alert info" style="margin-top:14px;">
+        <b>Scan this code with your authenticator app</b> (Google Authenticator, Aegis, Authy, etc.),
+        or copy the secret and enter it manually.
+      </div>
+      <div class="totp-qr">{{ totp_qr|safe }}</div>
+      {# otpauth:// only resolves on a device that has an authenticator installed,
+         so this is the path for someone opening Beacon on the phone itself. #}
+      <p class="muted">On a phone? <a href="{{ totp_uri }}" rel="noopener">Open in your authenticator app</a>.</p>
+      <label>Secret key (manual entry)</label>
+      <input class="mono" type="text" value="{{ new_totp_secret }}" readonly
+             style="letter-spacing:0.1em;" onclick="this.select()">
+      <p class="muted" style="margin-top:8px;">Once you've added the account, enter the current 6-digit code below to activate 2FA.</p>
+      <form method="post" action="/profile/totp/confirm">
+        <label for="totp_code">Authenticator code</label>
+        <input id="totp_code" name="code" type="text" inputmode="numeric"
+               pattern="[0-9]{6}" maxlength="6" placeholder="000000" autocomplete="one-time-code" required>
+        <div class="toolbar" style="margin-top:16px;">
+          <button class="btn" type="submit">Activate 2FA</button>
+        </div>
+      </form>
+    {% elif not user.totp_enabled %}
+      <form method="post" action="/profile/totp/setup" style="margin-top:14px;">
+        <button class="btn ghost sm" type="submit">Set up authenticator app</button>
+      </form>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <h2>API token</h2>
+    <div class="sub">Use a Bearer token to authenticate scripts and API calls without a browser session.</div>
+    {% if user.api_token %}
+      <label>Current token</label>
+      <input class="mono" type="text" value="{{ user.api_token }}" readonly
+             style="font-size:0.78rem;" onclick="this.select()">
+      <p class="muted" style="margin-top:6px;">Include in requests as:
+        <span class="mono">Authorization: Bearer &lt;token&gt;</span></p>
+      <div class="toolbar" style="margin-top:14px;">
+        <form class="inline-form" method="post" action="/profile/token/generate">
+          <button class="btn ghost sm" type="submit">Rotate token</button>
+        </form>
+        <form class="inline-form" method="post" action="/profile/token/revoke"
+              data-confirm="Revoke your API token? Scripts using it will stop working.">
+          <button class="btn danger sm" type="submit">Revoke</button>
+        </form>
+      </div>
+    {% else %}
+      <p class="muted">No token issued yet.</p>
+      <form method="post" action="/profile/token/generate">
+        <button class="btn ghost sm" type="submit">Generate token</button>
+      </form>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

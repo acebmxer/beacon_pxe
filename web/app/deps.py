@@ -2,6 +2,7 @@
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from pathlib import Path
@@ -36,7 +37,24 @@ class RedirectException(Exception):
         self.location = location
 
 
+def _user_by_token(db: Session, authorization: str | None) -> User | None:
+    """Return a User if the request carries a valid Bearer token, else None."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization[len("Bearer "):]
+    if not token:
+        return None
+    return db.execute(
+        select(User).where(User.api_token == token)
+    ).scalar_one_or_none()
+
+
 def current_user(request: Request, db: Session = Depends(get_db)) -> User | None:
+    # Prefer Bearer token (API / scripted access) over session cookie.
+    token_user = _user_by_token(db, request.headers.get("authorization"))
+    if token_user is not None:
+        return token_user
+
     uid = request.session.get("uid")
     if not uid:
         return None

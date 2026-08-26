@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Two-factor authentication{% endblock %}
+{% block bare %}
+<div class="auth-wrap">
+  <div class="auth-card">
+    <div class="brand">
+      <span class="logo">PX</span><span>PXE Server</span>
+    </div>
+    <p class="tag">Enter the 6-digit code from your authenticator app.</p>
+    {% if error %}<div class="alert error" style="margin-bottom:14px;">{{ error }}</div>{% endif %}
+    <form method="post" action="/login/totp">
+      <label for="code">Authenticator code</label>
+      <input id="code" name="code" type="text" inputmode="numeric"
+             pattern="[0-9]{6}" maxlength="6" placeholder="000000"
+             autocomplete="one-time-code" autofocus required>
+      <button class="btn" type="submit">Verify</button>
+    </form>
+    <p style="margin-top:16px;text-align:center;">
+      <a href="/login">← Back to login</a>
+    </p>
+  </div>
+</div>
+{% endblock %}

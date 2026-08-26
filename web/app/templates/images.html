@@ -9,14 +9,20 @@
   <div class="sub">Upload an <b>ISO</b> file. Linux ISOs are auto-processed: the kernel
     and initrd are extracted and a boot menu entry is created.</div>
   <form id="upload-form" method="post" action="/images/upload" enctype="multipart/form-data">
-    <div class="row">
-      <div>
-        <label for="name">Display name (optional)</label>
-        <input id="name" name="name" placeholder="e.g. Ubuntu 24.04 Live">
+    <div id="drop-zone" class="drop-zone">
+      <div class="drop-zone-inner">
+        <span class="drop-zone-icon">💿</span>
+        <span class="drop-zone-text">Drop an ISO here, or click to browse</span>
       </div>
-      <div>
-        <label for="file">ISO file</label>
-        <input id="file" name="file" type="file" accept=".iso" required>
+      <div class="row" style="margin-top:14px;">
+        <div>
+          <label for="name">Display name (optional)</label>
+          <input id="name" name="name" placeholder="e.g. Ubuntu 24.04 Live">
+        </div>
+        <div>
+          <label for="file">ISO file</label>
+          <input id="file" name="file" type="file" accept=".iso" required>
+        </div>
       </div>
     </div>
     <div class="toolbar" style="margin-top:16px;">
@@ -40,17 +46,35 @@
 {% endif %}
 
 <div class="card" style="margin-top:18px;">
-  <h2>Images</h2>
-  <div class="sub">{{ images|length }} total</div>
+  <div class="card-head">
+    <div>
+      <h2>Images</h2>
+      <div class="sub">{{ images|length }} total
+        {% if user.is_admin %} — drag rows to reorder; ★ marks the default boot entry{% endif %}
+      </div>
+    </div>
+  </div>
   {% if not images %}
     <p class="muted">No images yet.{% if user.is_admin %} Upload one above.{% endif %}</p>
   {% else %}
-  <table>
-    <thead><tr><th>Name</th><th>OS</th><th>Status</th><th>In menu</th><th>Boot args</th>{% if user.is_admin %}<th></th>{% endif %}</tr></thead>
-    <tbody>
+  <table id="images-table">
+    <thead><tr>
+      {% if user.is_admin %}<th class="drag-col"></th>{% endif %}
+      <th>Name</th><th>OS</th><th>Status</th><th>In menu</th><th>Boot args</th>
+      {% if user.is_admin %}<th></th>{% endif %}
+    </tr></thead>
+    <tbody id="images-tbody">
     {% for img in images %}
-      <tr data-image-id="{{ img.id }}" data-status="{{ img.status }}">
-        <td><b>{{ img.name }}</b><br><span class="muted mono">{{ img.filename }}</span></td>
+      <tr data-image-id="{{ img.id }}" data-status="{{ img.status }}"
+          {% if user.is_admin %}draggable="true"{% endif %}>
+        {% if user.is_admin %}
+        <td class="drag-col drag-handle" title="Drag to reorder">⠿</td>
+        {% endif %}
+        <td>
+          <b>{{ img.name }}</b>
+          {% if img.is_default %}<span class="default-star" title="Default boot entry">★</span>{% endif %}
+          <br><span class="muted mono">{{ img.filename }}</span>
+        </td>
         <td>{{ img.os_family }}</td>
         <td>
           <span class="badge {{ img.status }}">{{ 'needs reprocess' if img.status == 'needs_reprocess' else img.status }}</span>
@@ -75,6 +99,10 @@
             {% if img.status == 'ready' %}
             <form class="inline-form" method="post" action="/images/{{ img.id }}/toggle">
               <button class="btn ghost sm" type="submit">{{ 'Hide' if img.enabled else 'Show' }}</button>
+            </form>
+            <form class="inline-form" method="post" action="/images/{{ img.id }}/default"
+                  title="{{ 'Clear default' if img.is_default else 'Set as default boot entry' }}">
+              <button class="btn ghost sm {{ 'btn-default-active' if img.is_default }}" type="submit">{{ '★ Default' if img.is_default else '☆ Default' }}</button>
             </form>
             <form class="inline-form" method="post" action="/images/{{ img.id }}/retry">
               <button class="btn ghost sm" type="submit">Reprocess</button>
@@ -101,7 +129,42 @@
 
 <script nonce="{{ csp_nonce }}">
 (function () {
-  // --- Upload with a live progress bar (plain form POST gives no feedback) ---
+  // --- Drag-and-drop ISO upload ------------------------------------------
+  var dropZone = document.getElementById("drop-zone");
+  var fileInput = document.getElementById("file");
+  if (dropZone && fileInput) {
+    dropZone.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      dropZone.classList.add("drop-zone-over");
+    });
+    ["dragleave", "dragend"].forEach(function (evt) {
+      dropZone.addEventListener(evt, function () {
+        dropZone.classList.remove("drop-zone-over");
+      });
+    });
+    dropZone.addEventListener("drop", function (e) {
+      e.preventDefault();
+      dropZone.classList.remove("drop-zone-over");
+      var files = e.dataTransfer && e.dataTransfer.files;
+      if (files && files.length) {
+        var f = files[0];
+        if (!f.name.toLowerCase().endsWith(".iso")) {
+          var errBox = document.getElementById("upload-error");
+          if (errBox) { errBox.textContent = "Only .iso files are supported."; errBox.style.display = "block"; }
+          return;
+        }
+        // Modern browsers support setting files via DataTransfer.
+        try {
+          var dt = new DataTransfer();
+          dt.items.add(f);
+          fileInput.files = dt.files;
+        } catch (ex) { /* older browsers — no-op */ }
+        dropZone.querySelector(".drop-zone-text").textContent = f.name;
+      }
+    });
+  }
+
+  // --- Upload with a live progress bar ------------------------------------
   var form = document.getElementById("upload-form");
   if (form) {
     var btn = document.getElementById("upload-btn");
@@ -111,10 +174,10 @@
     var errBox = document.getElementById("upload-error");
 
     form.addEventListener("submit", function (e) {
-      var fileInput = form.querySelector('input[type="file"]');
-      if (!fileInput || !fileInput.files.length) return;  // let native required kick in
+      var fi = form.querySelector('input[type="file"]');
+      if (!fi || !fi.files.length) return;
 
-      var fname = fileInput.files[0].name.toLowerCase();
+      var fname = fi.files[0].name.toLowerCase();
       if (!fname.endsWith(".iso")) {
         e.preventDefault();
         errBox.textContent = "Only .iso files are supported. See the README for why.";
@@ -135,7 +198,6 @@
       xhr.addEventListener("load", function () {
         bar.style.width = "100%";
         label.textContent = "Upload complete — processing…";
-        // Reload to the images list; the row will show "processing" and poll below.
         window.location = "/images";
       });
       xhr.addEventListener("error", function () {
@@ -151,31 +213,96 @@
     });
   }
 
-  // --- Poll while any image is still extracting, refresh when it settles ---
+  // --- Drag-to-reorder rows -----------------------------------------------
+  var tbody = document.getElementById("images-tbody");
+  if (tbody) {
+    var dragging = null;
+
+    tbody.addEventListener("dragstart", function (e) {
+      dragging = e.target.closest("tr");
+      if (dragging) dragging.classList.add("dragging");
+    });
+    tbody.addEventListener("dragend", function () {
+      if (dragging) { dragging.classList.remove("dragging"); dragging = null; }
+    });
+    tbody.addEventListener("dragover", function (e) {
+      e.preventDefault();
+      var target = e.target.closest("tr");
+      if (target && dragging && target !== dragging) {
+        var rect = target.getBoundingClientRect();
+        var after = e.clientY > rect.top + rect.height / 2;
+        tbody.insertBefore(dragging, after ? target.nextSibling : target);
+      }
+    });
+    tbody.addEventListener("drop", function (e) {
+      e.preventDefault();
+      // POST the new order to the server.
+      var ids = Array.prototype.slice.call(tbody.querySelectorAll("tr[data-image-id]"))
+                  .map(function (r) { return r.dataset.imageId; });
+      var fd = new FormData();
+      fd.append("order", ids.join(","));
+      fetch("/images/order", { method: "POST", body: fd })
+        .catch(function () {});
+    });
+  }
+
+  // --- SSE: toast when processing completes (or fall back to polling) ------
   var rows = Array.prototype.slice.call(
     document.querySelectorAll("tr[data-image-id]"));
   var transient = function (s) { return s === "pending" || s === "processing"; };
-  if (!rows.some(function (r) { return transient(r.dataset.status); })) return;
+  var hasTransient = rows.some(function (r) { return transient(r.dataset.status); });
+  if (!hasTransient) return;
 
   var initial = {};
   rows.forEach(function (r) { initial[r.dataset.imageId] = r.dataset.status; });
 
-  var tick = function () {
-    fetch("/images/status", { headers: { "Accept": "application/json" } })
-      .then(function (res) { return res.ok ? res.json() : null; })
-      .then(function (items) {
-        if (items) {
-          var changed = items.some(function (it) {
-            var id = String(it.id);
-            return id in initial && initial[id] !== it.status;
-          });
-          if (changed) { window.location.reload(); return; }
+  var notified = false;
+  function handleUpdate(items) {
+    var anyDone = false;
+    items.forEach(function (it) {
+      var id = String(it.id);
+      if (id in initial && initial[id] !== it.status &&
+          !transient(it.status)) {
+        anyDone = true;
+        if (it.status === "ready" && window.showToast) {
+          window.showToast("Image ready: processing complete.", "ok");
+        } else if (it.status === "error" && window.showToast) {
+          window.showToast("Image processing failed.", "error");
         }
-        setTimeout(tick, 2500);
-      })
-      .catch(function () { setTimeout(tick, 2500); });
-  };
-  setTimeout(tick, 2500);
+        initial[id] = it.status;
+      }
+    });
+    // Reload the page once per batch to reflect final status in the table.
+    if (anyDone && !notified) {
+      notified = true;
+      setTimeout(function () { window.location.reload(); }, 2000);
+    }
+  }
+
+  // Try SSE first.
+  if (typeof EventSource !== "undefined") {
+    var es = new EventSource("/images/events");
+    es.onmessage = function (e) {
+      try { handleUpdate(JSON.parse(e.data)); } catch (ex) {}
+    };
+    es.onerror = function () { es.close(); startPolling(); };
+    return;
+  }
+
+  // Fallback: polling.
+  function startPolling() {
+    var tick = function () {
+      fetch("/images/status", { headers: { "Accept": "application/json" } })
+        .then(function (res) { return res.ok ? res.json() : null; })
+        .then(function (items) {
+          if (items) handleUpdate(items);
+          setTimeout(tick, 2500);
+        })
+        .catch(function () { setTimeout(tick, 2500); });
+    };
+    setTimeout(tick, 2500);
+  }
+  startPolling();
 })();
 </script>
 {% endblock %}

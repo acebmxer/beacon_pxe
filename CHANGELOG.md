@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe user-facing changes: what a Beacon operator gains, loses, or has
 to do differently. Internal refactors that change nothing observable are omitted.
 
-## [Unreleased]
+## [0.6.0] - 2026-08-25
 
 **Accounts gain a second factor and API tokens, the boot menu gains ordering and
 an explicit default, and the database can be backed up and restored.**
@@ -545,7 +545,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.2.3...v0.3.0

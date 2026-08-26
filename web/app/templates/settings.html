@@ -294,10 +294,253 @@
 </script>
 
 <div class="card" id="backup" style="margin-top:18px;">
-  <h2>Backup</h2>
-  <div class="sub">Download a snapshot of the Beacon database (settings, users, images, boot events). ISO files and extracted boot files are not included — they live on the volumes and can be re-uploaded or re-processed from the existing ISOs.</div>
+  <h2>Backup &amp; restore</h2>
+  <div class="sub">A snapshot of the Beacon database: settings, users, images and boot events. ISO files and extracted boot files are not included — they live on the volumes and are re-processed from the existing ISOs.</div>
+
+  {% if restore_notice and restore_notice.text %}
+  <div class="alert {{ 'warn' if restore_notice.level == 'warn' else 'ok' }}"
+       id="restore-notice"
+       style="display:flex;align-items:center;justify-content:space-between;gap:16px;">
+    <span>{{ restore_notice.text }}</span>
+    <button type="button" class="btn ghost sm" id="btn-restore-dismiss" style="flex:none;">Dismiss</button>
+  </div>
+  {% endif %}
+
   <div class="toolbar" style="margin-top:14px;">
     <a class="btn ghost sm" href="/api/backup" download="beacon-backup.db">Download beacon-backup.db</a>
+    <button type="button" class="btn ghost sm" id="btn-restore-pick">Restore from backup…</button>
+    <input type="file" id="restore-file" accept=".db" style="display:none;">
   </div>
+
+  <div id="restore-error" class="alert error" style="display:none;margin-top:14px;"></div>
+  <div id="restore-status" class="muted" style="display:none;margin-top:12px;"></div>
+  <div id="restore-preview" style="display:none;margin-top:16px;"></div>
 </div>
+
+<script nonce="{{ csp_nonce }}">
+(function () {
+  var pickBtn   = document.getElementById("btn-restore-pick");
+  var fileInput = document.getElementById("restore-file");
+  var errorEl   = document.getElementById("restore-error");
+  var statusEl  = document.getElementById("restore-status");
+  var panelEl   = document.getElementById("restore-preview");
+  var dismissEl = document.getElementById("btn-restore-dismiss");
+  var token     = "";
+
+  function esc(s) {
+    return String(s == null ? "" : s).replace(/[&<>"'`]/g, function (c) {
+      return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;",
+               "'": "&#39;", "`": "&#96;" }[c];
+    });
+  }
+
+  // An empty setting is meaningful here (it's the difference between "no value"
+  // and a value), so show it as something rather than as blank space.
+  function val(s) {
+    return s === "" || s == null
+      ? '<span class="muted">(empty)</span>'
+      : '<span class="mono">' + esc(s) + "</span>";
+  }
+
+  function showError(msg) {
+    errorEl.textContent = msg;
+    errorEl.style.display = "";
+    statusEl.style.display = "none";
+    panelEl.style.display = "none";
+  }
+
+  function clearError() { errorEl.style.display = "none"; }
+
+  function fmtBytes(n) {
+    if (!n) return "0 B";
+    var u = ["B", "KB", "MB", "GB"], i = 0;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (i === 0 ? n : n.toFixed(1)) + " " + u[i];
+  }
+
+  function hostRows(rows) {
+    var label = { server_ip: "Server IP", boot_interface: "Boot interface" };
+    return rows.map(function (r) {
+      var keep = r.action === "keep";
+      return "<tr>" +
+        "<td>" + esc(label[r.key] || r.key) + "</td>" +
+        "<td>" + val(r.current) + "</td>" +
+        "<td>" + val(r.incoming) + "</td>" +
+        '<td><span class="badge ' + (keep ? "pending" : "ready") + '">' +
+          (keep ? "kept" : "restored") + "</span>" +
+        '<div class="muted">' + esc(r.reason) + "</div></td>" +
+        "</tr>";
+    }).join("");
+  }
+
+  function settingRows(rows) {
+    if (!rows.length) {
+      return '<p class="muted">No other settings differ from the ones in use now.</p>';
+    }
+    return "<table><thead><tr><th>Setting</th><th>Now</th><th>After restore</th>" +
+      "</tr></thead><tbody>" +
+      rows.map(function (r) {
+        return "<tr><td>" + esc(r.key) + "</td><td>" + val(r.current) +
+               "</td><td>" + val(r.incoming) + "</td></tr>";
+      }).join("") + "</tbody></table>";
+  }
+
+  function userLine(d) {
+    var parts = [];
+    if (d.added.length)   parts.push("<b>added:</b> " + esc(d.added.join(", ")));
+    if (d.removed.length) parts.push("<b>removed:</b> " + esc(d.removed.join(", ")));
+    if (d.kept.length)    parts.push("<b>kept:</b> " + esc(d.kept.join(", ")));
+    return parts.join(" · ") || "No change.";
+  }
+
+  function renderPreview(d) {
+    token = d.token;
+    var s = d.summary;
+
+    var html =
+      "<h3>Preview — nothing has changed yet</h3>" +
+      '<p class="muted">' + esc(d.filename) + " · " + fmtBytes(d.size_bytes) +
+        " · " + s.users + " user(s), " + s.admins + " admin(s), " +
+        s.images + " image(s), " + s.boot_events + " boot event(s)</p>" +
+
+      "<h4>Host settings</h4>" +
+      '<p class="muted">Checked against this machine, because restoring an IP ' +
+        "or interface belonging to another one silently breaks PXE.</p>" +
+      "<table><thead><tr><th>Setting</th><th>Now</th><th>In backup</th>" +
+        "<th>Outcome</th></tr></thead><tbody>" + hostRows(d.host) +
+        "</tbody></table>" +
+
+      "<h4>Other settings</h4>" + settingRows(d.settings) +
+
+      "<h4>Accounts</h4>" +
+      "<p>" + userLine(d.users) + "</p>" +
+      '<p class="muted">Passwords, 2FA enrolment and API tokens all revert to ' +
+        "their state at backup time. You will be signed out.</p>";
+
+    if (d.warnings.length) {
+      html += '<div class="alert warn" style="margin-top:16px;"><ul style="margin:0;padding-left:18px;">' +
+        d.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") +
+        "</ul></div>";
+    }
+
+    if (!d.can_restart) {
+      html += '<div class="alert error" style="margin-top:16px;">' +
+        "Beacon can't reach the Docker daemon, so it cannot restart itself to " +
+        "finish the restore. Applying now would leave the swapped database " +
+        "unused until you run <span class=\"mono\">docker compose restart web</span> " +
+        "on the host yourself.</div>";
+    }
+
+    html += '<div class="toolbar" style="margin-top:18px;">' +
+      '<button type="button" class="btn danger" id="btn-restore-apply">Restore this backup</button>' +
+      '<button type="button" class="btn ghost sm" id="btn-restore-cancel">Cancel</button>' +
+      "</div>";
+
+    panelEl.innerHTML = html;
+    panelEl.style.display = "";
+    statusEl.style.display = "none";
+    document.getElementById("btn-restore-apply")
+            .addEventListener("click", function () { applyRestore(d); });
+    document.getElementById("btn-restore-cancel")
+            .addEventListener("click", cancelRestore);
+  }
+
+  function upload(file) {
+    clearError();
+    panelEl.style.display = "none";
+    statusEl.textContent = "Checking " + file.name + "…";
+    statusEl.style.display = "";
+
+    var body = new FormData();
+    body.append("file", file);
+    fetch("/api/restore/preview", { method: "POST", body: body })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { showError(res.d.error || "The backup could not be read."); return; }
+        renderPreview(res.d);
+      })
+      .catch(function () { showError("Upload failed. Check the connection and try again."); });
+  }
+
+  function applyRestore(d) {
+    var kept = d.host.filter(function (r) { return r.action === "keep"; });
+    var msg = "Replace the live database with this backup?\n\n" +
+      "Every user, password and setting is replaced by the backup's, and you " +
+      "will be signed out. Beacon restarts to finish.\n\n" +
+      "The database being replaced is saved as data/pxe.db.pre-restore on the host.";
+    if (kept.length) {
+      msg += "\n\nKept from this host: " + kept.map(function (r) {
+        return r.key + " = " + (r.current || "(empty)");
+      }).join(", ");
+    }
+    if (!confirm(msg)) return;
+
+    panelEl.style.display = "none";
+    statusEl.textContent = "Restoring…";
+    statusEl.style.display = "";
+
+    var body = new FormData();
+    body.append("token", token);
+    fetch("/api/restore/apply", { method: "POST", body: body })
+      .then(function (r) { return r.json().then(function (d) { return { ok: r.ok, d: d }; }); })
+      .then(function (res) {
+        if (!res.ok) { showError(res.d.error || "The restore failed."); return; }
+        statusEl.textContent = "Restored. Waiting for Beacon to restart…";
+        waitForRestart();
+      })
+      // The container can go down before the response is delivered; the restore
+      // itself already committed, so wait for it to come back rather than
+      // reporting a failure that didn't happen.
+      .catch(function () {
+        statusEl.textContent = "Restored. Waiting for Beacon to restart…";
+        waitForRestart();
+      });
+  }
+
+  function waitForRestart() {
+    var seenDown = false;
+    var tries = 0;
+    var timer = setInterval(function () {
+      tries++;
+      fetch("/healthz", { cache: "no-store" })
+        .then(function (r) {
+          if (!r.ok) { seenDown = true; return; }
+          // Prefer reloading only after it has actually gone away and come
+          // back, so we don't reload against the still-running old process and
+          // show the pre-restore database. But a restart quick enough to fall
+          // between two polls would otherwise hang here forever, so give up on
+          // observing the gap after ~20s and reload anyway.
+          if (seenDown || tries >= 10) {
+            clearInterval(timer);
+            window.location.reload();
+          }
+        })
+        .catch(function () { seenDown = true; });
+      if (tries > 60) {
+        clearInterval(timer);
+        statusEl.innerHTML = "Beacon has not come back. Check the container with " +
+          '<span class="mono">docker compose logs web</span>.';
+      }
+    }, 2000);
+  }
+
+  function cancelRestore() {
+    panelEl.style.display = "none";
+    fileInput.value = "";
+    token = "";
+    fetch("/api/restore/cancel", { method: "POST" }).catch(function () {});
+  }
+
+  pickBtn.addEventListener("click", function () { fileInput.click(); });
+  fileInput.addEventListener("change", function () {
+    if (fileInput.files && fileInput.files[0]) upload(fileInput.files[0]);
+  });
+  if (dismissEl) {
+    dismissEl.addEventListener("click", function () {
+      document.getElementById("restore-notice").style.display = "none";
+      fetch("/api/restore/dismiss", { method: "POST" }).catch(function () {});
+    });
+  }
+})();
+</script>
 {% endblock %}

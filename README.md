@@ -75,9 +75,14 @@ docker compose down -v                        # stop + drop unpacked-image volum
 The admin UI can self-update too (**Settings → Updates**). `BEACON_TAG` in `.env`
 selects the channel: `stable` (releases) or `latest` (rolling `main`).
 
-**Server Settings → Backup** downloads the database (users, settings, image
-metadata) as `beacon-backup.db`. Uploaded ISOs live in `./data` and aren't part
-of it. `GET /healthz` is an unauthenticated liveness probe for monitoring.
+**Server Settings → Backup & restore** downloads the database (users, settings,
+image metadata) as `beacon-backup.db`, and restores one. It is a configuration
+snapshot: uploaded ISOs live in `./data` and aren't part of it, so images come
+back listed but marked *needs reprocess* until you reprocess them from the ISO.
+Restoring shows a preview of every change first, then swaps the database in and
+restarts Beacon — see the [guide](docs/guide.md#backup-and-restore) for what it
+keeps from the current host and how to undo one. `GET /healthz` is an
+unauthenticated liveness probe for monitoring.
 
 > **Updates never touch `docker-compose.yml` or `.env`.** When a release changes
 > either, the [CHANGELOG](CHANGELOG.md) says so — re-fetch the file and re-run

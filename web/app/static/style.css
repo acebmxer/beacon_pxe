@@ -316,6 +316,21 @@ tr.dragging { opacity: 0.4; background: var(--bg-elev-2); }
 }
 .totp-qr svg { display: block; }
 
+/* ---------- Restore preview ---------- */
+/* The backup card's own h2 is the smallest heading the rest of the UI uses, so
+   the preview's sections are scoped here rather than adding global h3/h4 rules
+   that would land on nothing else. */
+#restore-preview h3 { margin: 0 0 4px; font-size: 1.05rem; }
+#restore-preview h4 {
+  margin: 20px 0 6px; font-size: 0.78rem;
+  text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-dim);
+}
+#restore-preview p { margin: 0 0 8px; }
+#restore-preview table { margin-top: 6px; }
+/* Reasons sit under the outcome badge, so they need to read as a caption
+   rather than as a second line of table text. */
+#restore-preview td .muted { margin-top: 3px; }
+
 @media (max-width: 820px) {
   .sidebar { width: 64px; }
   .brand span, .nav a span:not(.ico) { display: none; }

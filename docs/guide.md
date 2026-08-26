@@ -174,6 +174,8 @@ endpoint accepts one:
 | `GET /api/events` | user | Boot records — `image_id`, `since` (ISO 8601 UTC), `limit` (default 100, max 1000) |
 | `GET /api/stats` | user | Live host metrics, recent clients, deploy counters |
 | `GET /api/backup` | admin | The SQLite database as `beacon-backup.db` |
+| `POST /api/restore/preview` | admin | Stages an uploaded backup, returns what restoring it would change |
+| `POST /api/restore/apply` | admin | Applies the staged backup (needs the preview's `token`) and restarts |
 | `GET /healthz` | none | Liveness plus a database connectivity check |
 
 ```bash
@@ -183,6 +185,79 @@ curl -H "Authorization: Bearer $TOKEN" \
 
 Note that a missing or invalid token gets the browser behaviour — `303` to
 `/login` — rather than a `401`, so check the status code, not just the body.
+
+## Backup and restore
+
+**Server Settings → Backup & restore** downloads `beacon-backup.db`: the SQLite
+database itself, holding users (password hashes, 2FA secrets, API tokens),
+every server setting, image metadata and boot history.
+
+It is a **configuration** snapshot, not a media backup. ISOs (`./data/images`),
+drop-in drivers (`./data/drivers`), your `.env`, and the extracted boot files on
+the `bootroot`/`nfsroot`/`smbroot` volumes are all outside it. Back the ISOs up
+separately if re-downloading them would be painful.
+
+### Restoring
+
+Upload the file on the same page. Beacon validates it, then shows a preview of
+exactly what would change — settings, accounts, and how each host setting was
+decided — before anything is touched. Confirming swaps the database in and
+restarts the web container; the page reconnects on its own.
+
+A backup is refused outright if it isn't a SQLite file, fails an integrity check
+(the usual sign of a truncated download), lacks Beacon's tables, or contains no
+admin account — restoring that last one would lock you out permanently.
+
+On the next start Beacon migrates the restored schema if the backup came from an
+older build, regenerates `dnsmasq.conf` and the boot menu from the restored rows,
+and marks any image whose extracted files are missing as *needs reprocess* so a
+broken entry can't sit in the boot menu. Reprocess those from **Images** to
+rebuild them from the ISO.
+
+### What is not restored
+
+**Host identity.** `server_ip` and `boot_interface` describe the machine, not
+your preferences, and a backup from other hardware carries values that are wrong
+here — dnsmasq would bind an interface that doesn't exist, or hand clients a
+next-server that isn't this box. Both are checked against the host: an interface
+must exist and an IP must be one the host answers to. A value that doesn't match
+is left alone, the current one is kept, and the preview says so. Restoring onto a
+replacement server with the same IP therefore just works; restoring onto a
+different base OS keeps this host's NIC name instead of the old one's.
+
+The rest of the DHCP block (range, gateway, DNS) can't be checked that way, so it
+*is* restored — but when a host setting was rejected the preview flags the whole
+network section for review, because a range from the old server's subnet is
+equally wrong here.
+
+**Update bookkeeping.** The `update_*` settings describe the deployment doing the
+restoring, not the one that was backed up, so they're dropped rather than
+restored — otherwise a backup taken mid-update would leave the UI stuck on
+"Update in progress" forever.
+
+### Undoing a restore
+
+The database being replaced is saved as `data/pxe.db.pre-restore` first. If the
+restored database has no password you know:
+
+```bash
+cd /path/to/beacon
+docker compose stop web
+cp data/pxe.db.pre-restore data/pxe.db
+docker compose start web
+```
+
+### Rebuilding a server from a backup
+
+```bash
+# 1. compose file + .env in an empty dir; set SERVER_IP / BOOT_INTERFACE
+docker compose up -d
+# 2. log in with the admin password from `docker compose logs web`
+# 3. Server Settings → Backup & restore → upload beacon-backup.db → confirm
+```
+
+Copy the ISOs back into `./data/images` under the filenames the backup recorded
+and reprocess them if you want the images too; delete the rows if you don't.
 
 ## Building from source (development)
 

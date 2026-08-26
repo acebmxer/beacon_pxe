@@ -10,10 +10,10 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
-**Accounts gain a second factor and API tokens; the boot menu gains ordering and
-an explicit default.** `docker-compose.yml` is unchanged and no action is needed
-on upgrade — existing databases pick up the new user and image columns
-automatically on start.
+**Accounts gain a second factor and API tokens, the boot menu gains ordering and
+an explicit default, and the database can be backed up and restored.**
+`docker-compose.yml` is unchanged and no action is needed on upgrade — existing
+databases pick up the new user and image columns automatically on start.
 
 ### Added
 
@@ -36,9 +36,24 @@ automatically on start.
   highlights the first entry but **waits for a human indefinitely rather than
   booting anything on its own**. The countdown length is configurable under
   **Server Settings → Appearance & boot menu** (`0` disables it).
-- **Database backup on demand.** **Server Settings** downloads the whole SQLite
-  database as `beacon-backup.db`, copied to a temp file first so the download
-  is consistent even if writes land mid-transfer.
+- **Database backup and restore.** **Server Settings → Backup & restore**
+  downloads the whole SQLite database as `beacon-backup.db`, copied to a temp
+  file first so the download is consistent even if writes land mid-transfer —
+  and takes one back. Uploading a backup shows a **preview of every change**
+  (settings, accounts, and how each host setting was decided) before anything is
+  touched; confirming swaps the database in, saves the replaced one as
+  `data/pxe.db.pre-restore`, and restarts Beacon. A file that isn't a SQLite
+  database, fails an integrity check, isn't a Beacon backup, or holds no admin
+  account is refused rather than applied.
+- **A restore keeps this host's identity.** `server_ip` and `boot_interface`
+  describe the machine rather than your preferences, so they are checked against
+  the host: an interface must exist, and an IP must be one the host answers to. A
+  backup from other hardware — a replacement server on a different base OS, where
+  the NIC is called something else — keeps the current values instead of
+  restoring settings that would silently break PXE, and the preview says which
+  and why. Same IP on the replacement means the backup's value is used as-is.
+  Update bookkeeping (`update_*`) is dropped rather than restored, so a backup
+  taken mid-update can't leave the UI stuck on "Update in progress".
 - **Deployment history and stats.** The dashboard reports total deploys,
   distinct clients ever served, and the top five images, folding per-boot
   records into the log-derived client table so a client's IP and last-seen time
@@ -51,7 +66,8 @@ automatically on start.
   small screens, and long-running image work now raises a toast instead of
   requiring you to watch the page.
 - **A test suite** (`web/tests`, pytest) covering auth, the login throttle,
-  iPXE menu rendering, and route access control.
+  iPXE menu rendering, backup validation and restore decisions, and route
+  access control.
 
 ### Changed
 

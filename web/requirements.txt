@@ -2,11 +2,11 @@
 # unauthenticated multipart / FileResponse-Range DoS advisories (and the
 # request.url host-header issues). Bumping fastapi is the only way to reach a
 # patched starlette, since fastapi pins the starlette range.
-fastapi==0.141.1
-uvicorn[standard]==0.52.4
+fastapi==0.142.2
+uvicorn[standard]==0.54.0
 # 3.1.6 fixes the sandbox |attr RCE advisory (PYSEC-2026-1471).
 jinja2==3.1.6
-sqlalchemy==2.0.52
+sqlalchemy==2.1.1
 passlib[bcrypt]==1.7.4
 # Pinned to 4.0.x: passlib 1.7.4 can't read the version of bcrypt >=4.1 (noisy
 # but harmless warning), and bcrypt >=5 is fatal — its hashpw() raises on
@@ -17,7 +17,7 @@ bcrypt==4.0.1
 python-multipart==0.0.32
 itsdangerous==2.2.0
 # TOTP second-factor authentication (RFC 6238).
-pyotp==2.9.0
+pyotp==2.10.0
 # QR rendering for the TOTP enrolment screen. Pure Python with no dependencies
 # on 3.10+ (no Pillow, no C extension) and it emits SVG, so the code is inlined
 # into the page — a Beacon with no internet access still shows a scannable QR.

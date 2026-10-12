@@ -1,8 +1,22 @@
 # Beacon
 
+[![CI](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml/badge.svg)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Publish images](https://github.com/acebmxer/beacon_pxe/actions/workflows/publish.yml/badge.svg)](https://github.com/acebmxer/beacon_pxe/actions/workflows/publish.yml)
-[![Latest release](https://img.shields.io/github/v/release/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/releases/latest)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Version](https://img.shields.io/github/v/release/acebmxer/beacon_pxe?label=version&color=brightgreen)](https://github.com/acebmxer/beacon_pxe/releases/latest)
+[![Last commit](https://img.shields.io/github/last-commit/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/commits)
+[![Issues](https://img.shields.io/github/issues/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/issues)
+[![Stars](https://img.shields.io/github/stars/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/stargazers)
+[![Forks](https://img.shields.io/github/forks/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/forks)
+[![Unique cloners](https://img.shields.io/badge/unique%20cloners-87-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
+[![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](web/Dockerfile)
+[![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
+[![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
+[![Tests](https://img.shields.io/badge/tests-75%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
+[![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
 
 A self-hosted PXE/iPXE boot server with a login-protected web console. It
 netboots **BIOS and UEFI** clients from a single menu, turns uploaded **ISOs**

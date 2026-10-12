@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from . import config
-from .db import init_db, SessionLocal, get_db
+from .db import init_db, SessionLocal
 from .deps import RedirectException
 from .store import get_setting
 from .services import bootstrap

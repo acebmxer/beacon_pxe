@@ -10,6 +10,12 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-12
+
+**A `beta` update channel, and clients show on the dashboard as soon as they load the
+boot menu.** `docker-compose.yml` needs no change and no action is needed on upgrade
+— the new table is created automatically on start.
+
 ### Added
 
 - **A `beta` update channel that tracks the `dev` branch.** Set `BEACON_TAG=beta`
@@ -558,7 +564,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.3.0...v0.4.0

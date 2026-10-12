@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..deps import require_admin, require_user, render
-from ..models import BootEvent, Image, User
+from ..models import BootEvent, Image, SeenClient, User
 from ..services import clients, metrics
 from ..store import all_settings
 
@@ -47,6 +47,12 @@ def stats(user: User = Depends(require_user), db: Session = Depends(get_db)):
         select(BootEvent.mac, BootEvent.ip, BootEvent.created_at)
         .where(BootEvent.mac != "", BootEvent.created_at >= since)
         .order_by(BootEvent.created_at.asc())
+    ).all()
+    # Menu loads (no image chosen) -- the only record of a client behind an
+    # external DHCP server until it picks an image.
+    boot_events += db.execute(
+        select(SeenClient.mac, SeenClient.ip, SeenClient.last_seen)
+        .where(SeenClient.last_seen >= since)
     ).all()
     rows = clients.recent(boot_events=boot_events)
 
@@ -127,6 +133,7 @@ def reset_stats(request: Request, user: User = Depends(require_admin),
     the log naturally rolls over.
     """
     db.execute(delete(BootEvent))
+    db.execute(delete(SeenClient))
     db.commit()
     clients.clear_log()
     return RedirectResponse("/?reset=1", status_code=303)

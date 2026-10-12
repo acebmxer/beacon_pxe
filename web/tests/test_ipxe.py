@@ -55,6 +55,13 @@ class TestRenderNoImages:
         assert "--timeout" not in text
 
 
+class TestRenderMenuPing:
+    def test_menu_reports_once_before_start_label(self, db):
+        text = ipxe.render(db)
+        assert text.count("/track/menu?mac=") == 1
+        assert text.index("/track/menu?mac=") < text.index(":start")
+
+
 class TestRenderWithImages:
     def test_image_appears_in_menu(self, db):
         img = _add_image(db, name="Ubuntu 24.04")

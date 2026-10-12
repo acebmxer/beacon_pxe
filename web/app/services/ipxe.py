@@ -30,7 +30,14 @@ set menu-title {title}
 """
 
 
+# Once per menu load (before :start, so returning from the shell doesn't repeat
+# it): tells the web app this client reached the menu, so it shows on the
+# dashboard even when an external DHCP server hides it from dnsmasq's log.
+# Non-fatal like the per-image ping.
 MENU_TOP = """
+imgfetch --name seen ${boot-url}/track/menu?mac=${net0/mac}&ip=${net0/ip} || goto start
+imgfree seen || goto start
+
 :start
 menu ${menu-title}
 item --gap -- ----------------------- Operating Systems -----------------------

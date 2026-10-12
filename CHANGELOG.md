@@ -8,6 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe user-facing changes: what a Beacon operator gains, loses, or has
 to do differently. Internal refactors that change nothing observable are omitted.
 
+## [Unreleased]
+
+## [0.7.0] - 2026-10-12
+
+**A `beta` update channel, and clients show on the dashboard as soon as they load the
+boot menu.** `docker-compose.yml` needs no change and no action is needed on upgrade
+— the new table is created automatically on start.
+
+### Added
+
+- **A `beta` update channel that tracks the `dev` branch.** Set `BEACON_TAG=beta`
+  in `.env` to run the newest, not-yet-released changes (pre-release; may be
+  unfinished). `stable` (releases) and `latest` (`main`) work as before.
+- **Clients appear on the dashboard as soon as they load the boot menu.** The
+  menu now reports in once when it loads, so a client behind an external DHCP
+  server shows under **Recent clients** without having to pick an image first.
+  Menu loads are not counted as deployments, and **Reset statistics** clears
+  them along with the rest.
+
 ## [0.6.0] - 2026-08-25
 
 **Accounts gain a second factor and API tokens, the boot menu gains ordering and
@@ -545,7 +564,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.3.0...v0.4.0

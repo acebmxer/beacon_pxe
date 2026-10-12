@@ -56,6 +56,7 @@ what `docker compose pull` installs and what the UI's update check watches:
 | --- | --- | --- |
 | `stable` | tagged releases | a new version is released |
 | `latest` | rolling `main` | any commit merged to `main` |
+| `beta` | rolling `dev` | any commit pushed to `dev` — pre-release, may be broken |
 
 New installs default to `stable`. Switching channels takes effect on the next
 update.

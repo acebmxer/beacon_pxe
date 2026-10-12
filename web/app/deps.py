@@ -1,6 +1,5 @@
 """Auth dependencies and shared template context."""
 from fastapi import Depends, HTTPException, Request, status
-from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import select
 from sqlalchemy.orm import Session

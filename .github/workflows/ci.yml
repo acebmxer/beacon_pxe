@@ -1,0 +1,105 @@
+name: CI
+
+# Lints and tests the web console, smoke-tests the built image and scans it.
+# Python 3.12 matches web/Dockerfile (the app uses passlib, which needs the
+# `crypt` module removed in 3.13).
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    name: Ruff
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      # Pinned to commit SHAs: a tag can be retargeted, a SHA cannot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  tests:
+    name: Tests
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt -r requirements-dev.txt
+      - run: python -m pytest -ra
+
+  docker:
+    name: Docker build and smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the image
+        run: docker build -t beacon-web:ci web
+
+      - name: Start the container
+        run: |
+          docker run -d --name beacon -p 8080:8080 \
+            -e ADMIN_PASSWORD=ci-test-password \
+            -e SECRET_KEY=ci-test-secret \
+            beacon-web:ci
+
+      - name: Wait for it to become healthy
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:8080/healthz > /dev/null; then
+              echo "healthy after ${i}s"; exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::container never became healthy"
+          docker logs beacon
+          exit 1
+
+      - name: The console requires a login
+        run: |
+          code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/)
+          test "$code" = "303" || { echo "::error::expected 303, got $code"; exit 1; }
+          location=$(curl -s -o /dev/null -w '%{redirect_url}' http://localhost:8080/)
+          case "$location" in
+            */login*) echo "anonymous callers are sent to $location" ;;
+            *) echo "::error::expected a redirect to /login, got $location"; exit 1 ;;
+          esac
+
+      - name: Show logs on failure
+        if: failure()
+        run: docker logs beacon
+
+  trivy:
+    name: Trivy vulnerability scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Build the image
+        run: docker build -t beacon-web:ci web
+
+      # Report-only: the open HIGH/CRITICAL findings are in the upstream base
+      # layers (Debian perl, the docker:cli binaries), so a blocking scan would
+      # be red until those images are rebuilt. Set exit-code to "1" to enforce.
+      - name: Scan the image
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          image-ref: beacon-web:ci
+          severity: HIGH,CRITICAL
+          exit-code: "0"
+          ignore-unfixed: true

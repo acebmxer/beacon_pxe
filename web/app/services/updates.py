@@ -1,8 +1,8 @@
 """Update checking: compares deployed image digest against GHCR.
 
 Which tag is watched depends on the configured update channel (config.BEACON_TAG,
-set from BEACON_TAG in .env): "latest" follows the main branch, "stable" follows
-tagged releases. docker-compose.yml interpolates the same variable, so the tag
+set from BEACON_TAG in .env): "latest" follows the main branch, "beta" follows the
+dev branch, "stable" follows tagged releases. docker-compose.yml interpolates the same variable, so the tag
 checked here is always the tag `docker compose pull` installs.
 
 What is *deployed* is read from the running web container itself (through the

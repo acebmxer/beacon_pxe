@@ -87,7 +87,7 @@ def recent(limit: int = 25, boot_events=None) -> list[dict]:
             fh.seek(max(0, size - _TAIL_BYTES))
             text = fh.read().decode("utf-8", "replace")
     except FileNotFoundError:
-        return []
+        text = ""       # no log yet: boot events / menu loads can still fill rows
 
     # dnsmasq logs one client request as several lines sharing a transaction id;
     # the MAC appears on some lines, the hostname / arch / boot file on others.

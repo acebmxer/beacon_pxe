@@ -4,11 +4,13 @@ name: Publish images
 # (ghcr.io/acebmxer/beacon-<service>).
 #
 #   - push to main            -> :latest (+ :main, :main-<sha>)
+#   - push to dev             -> :beta (+ :dev)
 #   - push a tag like v1.2.3  -> :1.2.3, :1.2, :stable
 #   - manual run (workflow_dispatch)
 #
-# :latest and :stable are the two update channels a deployment can track via
-# BEACON_TAG. :latest moves on every push to main; :stable only on release tags.
+# :stable, :latest and :beta are the update channels a deployment can track via
+# BEACON_TAG. :beta moves on every push to dev; :latest on every push to main;
+# :stable only on release tags.
 #
 # No secrets to configure: the built-in GITHUB_TOKEN authenticates to GHCR.
 # After the first run, make each package public under the repo's Packages tab
@@ -16,7 +18,7 @@ name: Publish images
 
 on:
   push:
-    branches: [main]
+    branches: [main, dev]
     tags: ["v*"]
   workflow_dispatch:
 
@@ -69,6 +71,9 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
+            # Pre-release channel: the dev branch only. Keyed off the ref so
+            # it can never be applied to a main or tag build.
+            type=raw,value=beta,enable=${{ github.ref == 'refs/heads/dev' }}
             # Release channel: only ever moves when a v* tag is published, so
             # deployments running BEACON_TAG=stable are not disturbed by pushes
             # to main. Explicitly keyed off the tag ref rather than

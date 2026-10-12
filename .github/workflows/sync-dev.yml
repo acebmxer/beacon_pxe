@@ -1,0 +1,42 @@
+name: Sync dev
+
+# After a pull request merges into main, fast-forward dev so the next branch
+# starts from the released code. Refuses rather than forcing if dev has moved.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-dev
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to a commit SHA: a tag can be retargeted, a SHA cannot.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Fast-forward dev to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if ! git show-ref --quiet refs/remotes/origin/dev; then
+            echo "no dev branch; nothing to do"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor origin/dev origin/main; then
+            git push origin origin/main:refs/heads/dev
+            echo "dev fast-forwarded to main"
+          else
+            echo "::error::dev has commits that are not on main; refusing to force. Merge or rebase dev manually."
+            exit 1
+          fi

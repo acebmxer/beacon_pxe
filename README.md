@@ -25,15 +25,14 @@ stack.
 
 ## Quick start
 
-Prebuilt images are on GHCR, so you only need the compose file and an `.env`:
+You only need two files from this repo: `docker-compose.yml` and `.env`
+(copy `.env.example` to `.env`). In `.env`, set `SERVER_IP`, `BOOT_INTERFACE`,
+`ADMIN_PASSWORD` (leave blank to auto-generate), `PROJECT_DIR` (the absolute
+path of the folder holding the compose file, needed for in-app updates) and
+`SECRET_KEY` (any long random string, else everyone is signed out on each
+restart). Then:
 
 ```bash
-mkdir beacon && cd beacon
-curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
-curl -o .env https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/.env.example
-sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(openssl rand -hex 32)|" .env  # else everyone is signed out on each restart
-# edit .env: SERVER_IP, BOOT_INTERFACE, ADMIN_PASSWORD (leave blank to auto-generate)
-mkdir -p data/drivers
 docker compose up -d
 ```
 
@@ -44,8 +43,19 @@ docker compose logs web | grep -i "admin password"
 ```
 
 Open **http://&lt;server-ip&gt;:8080**, log in, and finish the first-run wizard
-(server IP, boot interface, DHCP mode). Cloning the repo instead? `./setup.sh`
-does all of the above.
+(server IP, boot interface, DHCP mode).
+
+### Optional: clone the repo and run setup.sh
+
+If you would rather work from a checkout, clone the repo and run the setup
+script. It creates `.env` with a generated admin password and secret key, then
+starts the stack:
+
+```bash
+git clone https://github.com/acebmxer/beacon_pxe.git
+cd beacon_pxe
+./setup.sh
+```
 
 ## DHCP modes
 

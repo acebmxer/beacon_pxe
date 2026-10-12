@@ -12,6 +12,9 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Added
 
+- **A `beta` update channel that tracks the `dev` branch.** Set `BEACON_TAG=beta`
+  in `.env` to run the newest, not-yet-released changes (pre-release; may be
+  unfinished). `stable` (releases) and `latest` (`main`) work as before.
 - **Clients appear on the dashboard as soon as they load the boot menu.** The
   menu now reports in once when it loads, so a client behind an external DHCP
   server shows under **Recent clients** without having to pick an image first.

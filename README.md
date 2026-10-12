@@ -73,7 +73,8 @@ docker compose down -v                        # stop + drop unpacked-image volum
 ```
 
 The admin UI can self-update too (**Settings → Updates**). `BEACON_TAG` in `.env`
-selects the channel: `stable` (releases) or `latest` (rolling `main`).
+selects the channel: `stable` (releases), `latest` (rolling `main`) or `beta`
+(rolling `dev`, pre-release).
 
 **Server Settings → Backup & restore** downloads the database (users, settings,
 image metadata) as `beacon-backup.db`, and restores one. It is a configuration

@@ -8,6 +8,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe user-facing changes: what a Beacon operator gains, loses, or has
 to do differently. Internal refactors that change nothing observable are omitted.
 
+## [Unreleased]
+
+### Added
+
+- **Clients appear on the dashboard as soon as they load the boot menu.** The
+  menu now reports in once when it loads, so a client behind an external DHCP
+  server shows under **Recent clients** without having to pick an image first.
+  Menu loads are not counted as deployments, and **Reset statistics** clears
+  them along with the rest.
+
 ## [0.6.0] - 2026-08-25
 
 **Accounts gain a second factor and API tokens, the boot menu gains ordering and

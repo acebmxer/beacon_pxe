@@ -1,4 +1,4 @@
-"""Database models: User, Setting, Image, BootEvent, LoginLockout."""
+"""Database models: User, Setting, Image, BootEvent, SeenClient, LoginLockout."""
 from datetime import datetime, timezone
 
 from sqlalchemy import String, Integer, DateTime, Text, Float
@@ -82,6 +82,22 @@ class BootEvent(Base):
     mac: Mapped[str] = mapped_column(String(32), default="", index=True)
     ip: Mapped[str] = mapped_column(String(64), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+class SeenClient(Base):
+    """The last time each client loaded the boot menu, one row per MAC.
+
+    Written by /track/menu, which the menu pings once when it loads -- before
+    anyone picks an image. With an external DHCP server dnsmasq's log never sees
+    the client, so this is how a client that only reaches the menu still shows on
+    the dashboard. Kept apart from BootEvent so it never counts as a deployment,
+    and one row per MAC so it can't grow without bound.
+    """
+    __tablename__ = "seen_clients"
+
+    mac: Mapped[str] = mapped_column(String(32), primary_key=True)
+    ip: Mapped[str] = mapped_column(String(64), default="")
+    last_seen: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
 class Image(Base):

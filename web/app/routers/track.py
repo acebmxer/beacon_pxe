@@ -12,6 +12,8 @@ recording, so throttling or a bad id never stops a boot.
 """
 import logging
 import random
+import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
@@ -19,7 +21,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
-from ..models import BootEvent, Image
+from ..models import BootEvent, Image, SeenClient
 from ..net import client_ip
 from ..services import ratelimit
 
@@ -40,12 +42,51 @@ _MAX_ROWS = 200_000
 _PRUNE_PROBABILITY = 0.02  # amortise the cap check across inserts
 
 
+_MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
+# Bound the one-row-per-MAC table: this endpoint is unauthenticated, so a client
+# inventing MACs could otherwise add rows forever. Past the cap, known MACs still
+# refresh; new ones are dropped.
+_MAX_SEEN = 10_000
+
+
 def _prune(db: Session) -> None:
     """Trim boot_events back to the newest _MAX_ROWS rows (oldest ids go first)."""
     keep = select(BootEvent.id).order_by(BootEvent.id.desc()).limit(_MAX_ROWS)
     db.query(BootEvent).filter(~BootEvent.id.in_(keep)).delete(
         synchronize_session=False)
     db.commit()
+
+
+@router.get("/track/menu")
+def track_menu(request: Request):
+    """Record that a client loaded the boot menu (no image chosen yet).
+
+    Defined before /track/{image_id} so "menu" isn't parsed as an image id.
+    """
+    if not ratelimit.allow(f"track:{client_ip(request)}", _RATE_LIMIT, _RATE_WINDOW):
+        return _OK
+    mac = (request.query_params.get("mac") or "").lower().strip()
+    if not _MAC_RE.match(mac):
+        return _OK
+    ip = (request.query_params.get("ip") or "").strip()
+    if ip in ("", "0.0.0.0"):
+        ip = (request.headers.get("x-real-ip")
+              or (request.client.host if request.client else "")).strip()
+    db: Session = SessionLocal()
+    try:
+        row = db.get(SeenClient, mac)
+        if row is not None:
+            row.ip = ip[:64]
+            row.last_seen = datetime.now(timezone.utc)
+        elif (db.scalar(select(func.count(SeenClient.mac))) or 0) < _MAX_SEEN:
+            db.add(SeenClient(mac=mac, ip=ip[:64]))
+        db.commit()
+    except Exception:                       # never let tracking break a boot
+        log.exception("failed to record menu view for %s", mac)
+        db.rollback()
+    finally:
+        db.close()
+    return _OK
 
 
 @router.get("/track/{image_id}")
@@ -90,3 +131,4 @@ def track(image_id: int, request: Request):
     finally:
         db.close()
     return _OK
+

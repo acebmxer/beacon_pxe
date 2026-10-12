@@ -9,7 +9,7 @@ from sqlalchemy import select
 from starlette.testclient import TestClient
 
 from app.auth import hash_password
-from app.models import Image, User, BootEvent, Setting
+from app.models import Image, User, BootEvent, SeenClient, Setting
 import app.db as app_db
 
 
@@ -173,6 +173,43 @@ class TestBootEventsApi:
         events = r.json()
         assert len(events) == 1
         assert events[0]["image_id"] == 1
+
+
+class TestMenuTrack:
+    """/track/menu records a client that only loaded the menu."""
+
+    @pytest.fixture(autouse=True)
+    def _track_session(self, client, monkeypatch):
+        # track.py binds SessionLocal at import time; point it at the temp DB.
+        import app.routers.track as track_mod
+        monkeypatch.setattr(track_mod, "SessionLocal", app_db.SessionLocal)
+
+    def test_menu_load_shows_client_without_deployment(self, client):
+        r = client.get("/track/menu?mac=AA:BB:CC:DD:EE:01&ip=10.0.0.5")
+        assert r.status_code == 200
+        _login(client)
+        rows = client.get("/api/stats").json()["clients"]
+        assert [c["mac"] for c in rows] == ["aa:bb:cc:dd:ee:01"]
+        assert rows[0]["ip"] == "10.0.0.5"
+        assert client.get("/api/events").json() == []
+
+    def test_repeat_load_keeps_one_row(self, client):
+        for _ in range(3):
+            client.get("/track/menu?mac=aa:bb:cc:dd:ee:01&ip=10.0.0.5")
+        db = _session()
+        try:
+            assert len(db.execute(select(SeenClient)).all()) == 1
+        finally:
+            db.close()
+
+    def test_bad_mac_ignored(self, client):
+        r = client.get("/track/menu?mac=${net0/mac}&ip=1.2.3.4")
+        assert r.status_code == 200
+        db = _session()
+        try:
+            assert db.execute(select(SeenClient)).all() == []
+        finally:
+            db.close()
 
 
 class TestApiTokenAuth:

@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: write
+  actions: write   # to start the publish workflow after the push
 
 concurrency:
   group: sync-dev
@@ -24,6 +25,8 @@ jobs:
           fetch-depth: 0
 
       - name: Fast-forward dev to main
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -36,6 +39,9 @@ jobs:
           if git merge-base --is-ancestor origin/dev origin/main; then
             git push origin origin/main:refs/heads/dev
             echo "dev fast-forwarded to main"
+            # Pushes made with the built-in GITHUB_TOKEN do not start other
+            # workflows, so start the beta image build explicitly.
+            gh workflow run publish.yml --ref dev
           else
             echo "::error::dev has commits that are not on main; refusing to force. Merge or rebase dev manually."
             exit 1

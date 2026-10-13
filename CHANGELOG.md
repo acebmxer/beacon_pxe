@@ -10,6 +10,13 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Fixed
+
+- **Clients keep appearing on the dashboard on a very busy or abused network.**
+  Once 10,000 different clients had loaded the boot menu, new ones were ignored
+  until **Reset statistics**; now the least-recently-seen client is dropped to
+  make room.
+
 ## [0.7.0] - 2026-10-12
 
 **A `beta` update channel, and clients show on the dashboard as soon as they load the

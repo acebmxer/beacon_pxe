@@ -68,3 +68,10 @@ def test_beta_endpoint_saves_and_status_reports_it(client, updates, monkeypatch)
     assert status["beta"] is True
     assert status["target_channel"] == "beta"
     assert status["channel"] == "stable"
+
+
+def test_beta_build_is_labelled_with_its_number_and_not_a_local_build(updates, monkeypatch):
+    monkeypatch.setattr(app_config, "BEACON_VERSION", "0.7.2-beta.1")
+    monkeypatch.setattr(app_config, "BEACON_COMMIT", "abc1234def")
+    assert updates.version_label() == "v0.7.2-beta.1"
+    assert updates.is_dev_build() is False

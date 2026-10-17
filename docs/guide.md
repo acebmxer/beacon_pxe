@@ -79,7 +79,8 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 |--------|-----------|
 | Ubuntu live | `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
 | Debian live | `boot=live netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
-| Fedora/RHEL netinstall | `inst.repo=${boot-url}/os/<id>/tree ip=dhcp` |
+| Fedora/RHEL netinstall | `inst.stage2=${boot-url}/os/<id>/tree ip=dhcp` (packages come from the online mirrors; the client needs internet) |
+| Fedora/RHEL full DVD | `inst.repo=${boot-url}/os/<id>/tree ip=dhcp` |
 | Fedora 42+ live | `root=live:${boot-url}/os/<id>/squashfs.img rd.live.image ip=dhcp` |
 | Archiso (Arch/EndeavourOS/CachyOS) | `archiso_http_srv=${boot-url}/os/<id>/ archisobasedir=arch BOOTIF=01-${net0/mac:hexhyp} ip=dhcp` |
 

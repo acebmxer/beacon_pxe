@@ -746,9 +746,10 @@ def _netboot_plan(
         file HTTP root is used (Fedora 42+ live, Archiso); mutually exclusive
         with needs_nfs.
       - needs_repo_tree: unpack the whole ISO into os/<id>/tree/ and serve it
-        over HTTP as an installer repo (Fedora/RHEL netinstall). Anaconda treats
-        inst.repo as a directory holding .treeinfo and images/install.img, so
-        pointing it at the .iso file itself 404s on both.
+        over HTTP (Fedora/RHEL). Anaconda treats inst.repo/inst.stage2 as a
+        directory holding .treeinfo and images/install.img, so pointing it at
+        the .iso file itself 404s. A netinstall ISO has no packages, so it is
+        passed as inst.stage2 only and installs from the online mirrors.
 
     casper (Ubuntu) and live (Debian) images mount their squashfs over NFS so the
     whole ISO never has to fit in client RAM — the old `url=`/`fetch=` methods
@@ -764,7 +765,12 @@ def _netboot_plan(
     if "live/" in joined:    # Debian live
         return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp", False
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
-        return False, [], f"inst.repo={base}/tree ip=dhcp", True
+        # A full DVD carries the packages (repodata/), so it is its own repo. A
+        # netinstall/boot ISO carries only the installer: it is the stage2, and
+        # the packages come from the distro's online mirrors.
+        if "repodata/" in joined:
+            return False, [], f"inst.repo={base}/tree ip=dhcp", True
+        return False, [], f"inst.stage2={base}/tree ip=dhcp", True
     # Fedora 42+ live: dracut dmsquash-live root filesystem under LiveOS/. The
     # squashfs is extracted to the bootroot and streamed over HTTP — no NFS or
     # whole-ISO copy needed.
@@ -962,7 +968,7 @@ def _required_paths(img: Image) -> list[Path]:
         args = img.boot_args or ""
         if "netboot=nfs" in args:
             paths.append(config.NFS_DIR / str(img.id))
-        if "inst.repo=" in args:  # Fedora/RHEL netinstall: unpacked HTTP repo
+        if "inst.repo=" in args or "inst.stage2=" in args:  # unpacked HTTP tree
             paths.append(dest_dir / "tree" / ".treeinfo")
         if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
             paths.append(dest_dir / "squashfs.img")

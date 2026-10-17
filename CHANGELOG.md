@@ -20,8 +20,10 @@ existing Fedora/RHEL image after upgrading.
 
 - **Fedora and RHEL netinstall ISOs now boot.** The installer was pointed at the
   ISO file, so it failed with 404s for `.treeinfo` and `install.img`. The ISO is
-  now unpacked into the boot root and served as a repo. **Reprocess** existing
-  Fedora/RHEL images to apply this.
+  now unpacked into the boot root and served over HTTP. A netinstall ISO has no
+  packages, so it is used as the installer only and the client installs from the
+  distro's online mirrors (it needs internet access); a full DVD is also used as
+  the package repo. **Reprocess** existing Fedora/RHEL images to apply this.
 
 - **Clients keep appearing on the dashboard on a very busy or abused network.**
   Once 10,000 different clients had loaded the boot menu, new ones were ignored

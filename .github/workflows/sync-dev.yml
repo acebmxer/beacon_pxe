@@ -9,7 +9,6 @@ on:
 
 permissions:
   contents: write
-  actions: write   # to start the publish workflow after the push
 
 concurrency:
   group: sync-dev
@@ -39,9 +38,10 @@ jobs:
           if git merge-base --is-ancestor origin/dev origin/main; then
             git push origin origin/main:refs/heads/dev
             echo "dev fast-forwarded to main"
-            # Pushes made with the built-in GITHUB_TOKEN do not start other
-            # workflows, so start the beta image build explicitly.
-            gh workflow run publish.yml --ref dev
+            # Betas are published by hand (Actions -> Publish images -> Run
+            # workflow on dev). Do not start a build here: a run on dev
+            # creates a numbered pre-release, which would announce the release
+            # itself as another beta.
           else
             echo "::error::dev has commits that are not on main; refusing to force. Merge or rebase dev manually."
             exit 1

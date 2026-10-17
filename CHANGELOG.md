@@ -10,6 +10,12 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-16
+
+**Fedora and RHEL netinstall ISOs boot again, and the dashboard copes with very
+large client counts.** `docker-compose.yml` needs no change. **Reprocess** any
+existing Fedora/RHEL image after upgrading.
+
 ### Fixed
 
 - **Fedora and RHEL netinstall ISOs now boot.** The installer was pointed at the
@@ -576,7 +582,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.4.0...v0.5.0

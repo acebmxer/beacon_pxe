@@ -10,6 +10,11 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-17
+
+**Beta updates can be switched on from Settings, and betas are now numbered.**
+`docker-compose.yml` needs no change and no action is needed on upgrade.
+
 ### Added
 
 - **Beta updates can be turned on from Settings → Updates.** **Include beta
@@ -599,7 +604,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0

@@ -1,5 +1,7 @@
 name: Publish images
 
+run-name: ${{ inputs.description || github.event.head_commit.message || 'Publish images' }}
+
 # Builds the six Beacon images and pushes them to GitHub Container Registry
 # (ghcr.io/acebmxer/beacon-<service>).
 #
@@ -22,6 +24,11 @@ on:
     branches: [main]
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      description:
+        description: Title shown in the Actions run list (optional)
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io

@@ -166,7 +166,7 @@ def _extract_gunzip(iso: Path, member: str, dest: Path) -> None:
 
 
 def _extract_tree(iso: Path, dest: Path) -> None:
-    """Unpack the whole ISO into dest so its live filesystem can be NFS-exported.
+    """Unpack the whole ISO into dest (NFS export or HTTP installer repo).
 
     Re-extracts cleanly each time so a Retry can't leave a half-written tree.
     """
@@ -735,40 +735,43 @@ def _process_windows(db, img: Image, iso: Path, entries: list[str]) -> None:
 
 def _netboot_plan(
     entries: list[str], filename: str, image_id: int
-) -> tuple[bool, list[tuple[str, str]], str]:
+) -> tuple[bool, list[tuple[str, str]], str, bool]:
     """Decide how a live ISO should netboot.
 
-    Returns (needs_nfs, http_files, kernel cmdline):
+    Returns (needs_nfs, http_files, kernel cmdline, needs_repo_tree):
       - needs_nfs: unpack the whole ISO and export it over NFS.
       - http_files: (iso_member, dest_relpath) pairs to extract into the image's
         bootroot dir (os/<id>/) and stream over HTTP. dest_relpath keeps the
         on-disc subpath where the bootloader expects it. Empty unless a single-
         file HTTP root is used (Fedora 42+ live, Archiso); mutually exclusive
         with needs_nfs.
+      - needs_repo_tree: unpack the whole ISO into os/<id>/tree/ and serve it
+        over HTTP as an installer repo (Fedora/RHEL netinstall). Anaconda treats
+        inst.repo as a directory holding .treeinfo and images/install.img, so
+        pointing it at the .iso file itself 404s on both.
 
     casper (Ubuntu) and live (Debian) images mount their squashfs over NFS so the
     whole ISO never has to fit in client RAM — the old `url=`/`fetch=` methods
     copied the full image into a tmpfs and fell over on anything but huge clients.
     nfsroot points at this image's exported tree; ${server-ip} is set in boot.ipxe.
-    Fedora/RHEL already stream their repo over HTTP, so they stay on HTTP.
+    Fedora/RHEL stream their repo over HTTP from the unpacked tree.
     """
     nfsroot = f"${{server-ip}}:/nfs/{image_id}"
-    iso_url = f"${{boot-url}}/images/{filename}"
     base = f"${{boot-url}}/{EXTRACT_SUBDIR}/{image_id}"
     joined = " ".join(e.lower() for e in entries)
     if "casper/" in joined:  # Ubuntu / casper live
-        return True, [], f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp"
+        return True, [], f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp", False
     if "live/" in joined:    # Debian live
-        return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
+        return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp", False
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
-        return False, [], f"inst.repo={iso_url} ip=dhcp"
+        return False, [], f"inst.repo={base}/tree ip=dhcp", True
     # Fedora 42+ live: dracut dmsquash-live root filesystem under LiveOS/. The
     # squashfs is extracted to the bootroot and streamed over HTTP — no NFS or
     # whole-ISO copy needed.
     squashfs = _match(entries, [r"liveos/squashfs.img"])
     if squashfs:
         return False, [(squashfs, "squashfs.img")], (
-            f"root=live:{base}/squashfs.img rd.live.image ip=dhcp")
+            f"root=live:{base}/squashfs.img rd.live.image ip=dhcp", False)
     # Archiso (Arch / EndeavourOS / CachyOS): the airootfs squashfs lives under
     # arch/<arch>/. archiso's initramfs fetches it (and verifies the .sha512)
     # from archiso_http_srv, keeping the same arch/<arch>/ layout, so extract
@@ -794,8 +797,8 @@ def _netboot_plan(
             files.append((sha, sha.lstrip("./")))
         return False, files, (
             f"archiso_http_srv={base}/ archisobasedir={basedir} "
-            "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp")
-    return False, [], "ip=dhcp"
+            "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp", False)
+    return False, [], "ip=dhcp", False
 
 
 def _clean_derived_data(image_id: int) -> None:
@@ -870,8 +873,17 @@ def process_image(image_id: int) -> None:
             db.commit()
             return
 
-        needs_nfs, http_files, guessed_args = _netboot_plan(
+        needs_nfs, http_files, guessed_args, needs_repo_tree = _netboot_plan(
             entries, img.filename, img.id)
+
+        if needs_repo_tree:
+            try:
+                _extract_tree(iso, dest_dir / "tree")
+            except subprocess.CalledProcessError as e:
+                img.status = "error"
+                img.message = f"Installer repo extraction failed: {e.stderr or e}"
+                db.commit()
+                return
 
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.
@@ -950,6 +962,8 @@ def _required_paths(img: Image) -> list[Path]:
         args = img.boot_args or ""
         if "netboot=nfs" in args:
             paths.append(config.NFS_DIR / str(img.id))
+        if "inst.repo=" in args:  # Fedora/RHEL netinstall: unpacked HTTP repo
+            paths.append(dest_dir / "tree" / ".treeinfo")
         if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
             paths.append(dest_dir / "squashfs.img")
         basedir = re.search(r"archisobasedir=(\S+)", args)

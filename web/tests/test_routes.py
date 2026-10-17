@@ -202,6 +202,18 @@ class TestMenuTrack:
         finally:
             db.close()
 
+    def test_full_table_evicts_oldest(self, client, monkeypatch):
+        import app.routers.track as track_mod
+        monkeypatch.setattr(track_mod, "_MAX_SEEN", 2)
+        for n in (1, 2, 3):
+            client.get(f"/track/menu?mac=aa:bb:cc:dd:ee:0{n}&ip=10.0.0.{n}")
+        db = _session()
+        try:
+            macs = {r.mac for r in db.execute(select(SeenClient)).scalars()}
+        finally:
+            db.close()
+        assert macs == {"aa:bb:cc:dd:ee:02", "aa:bb:cc:dd:ee:03"}
+
     def test_bad_mac_ignored(self, client):
         r = client.get("/track/menu?mac=${net0/mac}&ip=1.2.3.4")
         assert r.status_code == 200

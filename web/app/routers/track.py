@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Request
 from fastapi.responses import PlainTextResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
@@ -44,8 +44,8 @@ _PRUNE_PROBABILITY = 0.02  # amortise the cap check across inserts
 
 _MAC_RE = re.compile(r"^[0-9a-f]{2}(?::[0-9a-f]{2}){5}$")
 # Bound the one-row-per-MAC table: this endpoint is unauthenticated, so a client
-# inventing MACs could otherwise add rows forever. Past the cap, known MACs still
-# refresh; new ones are dropped.
+# inventing MACs could otherwise add rows forever. Past the cap, the
+# least-recently-seen row is evicted to make room, so real clients keep appearing.
 _MAX_SEEN = 10_000
 
 
@@ -78,7 +78,12 @@ def track_menu(request: Request):
         if row is not None:
             row.ip = ip[:64]
             row.last_seen = datetime.now(timezone.utc)
-        elif (db.scalar(select(func.count(SeenClient.mac))) or 0) < _MAX_SEEN:
+        else:
+            if (db.scalar(select(func.count(SeenClient.mac))) or 0) >= _MAX_SEEN:
+                oldest = db.scalar(
+                    select(SeenClient.mac).order_by(SeenClient.last_seen).limit(1))
+                if oldest is not None:
+                    db.execute(delete(SeenClient).where(SeenClient.mac == oldest))
             db.add(SeenClient(mac=mac, ip=ip[:64]))
         db.commit()
     except Exception:                       # never let tracking break a boot

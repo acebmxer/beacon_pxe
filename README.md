@@ -8,7 +8,7 @@
 [![Issues](https://img.shields.io/github/issues/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/issues)
 [![Stars](https://img.shields.io/github/stars/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/stargazers)
 [![Forks](https://img.shields.io/github/forks/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/forks)
-[![Unique cloners](https://img.shields.io/badge/unique%20cloners-87-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
+[![Unique cloners](https://img.shields.io/badge/unique%20cloners-122-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](web/Dockerfile)
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)

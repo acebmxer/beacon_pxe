@@ -10,6 +10,26 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-17
+
+**Beta updates can be switched on from Settings, and betas are now numbered.**
+`docker-compose.yml` needs no change and no action is needed on upgrade.
+
+### Added
+
+- **Beta updates can be turned on from Settings → Updates.** **Include beta
+  versions** moves the update to the `beta` channel without editing `.env`;
+  turning it off returns to the `BEACON_TAG` channel at the next update (an older
+  build). Betas are published by hand (Actions → Publish images → Run workflow
+  on `dev`) as numbered pre-releases, `v0.7.2-beta.1`, `-beta.2`, and so on, and
+  the running version shows that number; pushing to `dev` no longer publishes
+  one. A plain `docker compose up -d` on the host still uses `BEACON_TAG` from
+  `.env`.
+
+  The **Include beta versions** checkbox sits next to its label, in the same
+  layout as the other checkboxes on the page, instead of being pushed to the
+  opposite side of the card.
+
 ## [0.7.1] - 2026-10-16
 
 **Fedora and RHEL netinstall ISOs boot again, and the dashboard copes with very
@@ -20,8 +40,10 @@ existing Fedora/RHEL image after upgrading.
 
 - **Fedora and RHEL netinstall ISOs now boot.** The installer was pointed at the
   ISO file, so it failed with 404s for `.treeinfo` and `install.img`. The ISO is
-  now unpacked into the boot root and served as a repo. **Reprocess** existing
-  Fedora/RHEL images to apply this.
+  now unpacked into the boot root and served over HTTP. A netinstall ISO has no
+  packages, so it is used as the installer only and the client installs from the
+  distro's online mirrors (it needs internet access); a full DVD is also used as
+  the package repo. **Reprocess** existing Fedora/RHEL images to apply this.
 
 - **Clients keep appearing on the dashboard on a very busy or abused network.**
   Once 10,000 different clients had loaded the boot menu, new ones were ignored
@@ -582,7 +604,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.5.0...v0.6.0

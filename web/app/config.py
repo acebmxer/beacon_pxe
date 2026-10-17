@@ -98,7 +98,9 @@ COMPOSE_PROJECT_DIR = os.environ.get("COMPOSE_PROJECT_DIR", "")
 # would watch a different channel than `docker compose pull` installs.
 #   latest -> rolling main branch, moves on every push to main
 #   stable -> release builds only, moves when a v* tag is published
-#   beta   -> rolling dev branch, moves on every push to dev
+#   beta   -> dev branch builds started by hand. Normally reached through the
+#             "Include beta versions" switch in Settings -> Updates rather than
+#             by setting it here; the switch overrides this value.
 BEACON_TAG = os.environ.get("BEACON_TAG", "latest").strip() or "latest"
 
 # Build provenance baked into the image by web/Dockerfile (see the ARGs there).

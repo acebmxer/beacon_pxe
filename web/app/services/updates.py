@@ -1,9 +1,11 @@
 """Update checking: compares deployed image digest against GHCR.
 
-Which tag is watched depends on the configured update channel (config.BEACON_TAG,
-set from BEACON_TAG in .env): "latest" follows the main branch, "beta" follows the
-dev branch, "stable" follows tagged releases. docker-compose.yml interpolates the same variable, so the tag
-checked here is always the tag `docker compose pull` installs.
+Which tag is watched depends on the update channel: BEACON_TAG in .env ("latest"
+follows the main branch, "stable" follows tagged releases), unless the admin has
+turned on beta updates in Settings, which targets "beta" (builds triggered by hand
+from the dev branch) instead. docker-compose.yml interpolates the same variable and
+the update passes the chosen tag to compose, so the tag checked here is always the
+tag `docker compose pull` installs.
 
 What is *deployed* is read from the running web container itself (through the
 docker socket) rather than remembered in the database. Bookkeeping desyncs the
@@ -13,6 +15,7 @@ then keeps advertising an update that is already installed.
 """
 import json
 import logging
+import os
 import subprocess
 import threading
 import time
@@ -55,6 +58,48 @@ _CHANNEL_SWITCHED = "channel-switched"
 _WEB_CONTAINER = "beacon_web"
 
 
+# Settings key for the "Include beta versions" switch in Settings -> Updates.
+_BETA_KEY = "update_beta"
+_BETA_TAG = "beta"
+
+
+def beta_enabled(db) -> bool:
+    return get_setting(db, _BETA_KEY, "0") == "1"
+
+
+def set_beta(db, enabled: bool) -> None:
+    set_setting(db, _BETA_KEY, "1" if enabled else "0")
+
+
+def target_channel(db=None) -> str:
+    """The image tag updates move to: beta when switched on, else BEACON_TAG."""
+    if db is None:
+        db = SessionLocal()
+        try:
+            return target_channel(db)
+        finally:
+            db.close()
+    return _BETA_TAG if beta_enabled(db) else config.BEACON_TAG
+
+
+_running_channel: str | None = None
+
+
+def running_channel() -> str:
+    """The tag the running web container was created from.
+
+    BEACON_TAG in this container's environment is only the .env value, which a
+    beta update overrides, so the container's own image reference is the
+    authority. It cannot change for the life of the process, hence cached.
+    """
+    global _running_channel
+    if _running_channel is None:
+        ref = _docker(["inspect", _WEB_CONTAINER, "--format", "{{.Config.Image}}"]) or ""
+        prefix = f"ghcr.io/{_OWNER}/{_IMAGE}:"
+        _running_channel = ref[len(prefix):] if ref.startswith(prefix) and ref[len(prefix):] else config.BEACON_TAG
+    return _running_channel
+
+
 def _set_result(db, value: str) -> None:
     """Record the outcome of an update attempt, stamped with the time.
 
@@ -91,9 +136,9 @@ def clear_result(db) -> None:
     _set_result(db, "")
 
 
-def image_ref() -> str:
+def image_ref(channel: str | None = None) -> str:
     """Fully qualified image the update check watches and compose pulls."""
-    return f"ghcr.io/{_OWNER}/{_IMAGE}:{config.BEACON_TAG}"
+    return f"ghcr.io/{_OWNER}/{_IMAGE}:{channel or target_channel()}"
 
 
 def version_label() -> str:
@@ -127,7 +172,7 @@ def is_dev_build() -> bool:
     return config.BEACON_VERSION == "dev"
 
 
-def _ghcr_latest_digest() -> str | None:
+def _ghcr_latest_digest(channel: str) -> str | None:
     """Return the tracked tag's manifest digest from GHCR, or None on error.
 
     A missing tag (404) is indistinguishable here from a network failure — both
@@ -144,7 +189,7 @@ def _ghcr_latest_digest() -> str | None:
             token = json.loads(r.read())["token"]
 
         req = urllib.request.Request(
-            f"https://ghcr.io/v2/{_OWNER}/{_IMAGE}/manifests/{config.BEACON_TAG}",
+            f"https://ghcr.io/v2/{_OWNER}/{_IMAGE}/manifests/{channel}",
             headers={
                 "Authorization": f"Bearer {token}",
                 "Accept": (
@@ -213,7 +258,7 @@ def check_for_updates() -> bool:
         now = datetime.now(timezone.utc).isoformat()
         set_setting(db, "update_last_checked", now)
 
-        digest = _ghcr_latest_digest()
+        digest = _ghcr_latest_digest(target_channel(db))
 
         if digest is None:
             # Network unreachable, or the tag does not exist yet — keep whatever
@@ -290,7 +335,7 @@ def refresh_available(db) -> None:
                  "clearing stale update flag")
 
 
-def _spawn_recreator(image: str, project_dir: str) -> str | None:
+def _spawn_recreator(image: str, project_dir: str, channel: str) -> str | None:
     """Start a throwaway container to run `docker compose up -d`.
 
     The recreation cannot run in this process. `docker compose up -d` detaches
@@ -321,6 +366,9 @@ def _spawn_recreator(image: str, project_dir: str) -> str | None:
             "-v", "/var/run/docker.sock:/var/run/docker.sock",
             "-v", f"{project_dir}:{project_dir}",
             "-w", project_dir,
+            # Beats the tag in .env, so the beta switch in Settings decides the
+            # channel the stack is recreated on.
+            "-e", f"BEACON_TAG={channel}",
             image,
             # --remove-orphans only touches containers labelled with this
             # compose project; this container carries no such label, so it
@@ -408,6 +456,7 @@ def run_update() -> None:
         set_setting(db, "update_started_at", datetime.now(timezone.utc).isoformat())
         _set_result(db, "")
 
+        channel = target_channel(db)
         compose_file = str(config.COMPOSE_FILE)
         project_dir = config.COMPOSE_PROJECT_DIR
         env_file = config.COMPOSE_ENV_FILE
@@ -424,6 +473,7 @@ def run_update() -> None:
             capture_output=True,
             text=True,
             timeout=600,
+            env={**os.environ, "BEACON_TAG": channel},
         )
         if pull.returncode != 0:
             err = (pull.stderr or pull.stdout or "unknown error")[:400]
@@ -451,10 +501,10 @@ def run_update() -> None:
         # and the wait-to-be-replaced protocol below would sit out its full
         # timeout and then declare a perfectly healthy stack recreate_failed.
         running = _docker(["inspect", _WEB_CONTAINER, "--format", "{{.Image}}"])
-        pulled = _docker(["image", "inspect", image_ref(), "--format", "{{.Id}}"])
+        pulled = _docker(["image", "inspect", image_ref(channel), "--format", "{{.Id}}"])
         web_unchanged = bool(running and pulled and running == pulled)
 
-        error = _spawn_recreator(image_ref(), project_dir)
+        error = _spawn_recreator(image_ref(channel), project_dir, channel)
         if error:
             _set_result(db, f"recreate_failed: {error}")
             set_setting(db, "update_in_progress", "0")

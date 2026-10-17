@@ -1,16 +1,25 @@
 name: Publish images
 
+run-name: ${{ inputs.description || github.event.head_commit.message || 'Publish images' }}
+
 # Builds the six Beacon images and pushes them to GitHub Container Registry
 # (ghcr.io/acebmxer/beacon-<service>).
 #
 #   - push to main            -> :latest (+ :main, :main-<sha>)
-#   - push to dev             -> :beta (+ :dev)
 #   - push a tag like v1.2.3  -> :1.2.3, :1.2, :stable
-#   - manual run (workflow_dispatch)
+#   - manual run on dev       -> :beta (+ :dev, :<version>-beta.<n>) and a GitHub
+#                                pre-release v<version>-beta.<n>
+#                                (Actions -> Publish images -> Run workflow)
+#   - manual run on main      -> :latest (+ :main, :main-<sha>)
 #
-# :stable, :latest and :beta are the update channels a deployment can track via
-# BEACON_TAG. :beta moves on every push to dev; :latest on every push to main;
-# :stable only on release tags.
+# :stable, :latest and :beta are the update channels. :beta moves only when a
+# run is started by hand on dev, so pushing to dev never changes what users who
+# turned on beta updates (Settings -> Updates) are offered. :latest moves on
+# every push to main; :stable only on release tags.
+#
+# <version> is the number in the VERSION file on the branch. Betas count up per
+# version (v0.7.2-beta.1, .2, ...). Once v<version> is tagged as a release, a beta
+# run stops until VERSION is bumped for the next release.
 #
 # No secrets to configure: the built-in GITHUB_TOKEN authenticates to GHCR.
 # After the first run, make each package public under the repo's Packages tab
@@ -18,15 +27,51 @@ name: Publish images
 
 on:
   push:
-    branches: [main, dev]
-    tags: ["v*"]
+    branches: [main]
+    # Beta tags (v0.7.2-beta.1) are pre-releases and must never move :stable.
+    tags: ["v*", "!v*-*"]
   workflow_dispatch:
+    inputs:
+      description:
+        description: Title shown in the Actions run list (optional)
+        required: false
+        type: string
 
 env:
   REGISTRY: ghcr.io
 
 jobs:
+  # Works out the beta name once, so all six image builds and the pre-release
+  # agree on it. Empty outside a manual run on dev.
+  prepare:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      beta: ${{ steps.beta.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Name this beta
+        id: beta
+        if: github.ref == 'refs/heads/dev'
+        run: |
+          version=$(tr -d '[:space:]' < VERSION)
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::VERSION must hold a plain x.y.z number, found '$version'"
+            exit 1
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+            echo "::error::v$version is already released; bump VERSION on this branch first"
+            exit 1
+          fi
+          last=$(git ls-remote --tags origin "refs/tags/v$version-beta.*" \
+            | sed -n 's|.*-beta\.\([0-9]*\)$|\1|p' | sort -n | tail -1)
+          echo "tag=$version-beta.$(( ${last:-0} + 1 ))" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: prepare
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -71,9 +116,11 @@ jobs:
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix={{branch}}-,enable={{is_default_branch}}
             type=raw,value=latest,enable={{is_default_branch}}
-            # Pre-release channel: the dev branch only. Keyed off the ref so
-            # it can never be applied to a main or tag build.
+            # Pre-release channel: manual runs on the dev branch only (dev does
+            # not build on push). Keyed off the ref so it can never be applied
+            # to a main or tag build.
             type=raw,value=beta,enable=${{ github.ref == 'refs/heads/dev' }}
+            type=raw,value=${{ needs.prepare.outputs.beta || 'unused' }},enable=${{ needs.prepare.outputs.beta != '' }}
             # Release channel: only ever moves when a v* tag is published, so
             # deployments running BEACON_TAG=stable are not disturbed by pushes
             # to main. Explicitly keyed off the tag ref rather than
@@ -93,9 +140,34 @@ jobs:
           # Baked into the image so the web UI can report what is deployed.
           # meta.outputs.version is the primary tag: "1.2.3" for a v* tag push,
           # "main" for a main-branch push. Only the web image declares these
-          # ARGs; the other five ignore them.
+          # ARGs; the other five ignore them. A beta is labelled with its own
+          # number (0.7.2-beta.1) rather than the branch name.
           build-args: |
-            BEACON_VERSION=${{ steps.meta.outputs.version }}
+            BEACON_VERSION=${{ needs.prepare.outputs.beta || steps.meta.outputs.version }}
             BEACON_COMMIT=${{ github.sha }}
           cache-from: type=gha,scope=beacon-${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=beacon-${{ matrix.name }}
+
+  # A beta is announced as a GitHub pre-release. Created only after every image
+  # is pushed, so the tag never exists for a build that failed.
+  release:
+    needs: [prepare, build]
+    if: needs.prepare.outputs.beta != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+
+      - name: Create the pre-release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BETA: ${{ needs.prepare.outputs.beta }}
+        run: |
+          tag="v$BETA"
+          # What is new in this beta is what CHANGELOG.md lists under [Unreleased].
+          unreleased=$(awk '/^## \[Unreleased\]/{f=1; next} /^## \[/{f=0} f' CHANGELOG.md)
+          notes=$(printf '%s\n\n%s' "Beta build from the dev branch, for testing before it reaches main. To run it, turn on Include beta versions under Settings -> Updates (image tag :beta, or :$BETA to pin this build)." "$unreleased")
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$tag" --prerelease --notes "$notes"

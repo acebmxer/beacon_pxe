@@ -12,6 +12,11 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **Fedora and RHEL netinstall ISOs now boot.** The installer was pointed at the
+  ISO file, so it failed with 404s for `.treeinfo` and `install.img`. The ISO is
+  now unpacked into the boot root and served as a repo. **Reprocess** existing
+  Fedora/RHEL images to apply this.
+
 - **Clients keep appearing on the dashboard on a very busy or abused network.**
   Once 10,000 different clients had loaded the boot menu, new ones were ignored
   until **Reset statistics**; now the least-recently-seen client is dropped to

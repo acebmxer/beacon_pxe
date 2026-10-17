@@ -21,6 +21,10 @@ to do differently. Internal refactors that change nothing observable are omitted
   one. A plain `docker compose up -d` on the host still uses `BEACON_TAG` from
   `.env`.
 
+  The **Include beta versions** checkbox sits next to its label, in the same
+  layout as the other checkboxes on the page, instead of being pushed to the
+  opposite side of the card.
+
 ## [0.7.1] - 2026-10-16
 
 **Fedora and RHEL netinstall ISOs boot again, and the dashboard copes with very

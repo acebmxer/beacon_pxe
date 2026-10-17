@@ -120,12 +120,12 @@
     <span class="mono">docker compose -f docker-compose.yml -f
     docker-compose.dev.yml up -d --build</span> to get it back.
   </div>
-  <label style="display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;">
-    <input id="upd-beta" type="checkbox" style="margin-top:3px;">
-    <span>Include beta versions
-      <small class="muted" style="display:block;">Updates move to test builds published by hand from the <span class="mono">dev</span> branch, ahead of the stable release. Turn it off to return to <span id="upd-base-channel"></span>; that installs an older build at the next update.</small>
-    </span>
-  </label>
+  <div class="checkbox" style="align-items:flex-start;">
+    <input type="checkbox" id="upd-beta" style="margin-top:3px;">
+    <label for="upd-beta">Include beta versions
+      <span class="muted" style="display:block;font-size:0.83rem;">Updates move to test builds published by hand from the <span class="mono">dev</span> branch, ahead of the stable release. Turn it off to return to <span id="upd-base-channel"></span>; that installs an older build at the next update.</span>
+    </label>
+  </div>
   <div id="upd-status" class="muted">Checking…</div>
   <div class="toolbar" style="margin-top:14px;">
     <button class="btn ghost sm" id="btn-check">Check now</button>

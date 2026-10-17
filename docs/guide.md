@@ -81,6 +81,25 @@ raw ISO is kept at `/images/<file>.iso`. A best-effort kernel command line is
 filled in per distro — edit **boot args** on the Images page if a live ISO needs
 a tweak (a **Reprocess** re-derives them and overwrites your edit).
 
+### Netboot installers (no ISO)
+
+**Add from a netboot catalog** on the Images page creates an image without an
+ISO. Pick a distro (currently **Debian**), a release (`trixie`, `bookworm`, or
+any other release name the mirror carries) and a mirror (pre-filled, editable).
+Beacon downloads the distro's netboot archive (about 55 MB for Debian), keeps the
+kernel and initrd for the boot menu, and sets the kernel arguments so the
+client's installer fetches its packages from that mirror. The archive itself
+stays in `/images` so **Reprocess** can rebuild the boot files; the client needs
+internet (or a reachable local mirror) during the install. The archive can also
+come from another URL, or be uploaded when the Beacon host is offline. 
+Choose **Live desktop** instead to boot Debian's live desktops (KDE Plasma, GNOME,
+Xfce, Cinnamon, MATE, LXQt, LXDE or Standard). Debian publishes live boot files
+only inside its live ISO, so Beacon downloads that ISO once (about 3–4 GB), keeps
+the kernel, initrd and `filesystem.squashfs`, and deletes the ISO. Clients fetch
+the squashfs over HTTP into RAM, so they need about 6 GB. **Reprocess** downloads
+the ISO again. The live ISO's folder is the **Mirror** field, and the file name
+is read from it, so new point releases are picked up.
+
 | Distro | Boot args |
 |--------|-----------|
 | Ubuntu live | `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |

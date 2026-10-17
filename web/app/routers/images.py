@@ -5,6 +5,7 @@ import re
 
 from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Request,
                      UploadFile, File)
+from starlette.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -14,6 +15,7 @@ from ..deps import require_admin, require_user, render
 from ..models import Image, User
 from ..services import images as image_svc
 from ..services import ipxe
+from ..services import netboot as netboot_svc
 from ..store import strip_control_chars
 
 router = APIRouter()
@@ -33,11 +35,16 @@ def _ordered_images(db: Session) -> list[Image]:
     ).scalars().all()
 
 
+def _page(request: Request, db: Session, **ctx):
+    return render(request, db, "images.html", active="images",
+                  images=_ordered_images(db),
+                  catalog=netboot_svc.load_catalog(), **ctx)
+
+
 @router.get("/images")
 def images_page(request: Request, user: User = Depends(require_user),
                 db: Session = Depends(get_db)):
-    return render(request, db, "images.html", active="images",
-                  images=_ordered_images(db))
+    return _page(request, db)
 
 
 @router.get("/images/status")
@@ -95,9 +102,8 @@ async def upload(request: Request, background: BackgroundTasks,
                  db: Session = Depends(get_db)):
     filename = _safe_filename(file.filename or "image.iso")
     if not filename.lower().endswith(".iso"):
-        return render(request, db, "images.html", active="images",
-                      images=_ordered_images(db),
-                      error="Only .iso files are supported. See the README for why.")
+        return _page(request, db,
+                     error="Only .iso files are supported. See the README for why.")
 
     dest = image_svc.iso_path(filename)
     # Stream to disk in chunks so large ISOs don't load into memory.
@@ -119,6 +125,76 @@ async def upload(request: Request, background: BackgroundTasks,
     db.commit()
 
     # Extraction can be slow; run it after the response is sent.
+    background.add_task(image_svc.process_image, img.id)
+    return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/netboot")
+async def add_netboot(request: Request, background: BackgroundTasks,
+                      user: User = Depends(require_admin),
+                      distro: str = Form(...), variant: str = Form("installer"),
+                      release: str = Form(""), flavour: str = Form(""),
+                      mirror: str = Form(""), name: str = Form(""),
+                      source: str = Form("mirror"), url: str = Form(""),
+                      file: UploadFile | None = File(None),
+                      db: Session = Depends(get_db)):
+    """Add an image from a catalog distro without keeping an ISO.
+
+    variant "installer": the distro's netboot archive (kernel + initrd).
+    variant "live": a live desktop; Beacon fetches the live ISO, keeps its
+    kernel, initrd and root filesystem, and deletes the ISO.
+    """
+    entry = netboot_svc.catalog_entry(distro)
+    if entry is None:
+        return _page(request, db, error="Unknown distro.")
+    live = netboot_svc.live_entry(entry) if variant == "live" else None
+    if variant == "live" and live is None:
+        return _page(request, db, error=f"{entry['name']} has no live desktop entry.")
+    try:
+        if live:
+            release = netboot_svc.validate_flavour(live, flavour)
+            mirror = netboot_svc.validate_mirror(mirror or live["base_url"])
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_live_iso_url, live, mirror, release)
+            label = next(f["label"] for f in live["flavours"] if f["id"] == release)
+            default_name = f"{entry['name']} Live {label}"
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        else:
+            variant = "installer"
+            release = netboot_svc.validate_release(release)
+            mirror = netboot_svc.validate_mirror(mirror or entry["default_mirror"])
+            source_url = ""
+            if source == "upload":
+                if file is None or not file.filename:
+                    raise netboot_svc.NetbootError("Choose an archive file to upload.")
+            elif source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = netboot_svc.archive_url(entry, mirror, release)
+            default_name = f"{entry['name']} {release} (netboot)"
+            filename = netboot_svc.new_archive_name(entry["id"], release)
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, error=str(e))
+
+    size = 0
+    if not live and source == "upload":
+        with open(image_svc.iso_path(filename), "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+                size += len(chunk)
+
+    img = Image(
+        # name is written verbatim into boot.ipxe; see upload().
+        name=strip_control_chars(name.strip()) or default_name,
+        filename=filename, status="pending", size_bytes=size,
+        source="netboot", variant=variant, catalog_id=entry["id"],
+        release=release, mirror=mirror, source_url=source_url,
+    )
+    db.add(img)
+    db.commit()
     background.add_task(image_svc.process_image, img.id)
     return RedirectResponse("/images", status_code=303)
 

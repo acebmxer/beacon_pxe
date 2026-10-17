@@ -1,0 +1,65 @@
+{
+  "distros": [
+    {
+      "id": "debian",
+      "name": "Debian",
+      "default_mirror": "https://deb.debian.org/debian",
+      "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
+      "kernel_member": "debian-installer/amd64/linux",
+      "initrd_member": "debian-installer/amd64/initrd.gz",
+      "boot_args": "mirror/country=manual mirror/protocol={mirror_proto} mirror/{mirror_proto}/hostname={mirror_host} mirror/{mirror_proto}/directory={mirror_path}",
+      "releases": [
+        {
+          "id": "trixie",
+          "label": "Debian 13 (trixie)"
+        },
+        {
+          "id": "bookworm",
+          "label": "Debian 12 (bookworm)"
+        }
+      ],
+      "live": {
+        "base_url": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid",
+        "iso_regex": "debian-live-[0-9.]+-amd64-{flavour}\\.iso",
+        "kernel_member": "live/vmlinuz",
+        "initrd_member": "live/initrd.img",
+        "root_member": "live/filesystem.squashfs",
+        "boot_args": "boot=live fetch=${{boot-url}}/os/{image_id}/filesystem.squashfs ip=dhcp",
+        "flavours": [
+          {
+            "id": "kde",
+            "label": "KDE Plasma"
+          },
+          {
+            "id": "gnome",
+            "label": "GNOME"
+          },
+          {
+            "id": "xfce",
+            "label": "Xfce"
+          },
+          {
+            "id": "cinnamon",
+            "label": "Cinnamon"
+          },
+          {
+            "id": "mate",
+            "label": "MATE"
+          },
+          {
+            "id": "lxqt",
+            "label": "LXQt"
+          },
+          {
+            "id": "lxde",
+            "label": "LXDE"
+          },
+          {
+            "id": "standard",
+            "label": "Standard (no desktop)"
+          }
+        ]
+      }
+    }
+  ]
+}

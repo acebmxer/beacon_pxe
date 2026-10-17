@@ -10,6 +10,22 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- **Debian installers and live desktops can be added without keeping an ISO.** **Add from a netboot
+  catalog** on the Images page takes a release (`trixie`, `bookworm`, or any
+  other name the mirror carries) and a mirror (default `deb.debian.org`), then
+  downloads Debian's netboot archive and keeps only its kernel and initrd. The
+  client's installer fetches its packages from the mirror, so nothing is stored
+  per image beyond the roughly 55 MB archive, which stays so **Reprocess** can
+  rebuild the boot files. The archive can also be fetched from another URL or
+  uploaded, for a Beacon host with no internet.
+
+  **Live desktop** does the same for Debian's live desktops (KDE Plasma, GNOME,
+  Xfce, Cinnamon, MATE, LXQt, LXDE, Standard): Beacon downloads the live ISO once,
+  keeps the kernel, initrd and root filesystem, and deletes the ISO. Reprocess
+  downloads it again.
+
 ## [0.7.2] - 2026-10-17
 
 **Beta updates can be switched on from Settings, and betas are now numbered.**

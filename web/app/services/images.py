@@ -14,7 +14,7 @@ from ..db import SessionLocal
 from ..models import Image
 from .. import config
 from ..store import all_settings
-from . import ipxe
+from . import ipxe, netboot
 
 log = logging.getLogger("beacon.images")
 
@@ -821,6 +821,87 @@ def _clean_derived_data(image_id: int) -> None:
     shutil.rmtree(config.SMB_DIR / sid, ignore_errors=True)
 
 
+def _process_netboot(db, img: Image) -> None:
+    """Build a catalog image without keeping an ISO.
+
+    Installer: fetch the netboot archive if needed and keep its kernel and
+    initrd. Live: fetch the distro's live ISO, keep the kernel, initrd and root
+    filesystem (served over HTTP) and delete the ISO.
+    """
+    entry = netboot.catalog_entry(img.catalog_id)
+    live = netboot.live_entry(entry) if entry else None
+    if entry is None or (img.variant == "live" and live is None):
+        img.status = "error"
+        img.message = f"Catalog entry '{img.catalog_id}' no longer exists."
+        db.commit()
+        return
+    archive = iso_path(img.filename)
+    dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
+    try:
+        if img.source_url and not archive.exists():
+            netboot.download(
+                img.source_url, archive,
+                netboot.LIVE_ISO_MAX_BYTES if img.variant == "live"
+                else netboot.ARCHIVE_MAX_BYTES)
+        if not archive.exists():
+            raise netboot.NetbootError(
+                "The uploaded archive is gone; add the image again.")
+        if img.variant == "live":
+            _extract_live_files(archive, live, dest_dir)
+            # Everything needed is extracted; the ISO is only kept by ISO images.
+            archive.unlink(missing_ok=True)
+        else:
+            netboot.extract_boot_files(archive, entry, dest_dir)
+    except netboot.NetbootError as e:
+        img.status = "error"
+        img.message = str(e)
+        db.commit()
+        return
+    img.os_family = "linux"
+    img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
+    img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/initrd"
+    if img.variant == "live":
+        img.boot_args = netboot.live_boot_args(live, img.id)
+        img.size_bytes = (dest_dir / "filesystem.squashfs").stat().st_size
+        img.message = f"{entry['name']} live desktop ({img.release}); root filesystem served over HTTP"
+    else:
+        img.boot_args = netboot.boot_args(entry, img.mirror, img.release)
+        img.size_bytes = archive.stat().st_size
+        img.message = (f"{entry['name']} {img.release} installer; packages come "
+                       f"from {img.mirror}")
+    img.status = "ready"
+    db.commit()
+
+
+def _extract_live_files(iso: Path, live: dict, dest_dir: Path) -> None:
+    """Pull the kernel, initrd and root filesystem out of a live ISO."""
+    try:
+        entries = _list_iso(iso)
+        wanted = {live["kernel_member"]: "vmlinuz", live["initrd_member"]: "initrd",
+                  live["root_member"]: "filesystem.squashfs"}
+        for member, name in wanted.items():
+            # The ISO lists vmlinuz and vmlinuz-<version> as hard links to each
+            # other and which one holds the data depends on the order, so reading
+            # the plain name can give an empty file. Try the plain name, then the
+            # versioned ones, and keep the first that has content.
+            rx = re.compile(re.escape(member) + r"(-.+)?", re.IGNORECASE)
+            candidates = sorted(
+                (e for e in entries if rx.fullmatch(e.lstrip("./"))),
+                key=lambda e: e.lstrip("./") != member)
+            if not candidates:
+                raise netboot.NetbootError(
+                    f"The live ISO does not contain {member}.")
+            for found in candidates:
+                _extract_one(iso, found, dest_dir / name)
+                if (dest_dir / name).stat().st_size:
+                    break
+            else:
+                raise netboot.NetbootError(
+                    f"{member} is empty in the live ISO.")
+    except subprocess.CalledProcessError as e:
+        raise netboot.NetbootError(f"Could not read the live ISO: {e.stderr or e}")
+
+
 def process_image(image_id: int) -> None:
     """Run extraction for one image. Intended to run as a background task."""
     db = SessionLocal()
@@ -834,6 +915,11 @@ def process_image(image_id: int) -> None:
         # Wipe any artifacts from a previous run before re-extracting, so a
         # changed family/netboot method can't leave stale (possibly huge) data.
         _clean_derived_data(image_id)
+        if img.source == "netboot":
+            _process_netboot(db, img)
+            ipxe.render(db)
+            log.info("Image %s ready (netboot)", img.name)
+            return
         iso = iso_path(img.filename)
         try:
             entries = _list_iso(iso)
@@ -972,6 +1058,8 @@ def _required_paths(img: Image) -> list[Path]:
             paths.append(dest_dir / "tree" / ".treeinfo")
         if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
             paths.append(dest_dir / "squashfs.img")
+        if img.source == "netboot" and img.variant == "live":
+            paths.append(dest_dir / "filesystem.squashfs")
         basedir = re.search(r"archisobasedir=(\S+)", args)
         if basedir:
             paths.append(dest_dir / basedir.group(1))
@@ -983,6 +1071,12 @@ def _missing_message(img: Image, missing: list[Path]) -> str:
     shown = ", ".join(str(p) for p in missing[:3])
     if len(missing) > 3:
         shown += f", and {len(missing) - 3} more"
+    if img.source == "netboot":
+        if img.variant == "live":
+            return (f"Boot files are missing ({shown}). Reprocess downloads "
+                    "the live ISO again and rebuilds them.")
+        return (f"Boot files are missing ({shown}). Reprocess rebuilds them "
+                "from the saved archive.")
     if not iso_path(img.filename).exists():
         return (f"Boot files are missing ({shown}) and so is the ISO "
                 f"{img.filename} — upload the ISO again to restore this image.")

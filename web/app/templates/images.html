@@ -35,7 +35,8 @@
     <div class="alert error" id="upload-error" style="display:none;margin-top:14px;"></div>
   </form>
   <div class="alert info" style="margin-top:16px;">
-    <b>Format note:</b> only <span class="mono">.iso</span> is accepted.
+    <b>Format note:</b> only <span class="mono">.iso</span> is accepted here;
+    installers without an ISO are added from the netboot catalog below.
     <b>Windows ISOs</b> boot the installer via wimboot/WinPE: the WinPE boot
     files are extracted, and the ISO is unpacked to an SMB share that WinPE
     mounts to run Setup (needs ports 139 + 445 reachable from the client).
@@ -43,6 +44,70 @@
     reliable netboot.
   </div>
 </div>
+{% if catalog %}
+<div class="card" style="margin-top:18px;">
+  <h2>Add from a netboot catalog</h2>
+  <div class="sub">No ISO is kept. An <b>installer</b> keeps only the kernel and initrd and
+    downloads its packages from the mirror; a <b>live desktop</b> keeps the kernel, initrd
+    and root filesystem, which clients stream over HTTP.</div>
+  <form id="netboot-form" method="post" action="/images/netboot" enctype="multipart/form-data">
+    <div class="row">
+      <div>
+        <label for="nb-variant">Type</label>
+        <select id="nb-variant" name="variant">
+          <option value="installer">Installer</option>
+          <option value="live" id="nb-live-opt">Live desktop</option>
+        </select>
+      </div>
+      <div>
+        <label for="nb-distro">Distro</label>
+        <select id="nb-distro" name="distro">
+          {% for d in catalog %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+        </select>
+      </div>
+      <div id="nb-flavour-wrap" style="display:none;">
+        <label for="nb-flavour">Desktop</label>
+        <select id="nb-flavour" name="flavour"></select>
+      </div>
+      <div id="nb-release-wrap">
+        <label for="nb-release">Release</label>
+        <input id="nb-release" name="release" list="nb-releases" autocomplete="off">
+        <datalist id="nb-releases"></datalist>
+      </div>
+      <div>
+        <label for="nb-mirror">Mirror</label>
+        <input id="nb-mirror" name="mirror" class="mono">
+      </div>
+    </div>
+    <div class="row" style="margin-top:14px;">
+      <div>
+        <label for="nb-name">Display name (optional)</label>
+        <input id="nb-name" name="name" placeholder="e.g. Debian 13 netinstall">
+      </div>
+      <div>
+        <label for="nb-source">Archive</label>
+        <select id="nb-source" name="source">
+          <option value="mirror">Download from the mirror</option>
+          <option value="url">Download from a URL</option>
+          <option value="upload">Upload a file</option>
+        </select>
+      </div>
+      <div id="nb-url-wrap" style="display:none;">
+        <label for="nb-url">Archive URL</label>
+        <input id="nb-url" name="url" class="mono" placeholder="https://…/netboot.tar.gz or live .iso">
+      </div>
+      <div id="nb-file-wrap" style="display:none;">
+        <label for="nb-file">Archive file</label>
+        <input id="nb-file" name="file" type="file" accept=".gz,.tgz,.tar">
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn" type="submit">Add &amp; process</button>
+    </div>
+  </form>
+</div>
+{% endif %}
+
 {% endif %}
 
 <div class="card" style="margin-top:18px;">
@@ -73,7 +138,7 @@
         <td>
           <b>{{ img.name }}</b>
           {% if img.is_default %}<span class="default-star" title="Default boot entry">★</span>{% endif %}
-          <br><span class="muted mono">{{ img.filename }}</span>
+          <br><span class="muted mono">{% if img.source == 'netboot' %}netboot · {{ img.mirror }}{% else %}{{ img.filename }}{% endif %}</span>
         </td>
         <td>{{ img.os_family }}</td>
         <td>
@@ -129,6 +194,61 @@
 
 <script nonce="{{ csp_nonce }}">
 (function () {
+  // --- Netboot catalog form -----------------------------------------------
+  var catalog = {{ catalog|tojson }};
+  var nbForm = document.getElementById("netboot-form");
+  if (nbForm) {
+    var distroSel = document.getElementById("nb-distro");
+    var mirrorIn = document.getElementById("nb-mirror");
+    var releaseIn = document.getElementById("nb-release");
+    var datalist = document.getElementById("nb-releases");
+    var sourceSel = document.getElementById("nb-source");
+    var variantSel = document.getElementById("nb-variant");
+    var flavourSel = document.getElementById("nb-flavour");
+    var currentDistro = function () {
+      return catalog.filter(function (x) { return x.id === distroSel.value; })[0];
+    };
+    var isLive = function () { return variantSel.value === "live"; };
+    var fillDistro = function () {
+      var d = currentDistro();
+      if (!d) return;
+      var hasLive = !!d.live;
+      document.getElementById("nb-live-opt").disabled = !hasLive;
+      if (!hasLive) variantSel.value = "installer";
+      mirrorIn.value = isLive() ? d.live.base_url : d.default_mirror;
+      datalist.innerHTML = "";
+      (d.releases || []).forEach(function (r) {
+        var o = document.createElement("option");
+        o.value = r.id; o.label = r.label;
+        datalist.appendChild(o);
+      });
+      flavourSel.innerHTML = "";
+      ((d.live && d.live.flavours) || []).forEach(function (f) {
+        var o = document.createElement("option");
+        o.value = f.id; o.textContent = f.label;
+        flavourSel.appendChild(o);
+      });
+      releaseIn.value = d.releases && d.releases.length ? d.releases[0].id : "";
+      releaseIn.required = !isLive();
+      document.getElementById("nb-flavour-wrap").style.display = isLive() ? "" : "none";
+      document.getElementById("nb-release-wrap").style.display = isLive() ? "none" : "";
+      // A live desktop is fetched as an ISO, so uploading an archive does not apply.
+      sourceSel.querySelector('option[value="upload"]').disabled = isLive();
+      if (isLive() && sourceSel.value === "upload") sourceSel.value = "mirror";
+      showSource();
+    };
+    var showSource = function () {
+      document.getElementById("nb-url-wrap").style.display =
+        sourceSel.value === "url" ? "" : "none";
+      document.getElementById("nb-file-wrap").style.display =
+        sourceSel.value === "upload" ? "" : "none";
+    };
+    distroSel.addEventListener("change", fillDistro);
+    variantSel.addEventListener("change", fillDistro);
+    sourceSel.addEventListener("change", showSource);
+    fillDistro();
+  }
+
   // --- Drag-and-drop ISO upload ------------------------------------------
   var dropZone = document.getElementById("drop-zone");
   var fileInput = document.getElementById("file");

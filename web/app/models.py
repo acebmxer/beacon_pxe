@@ -124,3 +124,15 @@ class Image(Base):
     # the first-run render and ipxe.render() both treat it as the default choice.
     display_order: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     is_default: Mapped[int] = mapped_column(Integer, default=0)
+    # How the image was made: "iso" (uploaded ISO) or "netboot" (a catalog
+    # distro's netboot archive; `filename` is then the small archive, and the
+    # fields below say where it came from so Reprocess can rebuild it).
+    source: Mapped[str] = mapped_column(String(16), default="iso")
+    # "installer" (netboot archive) or "live" (live desktop: kernel, initrd and
+    # root filesystem pulled from the distro's live ISO, which is then deleted).
+    variant: Mapped[str] = mapped_column(String(16), default="installer")
+    catalog_id: Mapped[str] = mapped_column(String(32), default="")
+    release: Mapped[str] = mapped_column(String(64), default="")
+    mirror: Mapped[str] = mapped_column(String(255), default="")
+    # Archive download URL; empty when the admin uploaded the archive instead.
+    source_url: Mapped[str] = mapped_column(String(512), default="")

@@ -851,7 +851,7 @@ def _process_netboot(db, img: Image) -> None:
             # Everything needed is extracted; the ISO is only kept by ISO images.
             archive.unlink(missing_ok=True)
         else:
-            netboot.extract_boot_files(archive, entry, dest_dir)
+            netboot.extract_boot_files(archive, entry, dest_dir, img.release)
     except netboot.NetbootError as e:
         img.status = "error"
         img.message = str(e)
@@ -918,7 +918,10 @@ def process_image(image_id: int) -> None:
         if img.source == "netboot":
             _process_netboot(db, img)
             ipxe.render(db)
-            log.info("Image %s ready (netboot)", img.name)
+            if img.status == "ready":
+                log.info("Image %s ready (netboot)", img.name)
+            else:
+                log.warning("Image %s failed: %s", img.name, img.message)
             return
         iso = iso_path(img.filename)
         try:

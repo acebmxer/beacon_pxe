@@ -35,6 +35,14 @@ def fresh_tables():
     Base.metadata.drop_all(bind=_engine)
 
 
+@pytest.fixture(autouse=True)
+def no_release_discovery(monkeypatch):
+    """The Images page would ask the real mirror which releases exist; tests show
+    the catalog's own list instead. Discovery itself is tested with a fake mirror."""
+    from app.services import netboot
+    monkeypatch.setattr(netboot, "_cached_discovery", lambda entry: None)
+
+
 @pytest.fixture
 def db():
     """A clean SQLAlchemy session backed by the in-memory test engine."""

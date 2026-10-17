@@ -38,7 +38,7 @@ def _ordered_images(db: Session) -> list[Image]:
 def _page(request: Request, db: Session, **ctx):
     return render(request, db, "images.html", active="images",
                   images=_ordered_images(db),
-                  catalog=netboot_svc.load_catalog(), **ctx)
+                  catalog=netboot_svc.page_catalog(), **ctx)
 
 
 @router.get("/images")
@@ -172,6 +172,7 @@ async def add_netboot(request: Request, background: BackgroundTasks,
                         netboot_svc.resolve_release_folder, live_rel, mirror)
                     source_url = await run_in_threadpool(
                         netboot_svc.resolve_live_iso_url, live, folder, release)
+                    netboot_svc.check_live_iso_matches(live, live_rel, source_url)
             label = next(f["label"] for f in live["flavours"] if f["id"] == release)
             version = f"{live_rel['name']} " if live_release.strip() else ""
             default_name = (f"{version or entry['name'] + ' '}Live {label}")
@@ -180,11 +181,13 @@ async def add_netboot(request: Request, background: BackgroundTasks,
             variant = "installer"
             release = netboot_svc.resolve_release(entry, release)
             mirror = netboot_svc.validate_mirror(mirror or entry["default_mirror"])
+            number = next((r.get("number") for r in entry.get("releases", [])
+                           if r["id"] == release), None)
             if release not in {r["id"] for r in entry.get("releases", [])}:
                 found = await run_in_threadpool(
                     netboot_svc.lookup_release, entry, mirror, release)
                 if found:
-                    release = found["codename"]
+                    release, number = found["codename"], found["number"]
                 elif re.fullmatch(r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]),
                                   release):
                     raise netboot_svc.NetbootError(
@@ -199,7 +202,8 @@ async def add_netboot(request: Request, background: BackgroundTasks,
                 source_url = netboot_svc.validate_source_url(url)
             else:
                 source_url = netboot_svc.archive_url(entry, mirror, release)
-            default_name = f"{entry['name']} {release} (netboot)"
+            default_name = (f"{entry['name']} {number} {release} (netboot)" if number
+                            else f"{entry['name']} {release} (netboot)")
             filename = netboot_svc.new_archive_name(entry["id"], release)
     except netboot_svc.NetbootError as e:
         return _page(request, db, error=str(e))

@@ -84,7 +84,8 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 ### Netboot installers (no ISO)
 
 **Add from a netboot catalog** on the Images page creates an image without an
-ISO. Pick a distro (currently **Debian**), a release (type `12` or `bookworm`, pick from the list, or enter any
+ISO. Pick a distro (currently **Debian**), a release (pick from the list, which is read from the mirror and marks
+releases past their long-term support "end of life"; type `12` or `bookworm`; or enter any
 other release name the mirror carries, or a newer version number, which is read
 from the mirror) and a mirror (pre-filled, editable).
 Beacon downloads the distro's netboot archive (about 55 MB for Debian), keeps the
@@ -98,8 +99,11 @@ Xfce, Cinnamon, MATE, LXQt, LXDE or Standard). Debian publishes live boot files
 only inside its live ISO, so Beacon downloads that ISO once (about 3–4 GB), keeps
 the kernel, initrd and `filesystem.squashfs`, and deletes the ISO. Clients fetch
 the squashfs over HTTP into RAM, so they need about 6 GB. **Reprocess** downloads
-the ISO again. Pick the **Release** (Debian 14 testing, 13 or 12; releases past
-Debian's end of support are not listed; 14 is a pre-release built weekly). The live ISO's folder is the **Mirror**
+the ISO again. Pick the **Release**: the list is read from Debian's
+mirror, so it shows the releases Debian carries now (today 14 testing, a
+pre-release built weekly, then 13, 12 and 11) and a new release appears on its
+own. A release whose long-term support has ended, by Debian's published dates,
+stays listed, marked "end of life". The live ISO's folder is the **Mirror**
 field, and the file name is read from it, so new point releases are picked up.
 For Debian 12 the newest point release is found in Debian's archive. **Other**
 accepts a version number or codename that is not in the list (`15` or its

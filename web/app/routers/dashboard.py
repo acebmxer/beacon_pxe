@@ -67,7 +67,10 @@ def stats(user: User = Depends(require_user), db: Session = Depends(get_db)):
         for name, count in db.execute(
             select(BootEvent.image_name, func.count(BootEvent.id))
             .group_by(BootEvent.image_name)
-            .order_by(func.count(BootEvent.id).desc())
+            # Ties go to the most recently booted, so a new image is not cut
+            # from the list in favour of an old one with the same count.
+            .order_by(func.count(BootEvent.id).desc(),
+                      func.max(BootEvent.created_at).desc())
             .limit(5)
         ).all()
     ]

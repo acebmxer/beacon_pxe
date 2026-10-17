@@ -175,6 +175,27 @@ class TestBootEventsApi:
         assert events[0]["image_id"] == 1
 
 
+class TestTopImages:
+    def test_ties_go_to_the_most_recently_booted(self, client):
+        from datetime import datetime, timedelta
+        start = datetime(2026, 1, 1)
+        db = _session()
+        try:
+            db.add_all([BootEvent(image_id=1, image_name="old", mac="aa", ip="",
+                                  created_at=start),
+                        BootEvent(image_id=1, image_name="old", mac="aa", ip="",
+                                  created_at=start)])
+            for n in range(6):
+                db.add(BootEvent(image_id=10 + n, image_name=f"img{n}", mac="aa", ip="",
+                                 created_at=start + timedelta(days=n + 1)))
+            db.commit()
+        finally:
+            db.close()
+        _login(client)
+        names = [i["name"] for i in client.get("/api/stats").json()["top_images"]]
+        assert names == ["old", "img5", "img4", "img3", "img2"]
+
+
 class TestMenuTrack:
     """/track/menu records a client that only loaded the menu."""
 

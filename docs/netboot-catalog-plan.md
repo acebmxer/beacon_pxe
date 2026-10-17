@@ -48,7 +48,8 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    distro, type or pick the release, mirror pre-filled), download or upload,
    unpack and keep kernel+initrd only, boot-menu entry, one distro end to end
    first, then the rest.
-2. **Release discovery.** Read each mirror's listing so new releases (for
+2. **Release discovery.** *(Built for Debian: the list comes from the mirror's
+   suites, end-of-life marking from Debian's distro-info-data LTS dates.)* Read each mirror's listing so new releases (for
    example Fedora 45) appear without a Beacon update. The typed version from
    stage 1 keeps working for every distro.
 3. **Custom entries.** A form and a file import for entries in the same format.
@@ -61,8 +62,9 @@ Candidate distros (arguments and URLs not yet verified against each distro):
 
 - Which distro goes first in stage 1?
 - Ubuntu's legacy netboot archive: still published for current releases? Check.
-- End-of-life releases move to archive URLs. Detect a dead default mirror and
-  point at the archive URL, or fail with a plain message?
+- End-of-life releases: answered. They stay listed, marked "end of life" once
+  their long-term support ends. What happens when one has left the mirror and is
+  added is still to be seen.
 - Does a netboot archive need a local-mirror option for offline LANs?
 
 ## Also on the list

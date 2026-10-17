@@ -76,6 +76,33 @@ class TestExtract:
         with pytest.raises(netboot.NetbootError, match="does not contain"):
             netboot.extract_boot_files(archive, _debian(), tmp_path / "out")
 
+    def test_archive_of_another_release_is_refused(self, tmp_path, monkeypatch):
+        archive = tmp_path / "netboot.tar.gz"
+        _archive(archive, {"./version.info": b"Debian version:  12 (bookworm)\n",
+                           "./debian-installer/amd64/linux": b"K",
+                           "./debian-installer/amd64/initrd.gz": b"I"})
+        monkeypatch.setattr(netboot, "_suite_info",
+                            lambda url, timeout=30: {"Codename": "forky"})
+        netboot.extract_boot_files(archive, _debian(), tmp_path / "ok", "bookworm")
+        with pytest.raises(netboot.NetbootError, match="bookworm installer, not trixie"):
+            netboot.extract_boot_files(archive, _debian(), tmp_path / "bad", "trixie")
+
+    def test_testing_archive_naming_the_last_release_is_accepted(self, tmp_path, monkeypatch):
+        archive = tmp_path / "netboot.tar.gz"
+        _archive(archive, {"./version.info": b"Debian version:  13 (trixie)\n",
+                           "./debian-installer/amd64/linux": b"K",
+                           "./debian-installer/amd64/initrd.gz": b"I"})
+        monkeypatch.setattr(netboot, "_suite_info",
+                            lambda url, timeout=30: {"Codename": "forky"})
+        netboot.extract_boot_files(archive, _debian(), tmp_path / "a", "forky")
+        netboot.extract_boot_files(archive, _debian(), tmp_path / "b", "sid")
+
+    def test_iso_uploaded_as_archive_says_so(self, tmp_path):
+        iso = tmp_path / "x.tar.gz"
+        iso.write_bytes(b"\0" * 32769 + b"CD001" + b"\0" * 100)
+        with pytest.raises(netboot.NetbootError, match="ISO image, not a netboot archive"):
+            netboot.extract_boot_files(iso, _debian(), tmp_path / "out")
+
     def test_not_an_archive(self, tmp_path):
         bad = tmp_path / "n.tar.gz"
         bad.write_bytes(b"not a tarball")
@@ -135,6 +162,19 @@ class TestRoute:
     def test_release_accepts_number_name_or_label(self, text):
         assert netboot.resolve_release(_debian(), text) == "bookworm"
 
+    def test_release_marked_ended_after_its_eol_date(self):
+        debian = netboot.catalog_entry("debian")
+        ended = {r["id"]: r["ended"] for r in debian["releases"]}
+        assert ended["bullseye"] is True
+        assert ended["bookworm"] is False
+        assert ended["trixie"] is False
+        assert "ended" in debian["live"]["releases"][0]
+
+    def test_eol_date_missing_or_bad_is_not_ended(self):
+        assert netboot._past(None) is False
+        assert netboot._past("not-a-date") is False
+        assert netboot._past("2000-01-01") is True
+
     def test_release_unknown_name_passes_through(self):
         assert netboot.resolve_release(_debian(), " sid ") == "sid"
 
@@ -147,6 +187,17 @@ class TestRoute:
         db = app_db.SessionLocal()
         img = db.execute(select(Image)).scalar_one()
         assert img.release == "forky" and "dists/forky/" in img.source_url
+        db.close()
+
+    def test_default_name_carries_the_version_number(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda image_id: None)
+        _login(client)
+        client.post("/images/netboot", data={
+            "distro": "debian", "release": "bullseye", "source": "mirror"})
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.name == "Debian 11 bullseye (netboot)"
         db.close()
 
     def test_unlisted_number_is_read_from_the_mirror(self, monkeypatch):
@@ -231,7 +282,7 @@ class TestLive:
 
     def test_testing_release_listed_and_matches_weekly_iso_name(self, monkeypatch):
         ids = [r["id"] for r in self._live()["releases"]]
-        assert ids == ["forky", "trixie", "bookworm"]
+        assert ids == ["forky", "trixie", "bookworm", "bullseye"]
         monkeypatch.setattr(netboot.urllib.request, "urlopen", lambda *a, **k: _Resp(
             b'<a href="debian-live-testing-amd64-kde.iso">x</a>'))
         assert netboot.resolve_live_iso_url(self._live(), "https://m", "kde").endswith(
@@ -277,6 +328,19 @@ class TestLive:
         assert url.endswith("archive/15.1.0-live/amd64/iso-hybrid/debian-live-15.1.0-amd64-kde.iso")
         with pytest.raises(netboot.NetbootError, match="No live ISO for Debian 99"):
             netboot.resolve_unlisted_live_url(self._live(), "99", "kde")
+
+    def test_iso_must_be_the_picked_release(self):
+        live = self._live()
+        forky = netboot.validate_live_release(live, "forky")
+        trixie = netboot.validate_live_release(live, "trixie")
+        current = "https://m/current-live/debian-live-13.7.0-amd64-kde.iso"
+        weekly = "https://m/weekly/debian-live-testing-amd64-kde.iso"
+        netboot.check_live_iso_matches(live, trixie, current)
+        netboot.check_live_iso_matches(live, forky, weekly)
+        with pytest.raises(netboot.NetbootError, match="holds Debian 13.7.0"):
+            netboot.check_live_iso_matches(live, forky, current)
+        with pytest.raises(netboot.NetbootError, match="holds the testing build"):
+            netboot.check_live_iso_matches(live, trixie, weekly)
 
     def test_current_release_folder_is_the_mirror(self):
         rel = netboot.validate_live_release(self._live(), "trixie")
@@ -390,3 +454,86 @@ class TestLive:
         dest = tmp_path / "out"
         image_svc._extract_live_files(tmp_path / "x.iso", netboot.live_entry(_debian()), dest)
         assert (dest / "vmlinuz").read_bytes() == b"data"
+
+
+class TestReleaseDiscovery:
+    RELEASE = {"stable": b"Version: 15.1\nCodename: duke\n",
+               "oldstable": b"Version: 14.4\nCodename: forky\n",
+               "oldoldstable": b"Version: 13.9\nCodename: trixie\n",
+               "testing": b"Codename: sid2\n"}
+    CSV = (b"version,codename,series,created,release,eol,eol-lts,eol-elts\n"
+           b"13,Trixie,trixie,2023-06-10,2025-08-09,2028-08-09,2000-06-30,2035-06-30\n"
+           b"14,Forky,forky,2025-08-09,2027-08-01,2030-08-01,2099-06-30\n"
+           b"15,Duke,duke,2027-08-01\n")
+
+    def _mirror(self, monkeypatch, csv=CSV):
+        def fake(req, **k):
+            if req.full_url.endswith(".csv"):
+                if csv is None:
+                    raise netboot.urllib.error.URLError("down")
+                return _Resp(csv)
+            return _Resp(next(v for key, v in self.RELEASE.items()
+                              if f"/{key}/" in req.full_url))
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fake)
+
+    def test_lists_what_the_mirror_carries_newest_first(self, monkeypatch):
+        self._mirror(monkeypatch)
+        found = netboot.discover_releases(_debian())
+        assert [(f["number"], f["codename"]) for f in found] == [
+            ("16", "sid2"), ("15", "duke"), ("14", "forky"), ("13", "trixie")]
+        # The LTS end date is the end of support.
+        assert {f["codename"]: f["eol"] for f in found} == {
+            "sid2": None, "duke": None, "forky": "2099-06-30", "trixie": "2000-06-30"}
+
+    def test_unreachable_mirror_gives_none(self, monkeypatch):
+        def down(req, **k):
+            raise netboot.urllib.error.URLError("down")
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", down)
+        assert netboot.discover_releases(_debian()) is None
+
+    def test_new_release_appears_and_ended_one_is_marked(self, monkeypatch):
+        self._mirror(monkeypatch)
+        entry = netboot.with_discovered(_debian(), netboot.discover_releases(_debian()))
+        rel = {r["id"]: r for r in entry["releases"]}
+        ids = [r["id"] for r in entry["releases"]]
+        # Mirror order first, then catalog releases the mirror no longer carries.
+        assert ids[:4] == ["sid2", "duke", "forky", "trixie"]
+        assert "bookworm" in ids[4:] and "bullseye" in ids[4:]
+        assert rel["duke"]["label"] == "Debian 15 (duke)" and rel["duke"]["default"]
+        assert "default" not in rel["trixie"]
+        assert rel["sid2"]["label"] == "Debian 16 (sid2, testing \u2014 pre-release)"
+        assert rel["trixie"]["ended"] is True and rel["forky"]["ended"] is False
+        assert rel["bullseye"]["ended"] is True
+
+    def test_new_live_release_gets_an_iso_folder(self, monkeypatch):
+        self._mirror(monkeypatch)
+        entry = netboot.with_discovered(_debian(), netboot.discover_releases(_debian()))
+        rel = {r["id"]: r for r in entry["live"]["releases"]}
+        assert rel["duke"]["unlisted"] == "15" and rel["duke"]["base_url"]
+        assert "weekly-live-builds" in rel["sid2"]["base_url"]
+        # A listed release keeps its own folder.
+        assert rel["trixie"]["base_url"].endswith("current-live/amd64/iso-hybrid")
+
+    def test_catalog_dates_kept_when_dates_unreadable(self, monkeypatch):
+        self._mirror(monkeypatch, csv=None)
+        entry = netboot.with_discovered(_debian(), netboot.discover_releases(_debian()))
+        rel = {r["id"]: r for r in entry["releases"]}
+        assert rel["trixie"]["eol"] == "2030-06-30" and rel["trixie"]["ended"] is False
+        assert rel["duke"].get("eol") is None and rel["duke"]["ended"] is False
+
+    def test_page_lists_discovered_releases(self, client, monkeypatch):
+        self._mirror(monkeypatch)
+        found = netboot.discover_releases(_debian())
+        monkeypatch.setattr(netboot, "_cached_discovery", lambda entry: found)
+        _login(client)
+        r = client.get("/images")
+        assert "Debian 15 (duke)" in r.text
+
+    def test_failed_lookup_is_cached_briefly(self, monkeypatch):
+        calls = []
+        monkeypatch.undo()
+        monkeypatch.setattr(netboot, "discover_releases", lambda e: calls.append(1))
+        monkeypatch.setattr(netboot, "_discovery_cache", {})
+        netboot._cached_discovery(_debian())
+        netboot._cached_discovery(_debian())
+        assert len(calls) == 1

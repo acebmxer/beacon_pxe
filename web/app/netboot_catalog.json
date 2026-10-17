@@ -7,7 +7,10 @@
       "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
       "kernel_member": "debian-installer/amd64/linux",
       "initrd_member": "debian-installer/amd64/initrd.gz",
+      "version_member": "version.info",
+      "version_regex": "Debian version:\\s+\\S+\\s+\\((\\w+)\\)",
       "boot_args": "mirror/country=manual mirror/protocol={mirror_proto} mirror/{mirror_proto}/hostname={mirror_host} mirror/{mirror_proto}/directory={mirror_path}",
+      "eol_dates_url": "https://debian.pages.debian.net/distro-info-data/debian.csv",
       "releases": [
         {
           "id": "forky",
@@ -18,12 +21,20 @@
           "id": "trixie",
           "label": "Debian 13 (trixie)",
           "default": true,
-          "number": "13"
+          "number": "13",
+          "eol": "2030-06-30"
         },
         {
           "id": "bookworm",
           "label": "Debian 12 (bookworm)",
-          "number": "12"
+          "number": "12",
+          "eol": "2028-06-30"
+        },
+        {
+          "id": "bullseye",
+          "label": "Debian 11 (bullseye)",
+          "number": "11",
+          "eol": "2026-08-31"
         }
       ],
       "number_lookup": {
@@ -51,7 +62,8 @@
             "label": "Debian 13 (trixie)",
             "base_url": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid",
             "default": true,
-            "number": "13"
+            "number": "13",
+            "eol": "2030-06-30"
           },
           {
             "id": "bookworm",
@@ -60,7 +72,18 @@
             "base_url": "https://cdimage.debian.org/cdimage/archive",
             "dir_regex": "12\\.[0-9.]+-live/",
             "subpath": "amd64/iso-hybrid",
-            "number": "12"
+            "number": "12",
+            "eol": "2028-06-30"
+          },
+          {
+            "id": "bullseye",
+            "name": "Debian 11",
+            "label": "Debian 11 (bullseye)",
+            "base_url": "https://cdimage.debian.org/cdimage/archive",
+            "dir_regex": "11\\.[0-9.]+-live/",
+            "subpath": "amd64/iso-hybrid",
+            "number": "11",
+            "eol": "2026-08-31"
           }
         ],
         "unlisted_folders": [

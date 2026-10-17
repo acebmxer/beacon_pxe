@@ -225,16 +225,19 @@
       if (!hasLive) variantSel.value = "installer";
       var liveReleases = (d.live && d.live.releases) || [];
       mirrorIn.value = d.default_mirror;
+      var releaseText = function (r) {
+        return r.ended ? r.label + " \u2014 end of life" : r.label;
+      };
       var addOption = function (sel, value, text) {
         var o = document.createElement("option");
         o.value = value; o.textContent = text;
         sel.appendChild(o);
       };
       releaseSel.innerHTML = "";
-      (d.releases || []).forEach(function (r) { addOption(releaseSel, r.id, r.label); });
+      (d.releases || []).forEach(function (r) { addOption(releaseSel, r.id, releaseText(r)); });
       addOption(releaseSel, "", "Other (type a release name)…");
       liveReleaseSel.innerHTML = "";
-      liveReleases.forEach(function (r) { addOption(liveReleaseSel, r.id, r.label); });
+      liveReleases.forEach(function (r) { addOption(liveReleaseSel, r.id, releaseText(r)); });
       addOption(liveReleaseSel, "", "Other (type a release name)…");
       flavourSel.innerHTML = "";
       ((d.live && d.live.flavours) || []).forEach(function (f) {

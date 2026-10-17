@@ -24,15 +24,41 @@ to do differently. Internal refactors that change nothing observable are omitted
   **Live desktop** does the same for Debian's live desktops (KDE Plasma, GNOME,
   Xfce, Cinnamon, MATE, LXQt, LXDE, Standard): Beacon downloads the live ISO once,
   keeps the kernel, initrd and root filesystem, and deletes the ISO. Reprocess
-  downloads it again. **Release** is a list on both Installer and Live desktop:
-  Debian 14 (forky, testing, a pre-release), Debian 13 (trixie) and Debian 12
-  (bookworm), the supported releases only. **Other** takes a number (`12`, `15`) or a codename
+  downloads it again. **Release** is a list on both Installer and Live desktop,
+  read from Debian's mirror (its stable, oldstable, oldoldstable and testing
+  suites), so a new Debian release appears without a Beacon update; today that is
+  Debian 14 (forky, testing, a pre-release), 13 (trixie), 12 (bookworm) and 11
+  (bullseye). The list is refreshed every 6 hours, and the catalog's own list is
+  shown when the mirror is out of reach. A release is marked "end of life" once
+  Debian's long-term support for it has ended, using the dates Debian publishes
+  (distro-info-data); it stays selectable, and a release the mirror has dropped
+  stays listed if the catalog names it. An installer image's default name carries the
+  version number as well as the codename ("Debian 11 bullseye (netboot)").
+
+  A live desktop whose Mirror folder holds a different release than the one
+  picked (for example Debian 13's folder with Debian 14 chosen) is refused with a
+  message, instead of being added under the wrong name. An ISO uploaded as an installer's
+  archive file is refused with a message saying so, instead of an unpacking error. An
+  installer archive whose own version file names a different release than the
+  one picked (bookworm's archive added as trixie) is refused, since its kernel
+  would not match the packages the installer fetches. Testing and unstable
+  archives are exempt, as Debian's own version file in them names the previous
+  release. **Other** takes a number (`12`, `15`) or a codename
   (`bookworm`, `duke`) on both. A release that is not in the list is found on
   Debian's own mirror (its stable, oldstable and testing files give each
   version and codename), so a new release works before it is added to the list;
   Live desktop then fetches its ISO from Debian's current, archive or weekly
   testing folder. Installer also takes any other release name the mirror carries.
   A live image is named after its release, e.g. "Debian 12 Live KDE Plasma".
+
+### Fixed
+
+- **Top deployed images keeps the newest images when counts tie.** The list
+  shows five, and images booted the same number of times were cut in no fixed
+  order, so a just-booted image could be missing while an older one stayed.
+
+- **The Server Settings icon in the sidebar is the same size as the others.** It
+  was drawn as a small text symbol instead of an emoji.
 
 ## [0.7.2] - 2026-10-17
 

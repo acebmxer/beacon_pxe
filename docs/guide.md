@@ -84,7 +84,7 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 ### Netboot installers (no ISO)
 
 **Add from a netboot catalog** on the Images page creates an image without an
-ISO. Pick a distro (currently **Debian**), a release (pick from the list, which is read from the mirror and marks
+ISO. Pick a distro (**Debian** is built in; others are added as custom entries, below), a release (pick from the list, which is read from the mirror and marks
 releases past their long-term support "end of life"; type `12` or `bookworm`; or enter any
 other release name the mirror carries, or a newer version number, which is read
 from the mirror) and a mirror (pre-filled, editable).
@@ -109,6 +109,46 @@ For Debian 12 the newest point release is found in Debian's archive. **Other**
 accepts a version number or codename that is not in the list (`15` or its
 codename): Beacon finds it on Debian's mirror, then looks for the live ISO in
 Debian's current, archive or weekly testing folder.
+
+**Custom catalog entries** add an installer for a distro the catalog does not
+have. Under **Custom catalog entries** on the Images page, give a name, a default
+mirror, the boot files and the kernel arguments, and list the releases one per
+line (the first is the default; `43 | Fedora 43` sets a label). The boot files are
+either a netboot archive with the paths of the kernel and initrd inside it
+(Debian's `netboot.tar.gz`), or a kernel URL and an initrd URL, downloaded as they
+are (Fedora's `images/pxeboot/`, Alpine's `netboot/`); those are fetched again on
+**Reprocess**, and only **Download from the mirror** applies to them. In the URLs,
+`{mirror}` is the image's mirror and `{version}` the release; the kernel arguments
+also take `{mirror_proto}`, `{mirror_host}` and `{mirror_path}`. A literal brace
+is written twice, so the iPXE variable `${boot-url}` is `${{boot-url}}`. For
+example, Fedora:
+
+| Field | Value |
+|-------|-------|
+| Default mirror | `https://dl.fedoraproject.org/pub/fedora/linux` |
+| Kernel URL | `{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz` |
+| Initrd URL | `{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img` |
+| Kernel arguments | `inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp` |
+| Releases | `44` |
+
+**Preview** fills the templates in for every release, checks each file on the
+mirror (found with its size, not found, or not checked when the Beacon host is
+offline) and shows the kernel command line the boot menu will carry; **Save**
+appears after a preview, and editing a field after it asks for a new one. An
+unknown placeholder, a URL that does not come out as http(s), or several releases
+with no `{version}` in a URL is refused with a message. The entry then appears in
+the **Distro** list of **Add from a netboot catalog**, marked "(custom)". A
+release not in the list can be typed under **Other**.
+
+**Import from a file** takes JSON in the built-in catalog's own format
+(`{"distros": [ ... ]}`), a list of entries, or one entry, with the fields `name`,
+`default_mirror`, `archive_url` + `kernel_member` + `initrd_member` or
+`kernel_url` + `initrd_url`, `boot_args`, `releases` (each a name, or an object
+with `id` and optionally `label`, `number`, `default`, `eol`), and an optional
+`id`. Every entry is previewed, and nothing is imported if any entry is wrong; an
+entry with the ID of an existing custom entry replaces it. Custom entries are kept
+in the database, so a backup carries them. Deleting one leaves its images
+booting, but they cannot be reprocessed until an entry with the same ID is back.
 
 | Distro | Boot args |
 |--------|-----------|
@@ -227,7 +267,8 @@ Note that a missing or invalid token gets the browser behaviour — `303` to
 
 **Server Settings → Backup & restore** downloads `beacon-backup.db`: the SQLite
 database itself, holding users (password hashes, 2FA secrets, API tokens),
-every server setting, image metadata and boot history.
+every server setting, image metadata, custom netboot catalog entries and boot
+history.
 
 It is a **configuration** snapshot, not a media backup. ISOs (`./data/images`),
 drop-in drivers (`./data/drivers`), your `.env`, and the extracted boot files on

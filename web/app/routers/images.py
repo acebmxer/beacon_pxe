@@ -1,9 +1,10 @@
-"""OS image management: list, upload (ISO), edit, enable/disable, delete."""
+"""OS image management: list, upload (ISO), edit, enable/disable, delete, and
+the custom netboot catalog entries."""
 import asyncio
 import json
 import re
 
-from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Request,
+from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Query, Request,
                      UploadFile, File)
 from starlette.concurrency import run_in_threadpool
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -35,16 +36,57 @@ def _ordered_images(db: Session) -> list[Image]:
     ).scalars().all()
 
 
+_ENTRY_FORM_FIELDS = ("name", "default_mirror", "kind", "archive_url", "kernel_member",
+                      "initrd_member", "kernel_url", "initrd_url", "boot_args",
+                      "releases")
+
+
 def _page(request: Request, db: Session, **ctx):
-    return render(request, db, "images.html", active="images",
-                  images=_ordered_images(db),
-                  catalog=netboot_svc.page_catalog(), **ctx)
+    images = _ordered_images(db)
+    custom = netboot_svc.custom_entries(db)
+    used = {e["id"]: sum(1 for i in images if i.source == "netboot"
+                         and i.catalog_id == e["id"]) for e in custom}
+    ctx.setdefault("entry_form", {"kind": "archive"})
+    return render(request, db, "images.html", active="images", images=images,
+                  catalog=netboot_svc.page_catalog(db), custom_entries=custom,
+                  entry_uses=used,
+                  notice=request.session.pop("image_notice", None), **ctx)
+
+
+def _entry_to_form(entry: dict) -> dict:
+    form = {k: entry.get(k, "") for k in _ENTRY_FORM_FIELDS}
+    form.update(original_id=entry["id"],
+                kind="files" if entry.get("kernel_url") else "archive",
+                releases=netboot_svc.release_lines(entry))
+    return form
+
+
+def _form_to_entry(form: dict, db: Session) -> dict:
+    """The entry the custom-entry form describes, validated."""
+    raw = {k: form[k] for k in ("name", "default_mirror", "boot_args")}
+    keys = (("kernel_url", "initrd_url") if form["kind"] == "files"
+            else ("archive_url", "kernel_member", "initrd_member"))
+    raw.update({k: form[k] for k in keys})
+    raw["releases"] = netboot_svc.parse_releases(form["releases"])
+    if form["original_id"]:
+        old = netboot_svc.custom_entry(db, form["original_id"])
+        if old is None:
+            raise netboot_svc.NetbootError("This entry no longer exists; add it again.")
+        raw["id"] = old["id"]
+        # The form has no box for a release's number or end-of-life date, so an
+        # imported entry keeps them for the releases it still lists.
+        kept = {r["id"]: r for r in old.get("releases", [])}
+        for rel in raw["releases"]:
+            rel.update({k: kept[rel["id"]][k] for k in ("number", "eol")
+                        if k in kept.get(rel["id"], {})})
+    return netboot_svc.validate_entry(raw)
 
 
 @router.get("/images")
 def images_page(request: Request, user: User = Depends(require_user),
-                db: Session = Depends(get_db)):
-    return _page(request, db)
+                edit: str = Query(""), db: Session = Depends(get_db)):
+    entry = netboot_svc.custom_entry(db, edit) if edit and user.is_admin else None
+    return _page(request, db, **({"entry_form": _entry_to_form(entry)} if entry else {}))
 
 
 @router.get("/images/status")
@@ -145,7 +187,7 @@ async def add_netboot(request: Request, background: BackgroundTasks,
     variant "live": a live desktop; Beacon fetches the live ISO, keeps its
     kernel, initrd and root filesystem, and deletes the ISO.
     """
-    entry = netboot_svc.catalog_entry(distro)
+    entry = netboot_svc.catalog_entry(distro, db)
     if entry is None:
         return _page(request, db, error="Unknown distro.")
     live = netboot_svc.live_entry(entry) if variant == "live" else None
@@ -188,14 +230,20 @@ async def add_netboot(request: Request, background: BackgroundTasks,
                     netboot_svc.lookup_release, entry, mirror, release)
                 if found:
                     release, number = found["codename"], found["number"]
-                elif re.fullmatch(r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]),
-                                  release):
+                elif entry.get("number_lookup") and re.fullmatch(
+                        r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]), release):
                     raise netboot_svc.NetbootError(
                         f"No release numbered {release} was found on {mirror}. "
                         "Type its name instead.")
             release = netboot_svc.validate_release(release)
             source_url = ""
-            if source == "upload":
+            if entry.get("kernel_url"):
+                # Its kernel and initrd are fetched separately when it is processed.
+                if source != "mirror":
+                    raise netboot_svc.NetbootError(
+                        f"{entry['name']} downloads its kernel and initrd separately, "
+                        "so it can only use Download from the mirror.")
+            elif source == "upload":
                 if file is None or not file.filename:
                     raise netboot_svc.NetbootError("Choose an archive file to upload.")
             elif source == "url":
@@ -306,3 +354,101 @@ def delete(image_id: int, user: User = Depends(require_admin),
     if img:
         image_svc.delete_image(db, img)
     return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/catalog/entry")
+async def save_entry(request: Request, user: User = Depends(require_admin),
+                     action: str = Form("preview"), original_id: str = Form(""),
+                     name: str = Form(""), default_mirror: str = Form(""),
+                     kind: str = Form("archive"), archive_url: str = Form(""),
+                     kernel_member: str = Form(""), initrd_member: str = Form(""),
+                     kernel_url: str = Form(""), initrd_url: str = Form(""),
+                     boot_args: str = Form(""), releases: str = Form(""),
+                     db: Session = Depends(get_db)):
+    """Preview, then save, a custom catalog entry from the form.
+
+    Preview fills the templates for every release and checks the files on the
+    mirror; the page offers Save only after a preview, so the admin has seen
+    the kernel command line the entry produces.
+    """
+    form = dict(original_id=original_id, name=name, default_mirror=default_mirror,
+                kind="files" if kind == "files" else "archive", archive_url=archive_url,
+                kernel_member=kernel_member, initrd_member=initrd_member,
+                kernel_url=kernel_url, initrd_url=initrd_url, boot_args=boot_args,
+                releases=releases)
+    try:
+        entry = _form_to_entry(form, db)
+        if action == "save" and not original_id:
+            if len(netboot_svc.custom_entries(db)) >= netboot_svc.MAX_CUSTOM_ENTRIES:
+                raise netboot_svc.NetbootError(
+                    f"There are already {netboot_svc.MAX_CUSTOM_ENTRIES} custom entries.")
+            entry["id"] = netboot_svc.free_entry_id(db, entry["id"])
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, entry_form=form, entry_error=str(e))
+    if action != "save":
+        preview = await run_in_threadpool(netboot_svc.preview_entry, entry)
+        return _page(request, db, entry_form=form, entry_preview=preview)
+    netboot_svc.store_entry(db, entry)
+    request.session["image_notice"] = (
+        f"Saved the custom entry {entry['name']}. It is in the Distro list of "
+        "Add from a netboot catalog.")
+    return RedirectResponse("/images#custom-entries", status_code=303)
+
+
+@router.post("/images/catalog/import")
+async def import_entries(request: Request, user: User = Depends(require_admin),
+                         action: str = Form("preview"), content: str = Form(""),
+                         file: UploadFile | None = File(None),
+                         db: Session = Depends(get_db)):
+    """Import custom entries from a JSON file: preview every entry, then save
+    them all on confirm. The file's text rides along in the preview page, so
+    nothing is kept on the server in between."""
+    try:
+        if file is not None and file.filename:
+            raw = await file.read(netboot_svc.IMPORT_MAX_BYTES + 1)
+            if len(raw) > netboot_svc.IMPORT_MAX_BYTES:
+                raise netboot_svc.NetbootError("The file is larger than 256 KB.")
+            content = raw.decode("utf-8", "replace")
+        if not content.strip():
+            raise netboot_svc.NetbootError("Choose a JSON file to import.")
+        entries = netboot_svc.parse_import(content)
+        builtin = netboot_svc.builtin_ids()
+        clash = [e["id"] for e in entries if e["id"] in builtin]
+        if clash:
+            raise netboot_svc.NetbootError(
+                f"Nothing was imported. The ID {', '.join(clash)} belongs to a built-in "
+                "entry; give the entry another \"id\".")
+        existing = {e["id"] for e in netboot_svc.custom_entries(db)}
+        added = [e for e in entries if e["id"] not in existing]
+        if len(existing) + len(added) > netboot_svc.MAX_CUSTOM_ENTRIES:
+            raise netboot_svc.NetbootError(
+                f"Nothing was imported: it would make more than "
+                f"{netboot_svc.MAX_CUSTOM_ENTRIES} custom entries.")
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, import_error=str(e))
+    if action != "save":
+        previews = await run_in_threadpool(
+            lambda: [netboot_svc.preview_entry(e) for e in entries])
+        return _page(request, db, import_preview={
+            "content": content,
+            "entries": [{"entry": e, "rows": p, "replaces": e["id"] in existing}
+                        for e, p in zip(entries, previews)]})
+    for e in entries:
+        netboot_svc.store_entry(db, e)
+    replaced = len(entries) - len(added)
+    request.session["image_notice"] = (
+        f"Imported {len(entries)} custom entr{'y' if len(entries) == 1 else 'ies'}: "
+        + ", ".join(e["name"] for e in entries)
+        + (f" ({replaced} replaced an entry with the same ID)." if replaced else "."))
+    return RedirectResponse("/images#custom-entries", status_code=303)
+
+
+@router.post("/images/catalog/{entry_id}/delete")
+def delete_entry(request: Request, entry_id: str, user: User = Depends(require_admin),
+                 db: Session = Depends(get_db)):
+    entry = netboot_svc.custom_entry(db, entry_id)
+    if entry and netboot_svc.delete_entry(db, entry_id):
+        request.session["image_notice"] = (
+            f"Deleted the custom entry {entry['name']}. Images made from it keep "
+            "booting; Reprocess needs the entry back.")
+    return RedirectResponse("/images#custom-entries", status_code=303)

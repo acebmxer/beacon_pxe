@@ -12,6 +12,20 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Added
 
+- **Custom netboot catalog entries add installers for other distros.** **Custom
+  catalog entries** on the Images page takes a name, a default mirror, the boot
+  files (a netboot archive and the kernel and initrd paths inside it, or a kernel
+  URL and an initrd URL such as Fedora's `images/pxeboot/`), kernel arguments and
+  a list of releases, using `{mirror}` and `{version}` placeholders. **Preview**
+  shows every release's download URLs, checked on the mirror, and the kernel
+  command line the boot menu will carry, and Save is offered only after it; an
+  unknown placeholder or a URL that is not http(s) is refused. **Import from a
+  file** takes entries in the built-in catalog's JSON format, previews them all,
+  and imports nothing if one is wrong. Entries can be edited and deleted, appear
+  in **Add from a netboot catalog** marked "(custom)", and are kept in the
+  database, so a backup carries them. A downloaded kernel that is not a Linux
+  kernel (an error page, say) is refused.
+
 - **Debian installers and live desktops can be added without keeping an ISO.** **Add from a netboot
   catalog** on the Images page takes a release (`14`, `trixie`, `bookworm`, or any
   other name the mirror carries) and a mirror (default `deb.debian.org`), then

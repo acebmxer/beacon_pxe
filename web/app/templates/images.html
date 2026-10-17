@@ -62,7 +62,7 @@
       <div>
         <label for="nb-distro">Distro</label>
         <select id="nb-distro" name="distro">
-          {% for d in catalog %}<option value="{{ d.id }}">{{ d.name }}</option>{% endfor %}
+          {% for d in catalog %}<option value="{{ d.id }}">{{ d.name }}{% if d.custom %} (custom){% endif %}</option>{% endfor %}
         </select>
       </div>
       <div id="nb-flavour-wrap" style="display:none;">
@@ -114,6 +114,178 @@
   </form>
 </div>
 {% endif %}
+
+{% macro entry_preview_table(rows) %}
+<table class="entry-preview">
+  <thead><tr><th>Release</th><th>Downloads</th><th>Kernel command line</th></tr></thead>
+  <tbody>
+  {% for row in rows %}
+    <tr>
+      <td>{{ row.release.label }}{% if row.release.default %} <span class="muted">(default)</span>{% endif %}
+        <br><span class="muted mono">{{ row.release.id }}</span></td>
+      <td>
+        {% for f in row.files %}
+        <div><b>{{ f.label }}</b> <span class="badge {{ 'ready' if f.check.ok else ('error' if f.check.ok == false else 'pending') }}">{{ f.check.text }}</span>
+          <br><span class="mono">{{ f.url }}</span></div>
+        {% endfor %}
+      </td>
+      <td class="mono">{{ row.boot_args or '(none)' }}</td>
+    </tr>
+  {% endfor %}
+  </tbody>
+</table>
+<p class="muted">The boot menu line is <span class="mono">kernel ${boot-url}/os/&lt;image&gt;/vmlinuz</span>
+  followed by the kernel command line, with the image's own mirror in place of the default.</p>
+{% endmacro %}
+
+<div class="card" id="custom-entries" style="margin-top:18px;">
+  <h2>Custom catalog entries</h2>
+  <div class="sub">Add an installer for a distro the catalog does not have. Beacon keeps only its
+    kernel and initrd, taken from a netboot archive or downloaded from two URLs. In the URLs,
+    <span class="mono">{mirror}</span> is the mirror and <span class="mono">{version}</span> the
+    release; the kernel arguments also take <span class="mono">{mirror_proto}</span>,
+    <span class="mono">{mirror_host}</span> and <span class="mono">{mirror_path}</span>.
+    <b>Preview</b> fills them in for every release and checks the files on the mirror; Save
+    appears after it.</div>
+  {% if notice %}<div class="alert ok" style="margin-top:14px;">{{ notice }}</div>{% endif %}
+
+  {% if custom_entries %}
+  <table style="margin-top:14px;">
+    <thead><tr><th>Name</th><th>Boot files</th><th>Releases</th><th>Images</th><th></th></tr></thead>
+    <tbody>
+    {% for e in custom_entries %}
+      <tr>
+        <td><b>{{ e.name }}</b><br><span class="muted mono">{{ e.default_mirror }}</span></td>
+        <td>{{ 'Kernel and initrd URLs' if e.kernel_url else 'Netboot archive' }}</td>
+        <td>{% for r in e.releases %}{{ r.id }}{% if r.ended %} <span class="muted">(end of life)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{{ entry_uses.get(e.id, 0) }}</td>
+        <td>
+          <div class="toolbar">
+            <a class="btn ghost sm" href="/images?edit={{ e.id }}#custom-entries">Edit</a>
+            <form class="inline-form" method="post" action="/images/catalog/{{ e.id }}/delete"
+                  data-confirm="Delete the custom entry {{ e.name }}? Images made from it keep booting, but cannot be reprocessed without it.">
+              <button class="btn danger sm" type="submit">Delete</button>
+            </form>
+          </div>
+        </td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  {% set f = entry_form %}
+  <h3>{{ 'Edit ' ~ f.name if f.original_id else 'Add an entry' }}</h3>
+  <form id="entry-form" method="post" action="/images/catalog/entry#custom-entries" autocomplete="off">
+    <input type="hidden" name="original_id" value="{{ f.original_id or '' }}">
+    <div class="row">
+      <div>
+        <label for="ce-name">Name</label>
+        <input id="ce-name" name="name" value="{{ f.name or '' }}" placeholder="e.g. Fedora" required>
+      </div>
+      <div>
+        <label for="ce-mirror">Default mirror</label>
+        <input id="ce-mirror" name="default_mirror" class="mono" value="{{ f.default_mirror or '' }}"
+               placeholder="https://dl.fedoraproject.org/pub/fedora/linux" required>
+      </div>
+      <div>
+        <label for="ce-kind">Boot files</label>
+        <select id="ce-kind" name="kind">
+          <option value="archive" {% if f.kind != 'files' %}selected{% endif %}>Netboot archive (kernel and initrd inside)</option>
+          <option value="files" {% if f.kind == 'files' %}selected{% endif %}>Kernel URL and initrd URL</option>
+        </select>
+      </div>
+    </div>
+    <div class="row" id="ce-archive-wrap">
+      <div style="flex:2;">
+        <label for="ce-archive">Archive URL</label>
+        <input id="ce-archive" name="archive_url" class="mono" value="{{ f.archive_url or '' }}"
+               placeholder="{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz">
+      </div>
+      <div>
+        <label for="ce-kmember">Kernel in the archive</label>
+        <input id="ce-kmember" name="kernel_member" class="mono" value="{{ f.kernel_member or '' }}"
+               placeholder="debian-installer/amd64/linux">
+      </div>
+      <div>
+        <label for="ce-imember">Initrd in the archive</label>
+        <input id="ce-imember" name="initrd_member" class="mono" value="{{ f.initrd_member or '' }}"
+               placeholder="debian-installer/amd64/initrd.gz">
+      </div>
+    </div>
+    <div class="row" id="ce-files-wrap">
+      <div>
+        <label for="ce-kernel">Kernel URL</label>
+        <input id="ce-kernel" name="kernel_url" class="mono" value="{{ f.kernel_url or '' }}"
+               placeholder="{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz">
+      </div>
+      <div>
+        <label for="ce-initrd">Initrd URL</label>
+        <input id="ce-initrd" name="initrd_url" class="mono" value="{{ f.initrd_url or '' }}"
+               placeholder="{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img">
+      </div>
+    </div>
+    <div class="row">
+      <div style="flex:2;">
+        <label for="ce-args">Kernel arguments</label>
+        <input id="ce-args" name="boot_args" class="mono" value="{{ f.boot_args or '' }}"
+               placeholder="inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp">
+      </div>
+      <div>
+        <label for="ce-releases">Releases (one per line, the first is the default)</label>
+        <textarea id="ce-releases" name="releases" class="mono" rows="3" required
+                  placeholder="44&#10;43 | Fedora 43">{{ f.releases or '' }}</textarea>
+      </div>
+    </div>
+    {% if entry_error %}<div class="alert error" style="margin-top:14px;">{{ entry_error }}</div>{% endif %}
+    {% if entry_preview %}
+    <div id="entry-preview" style="margin-top:14px;">{{ entry_preview_table(entry_preview) }}</div>
+    {% endif %}
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn {{ 'ghost' if entry_preview }}" type="submit" name="action" value="preview">Preview</button>
+      {% if entry_preview %}
+      <button class="btn" id="entry-save" type="submit" name="action" value="save">{{ 'Save changes' if f.original_id else 'Save entry' }}</button>
+      <span class="muted" id="entry-stale" style="display:none;">Changed since the preview: preview again to save.</span>
+      {% endif %}
+      {% if f.original_id %}<a class="btn ghost" href="/images#custom-entries">Cancel</a>{% endif %}
+    </div>
+  </form>
+
+  <h3>Import from a file</h3>
+  <div class="sub">A JSON file with entries in the built-in catalog's format
+    (<span class="mono">{"distros": [ … ]}</span>), a list of entries, or one entry. An entry
+    with the ID of an existing custom entry replaces it. Every entry is previewed before
+    anything is saved.</div>
+  {% if import_preview %}
+  <div style="margin-top:14px;">
+    {% for item in import_preview.entries %}
+    <h4>{{ item.entry.name }} <span class="muted mono">{{ item.entry.id }}</span>
+      {% if item.replaces %}<span class="badge pending">replaces the existing entry</span>{% endif %}</h4>
+    {{ entry_preview_table(item.rows) }}
+    {% endfor %}
+    <form method="post" action="/images/catalog/import#custom-entries">
+      <textarea name="content" hidden>{{ import_preview.content }}</textarea>
+      <div class="toolbar">
+        <button class="btn" type="submit" name="action" value="save">Import {{ import_preview.entries|length }} entr{{ 'y' if import_preview.entries|length == 1 else 'ies' }}</button>
+        <a class="btn ghost" href="/images#custom-entries">Cancel</a>
+      </div>
+    </form>
+  </div>
+  {% else %}
+  <form method="post" action="/images/catalog/import#custom-entries" enctype="multipart/form-data">
+    <div class="row">
+      <div>
+        <label for="ce-import">Catalog file</label>
+        <input id="ce-import" name="file" type="file" accept=".json,application/json" required>
+      </div>
+    </div>
+    <div class="toolbar" style="margin-top:16px;">
+      <button class="btn ghost" type="submit" name="action" value="preview">Preview import</button>
+    </div>
+  </form>
+  {% endif %}
+  {% if import_error %}<div class="alert error" style="margin-top:14px;">{{ import_error }}</div>{% endif %}
+</div>
 
 {% endif %}
 
@@ -256,9 +428,12 @@
       document.getElementById("nb-flavour-wrap").style.display = isLive() ? "" : "none";
       document.getElementById("nb-live-release-wrap").style.display = isLive() ? "" : "none";
       document.getElementById("nb-release-wrap").style.display = isLive() ? "none" : "";
-      // A live desktop is fetched as an ISO, so uploading an archive does not apply.
-      sourceSel.querySelector('option[value="upload"]').disabled = isLive();
-      if (isLive() && sourceSel.value === "upload") sourceSel.value = "mirror";
+      // A live desktop is fetched as an ISO, so uploading an archive does not apply;
+      // an entry with separate kernel and initrd URLs only downloads from the mirror.
+      var separate = !!d.kernel_url;
+      sourceSel.querySelector('option[value="upload"]').disabled = isLive() || separate;
+      sourceSel.querySelector('option[value="url"]').disabled = separate;
+      if ((isLive() && sourceSel.value === "upload") || separate) sourceSel.value = "mirror";
       showSource();
     };
     // A live release has its own ISO folder, shown in the Mirror box.
@@ -300,6 +475,34 @@
     releaseSel.addEventListener("change", syncRelease);
     fillDistro();
     liveReleaseSel.addEventListener("change", function () { syncLiveRelease(); syncLiveMirror(); });
+  }
+
+  // --- Custom catalog entry form ------------------------------------------
+  var entryForm = document.getElementById("entry-form");
+  if (entryForm) {
+    var kindSel = document.getElementById("ce-kind");
+    var showKind = function () {
+      var files = kindSel.value === "files";
+      document.getElementById("ce-archive-wrap").style.display = files ? "none" : "";
+      document.getElementById("ce-files-wrap").style.display = files ? "" : "none";
+      document.getElementById("ce-archive").required = !files;
+      document.getElementById("ce-kmember").required = !files;
+      document.getElementById("ce-imember").required = !files;
+      document.getElementById("ce-kernel").required = files;
+      document.getElementById("ce-initrd").required = files;
+    };
+    kindSel.addEventListener("change", showKind);
+    showKind();
+    // Save is offered for what was previewed; an edit after that needs a new preview.
+    var saveBtn = document.getElementById("entry-save");
+    if (saveBtn) {
+      var stale = function () {
+        saveBtn.style.display = "none";
+        document.getElementById("entry-stale").style.display = "";
+      };
+      entryForm.addEventListener("input", stale);
+      entryForm.addEventListener("change", stale);
+    }
   }
 
   // --- Drag-and-drop ISO upload ------------------------------------------

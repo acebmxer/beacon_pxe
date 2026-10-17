@@ -1,4 +1,5 @@
-"""Database models: User, Setting, Image, BootEvent, SeenClient, LoginLockout."""
+"""Database models: User, Setting, Image, CatalogEntry, BootEvent, SeenClient,
+LoginLockout."""
 from datetime import datetime, timezone
 
 from sqlalchemy import String, Integer, DateTime, Text, Float
@@ -136,3 +137,17 @@ class Image(Base):
     mirror: Mapped[str] = mapped_column(String(255), default="")
     # Archive download URL; empty when the admin uploaded the archive instead.
     source_url: Mapped[str] = mapped_column(String(512), default="")
+
+
+class CatalogEntry(Base):
+    """A netboot catalog entry added by an admin, beside the built-in ones.
+
+    `data` is the entry as JSON, in the same format as netboot_catalog.json
+    (validated by services.netboot.validate_entry). Kept in the database so a
+    backup carries it.
+    """
+    __tablename__ = "catalog_entries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    data: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

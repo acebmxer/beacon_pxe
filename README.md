@@ -65,7 +65,8 @@ initrd are extracted automatically. Linux, **Windows** (installer via WinPE),
 and **XCP-NG** are supported. Entries can be enabled/disabled and have their boot
 args edited. For a Debian installer or live desktop without keeping an ISO, **Add from a
 netboot catalog** keeps just the boot files (and, for a live desktop, its root
-filesystem) — see the [guide](docs/guide.md#netboot-installers-no-iso).
+filesystem); custom entries add other distros' installers, such as Fedora — see the
+[guide](docs/guide.md#netboot-installers-no-iso).
 
 **Windows** needs SMB ports **139 + 445** reachable, and on Intel VMD / AMD RAID
 machines needs a storage driver or Setup shows an empty disk list. Stage storage

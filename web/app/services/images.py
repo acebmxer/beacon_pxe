@@ -825,10 +825,11 @@ def _process_netboot(db, img: Image) -> None:
     """Build a catalog image without keeping an ISO.
 
     Installer: fetch the netboot archive if needed and keep its kernel and
-    initrd. Live: fetch the distro's live ISO, keep the kernel, initrd and root
-    filesystem (served over HTTP) and delete the ISO.
+    initrd; a custom entry that names a kernel URL and an initrd URL instead has
+    both downloaded on every run. Live: fetch the distro's live ISO, keep the
+    kernel, initrd and root filesystem (served over HTTP) and delete the ISO.
     """
-    entry = netboot.catalog_entry(img.catalog_id)
+    entry = netboot.catalog_entry(img.catalog_id, db)
     live = netboot.live_entry(entry) if entry else None
     if entry is None or (img.variant == "live" and live is None):
         img.status = "error"
@@ -838,20 +839,24 @@ def _process_netboot(db, img: Image) -> None:
     archive = iso_path(img.filename)
     dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
     try:
-        if img.source_url and not archive.exists():
-            netboot.download(
-                img.source_url, archive,
-                netboot.LIVE_ISO_MAX_BYTES if img.variant == "live"
-                else netboot.ARCHIVE_MAX_BYTES)
-        if not archive.exists():
-            raise netboot.NetbootError(
-                "The uploaded archive is gone; add the image again.")
-        if img.variant == "live":
-            _extract_live_files(archive, live, dest_dir)
-            # Everything needed is extracted; the ISO is only kept by ISO images.
-            archive.unlink(missing_ok=True)
+        if entry.get("kernel_url"):
+            img.size_bytes = netboot.fetch_boot_files(entry, img.mirror, img.release,
+                                                      dest_dir)
         else:
-            netboot.extract_boot_files(archive, entry, dest_dir, img.release)
+            if img.source_url and not archive.exists():
+                netboot.download(
+                    img.source_url, archive,
+                    netboot.LIVE_ISO_MAX_BYTES if img.variant == "live"
+                    else netboot.ARCHIVE_MAX_BYTES)
+            if not archive.exists():
+                raise netboot.NetbootError(
+                    "The uploaded archive is gone; add the image again.")
+            if img.variant == "live":
+                _extract_live_files(archive, live, dest_dir)
+                # Everything needed is extracted; the ISO is only kept by ISO images.
+                archive.unlink(missing_ok=True)
+            else:
+                netboot.extract_boot_files(archive, entry, dest_dir, img.release)
     except netboot.NetbootError as e:
         img.status = "error"
         img.message = str(e)
@@ -866,7 +871,8 @@ def _process_netboot(db, img: Image) -> None:
         img.message = f"{entry['name']} live desktop ({img.release}); root filesystem served over HTTP"
     else:
         img.boot_args = netboot.boot_args(entry, img.mirror, img.release)
-        img.size_bytes = archive.stat().st_size
+        if not entry.get("kernel_url"):
+            img.size_bytes = archive.stat().st_size
         img.message = (f"{entry['name']} {img.release} installer; packages come "
                        f"from {img.mirror}")
     img.status = "ready"
@@ -1069,12 +1075,16 @@ def _required_paths(img: Image) -> list[Path]:
     return paths
 
 
-def _missing_message(img: Image, missing: list[Path]) -> str:
+def _missing_message(db, img: Image, missing: list[Path]) -> str:
     """Explain what vanished and which action recovers it."""
     shown = ", ".join(str(p) for p in missing[:3])
     if len(missing) > 3:
         shown += f", and {len(missing) - 3} more"
     if img.source == "netboot":
+        entry = netboot.catalog_entry(img.catalog_id, db) or {}
+        if entry.get("kernel_url"):
+            return (f"Boot files are missing ({shown}). Reprocess downloads "
+                    "them again.")
         if img.variant == "live":
             return (f"Boot files are missing ({shown}). Reprocess downloads "
                     "the live ISO again and rebuilds them.")
@@ -1116,7 +1126,7 @@ def reconcile_statuses(db) -> int:
         if not missing:
             continue
         img.status = NEEDS_REPROCESS
-        img.message = _missing_message(img, missing)
+        img.message = _missing_message(db, img, missing)
         log.warning("Image %s (id=%s) is missing %s; marked %s",
                     img.name, img.id, ", ".join(str(p) for p in missing),
                     NEEDS_REPROCESS)

@@ -52,11 +52,26 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    suites, end-of-life marking from Debian's distro-info-data LTS dates.)* Read each mirror's listing so new releases (for
    example Fedora 45) appear without a Beacon update. The typed version from
    stage 1 keeps working for every distro.
-3. **Custom entries.** A form and a file import for entries in the same format.
+3. **Custom entries.** *(Built: installers only, from an archive or a kernel URL
+   and an initrd URL; stored in the database; preview checks the files on the
+   mirror.)* A form and a file import for entries in the same format.
    The kernel-argument template is the part admins can get wrong, so validate
    and show the final command line before saving.
-4. **Track latest.** A moving entry ("Debian stable") that re-fetches boot files
-   on refresh. Off by default.
+4. **The main distros and their flavours.** Built-in entries for the main
+   distros beside Debian: Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream
+   and openSUSE, and the other well-known ones, installer and live desktop where
+   the distro has them. A distro (or flavour) is only added if it can boot this
+   way: boot files Beacon can fetch without keeping an ISO for an installer, or
+   a live ISO it can take the kernel, initrd and root filesystem from. One that
+   cannot is still added the original way, by uploading its ISO. Each distro
+   also offers its less-known flavours, picked the way Debian's Desktop list
+   works: Ubuntu's Kubuntu, Xubuntu and the other official flavours, Fedora's
+   desktop editions and spins (KDE, Xfce, Cinnamon and so on).
+5. **Track latest.** Images already built never change. When the distro
+   publishes a newer build of the same release (Ubuntu 24.04 -> 24.04.1 ->
+   24.04.2), Beacon fetches the latest available at that time and adds it as a
+   **new** image, beside the old ones. A new release (26.04) is not an update to
+   24.04; it is added as its own release. Off by default.
 
 ## Open questions
 
@@ -66,6 +81,8 @@ Candidate distros (arguments and URLs not yet verified against each distro):
   their long-term support ends. What happens when one has left the mirror and is
   added is still to be seen.
 - Does a netboot archive need a local-mirror option for offline LANs?
+- Stage 5: what makes Beacon check for a newer release — a scheduled check, or
+  a button?
 
 ## Also on the list
 

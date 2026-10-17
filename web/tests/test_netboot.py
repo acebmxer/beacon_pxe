@@ -1,6 +1,9 @@
 """Netboot-archive images: catalog helpers, archive unpacking, add-image route."""
 import io
+import json
+import re
 import tarfile
+import urllib.error
 
 import pytest
 from sqlalchemy import select
@@ -537,3 +540,371 @@ class TestReleaseDiscovery:
         netboot._cached_discovery(_debian())
         netboot._cached_discovery(_debian())
         assert len(calls) == 1
+
+
+FEDORA = {
+    "name": "Fedora",
+    "default_mirror": "https://dl.fedoraproject.org/pub/fedora/linux/",
+    "kernel_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz",
+    "initrd_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img",
+    "boot_args": "inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp",
+    "releases": ["44", {"id": "43", "label": "Fedora 43 (older)"}],
+}
+
+ARCHIVE_ENTRY = {
+    "name": "My Debian",
+    "default_mirror": "http://mirror.lan/debian",
+    "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
+    "kernel_member": "./debian-installer/amd64/linux",
+    "initrd_member": "debian-installer/amd64/initrd.gz",
+    "boot_args": "mirror/country=manual mirror/http/hostname={mirror_host}",
+    "releases": [{"id": "trixie", "number": "13"}],
+}
+
+# The bzImage magic the kernel check looks for.
+KERNEL = b"\0" * 0x202 + b"HdrS" + b"\0" * 64
+
+
+def _form(**over):
+    data = {"name": "Fedora", "default_mirror": FEDORA["default_mirror"], "kind": "files",
+            "kernel_url": FEDORA["kernel_url"], "initrd_url": FEDORA["initrd_url"],
+            "boot_args": FEDORA["boot_args"], "releases": "44\n43 | Fedora 43 (older)"}
+    data.update(over)
+    return data
+
+
+@pytest.fixture
+def no_url_checks(monkeypatch):
+    checked = []
+
+    def check(url):
+        checked.append(url)
+        return {"ok": True, "text": "found (1.0 MB)"}
+    monkeypatch.setattr(netboot, "check_url", check)
+    return checked
+
+
+class TestCustomEntryValidation:
+    def test_files_entry_is_normalised(self):
+        e = netboot.validate_entry(FEDORA)
+        assert e["id"] == "fedora"
+        assert e["default_mirror"] == "https://dl.fedoraproject.org/pub/fedora/linux"
+        assert e["releases"] == [{"id": "44", "label": "Fedora 44", "default": True},
+                                 {"id": "43", "label": "Fedora 43 (older)"}]
+        assert netboot.boot_args(e, e["default_mirror"], "44") == (
+            "inst.repo=https://dl.fedoraproject.org/pub/fedora/linux/releases/44/"
+            "Everything/x86_64/os ip=dhcp")
+
+    def test_archive_entry_keeps_members(self):
+        e = netboot.validate_entry(ARCHIVE_ENTRY)
+        assert e["id"] == "my-debian"
+        assert e["kernel_member"] == "debian-installer/amd64/linux"
+        assert e["releases"][0]["number"] == "13"
+
+    @pytest.mark.parametrize("args, message", [
+        ("ip={boot-url}", "unknown placeholder {boot-url}"),
+        ("x={mirror.__class__}", "unknown placeholder"),
+        ("x={mirror!r}", "unknown placeholder {mirror!r}"),
+        ("x={mirror:>40}", "unknown placeholder"),
+        ("x={}", "unknown placeholder {}"),
+        ("x={mirror", "unmatched"),
+        ("x=}", "unmatched"),
+    ])
+    def test_bad_boot_args_template_rejected(self, args, message):
+        with pytest.raises(netboot.NetbootError, match=re.escape(message)):
+            netboot.validate_entry(dict(FEDORA, boot_args=args))
+
+    def test_ipxe_variable_written_with_doubled_braces(self):
+        e = netboot.validate_entry(dict(FEDORA, boot_args="ks=${{boot-url}}/ks.cfg"))
+        assert netboot.boot_args(e, e["default_mirror"], "44") == "ks=${boot-url}/ks.cfg"
+
+    def test_url_template_takes_no_mirror_parts(self):
+        with pytest.raises(netboot.NetbootError, match="Kernel URL has an unknown"):
+            netboot.validate_entry(dict(FEDORA, kernel_url="{mirror_host}/vmlinuz"))
+
+    def test_several_releases_need_version_in_urls(self):
+        with pytest.raises(netboot.NetbootError, match="no {version}"):
+            netboot.validate_entry(dict(FEDORA, kernel_url="{mirror}/vmlinuz"))
+        netboot.validate_entry(dict(FEDORA, kernel_url="{mirror}/vmlinuz", releases=["44"]))
+
+    def test_url_must_come_out_as_http(self):
+        with pytest.raises(netboot.NetbootError, match="does not give an http"):
+            netboot.validate_entry(dict(FEDORA, kernel_url="ftp://x/{version}/vmlinuz"))
+
+    @pytest.mark.parametrize("change, message", [
+        ({"archive_url": ARCHIVE_ENTRY["archive_url"]}, "not both"),
+        ({"kernel_url": ""}, "both a kernel URL and an initrd URL"),
+        ({"live": {}}, "Unsupported field live"),
+        ({"name": ""}, "Name is required"),
+        ({"name": "Fe\ndora"}, "Name must be on one line"),
+        ({"default_mirror": "mirror.lan"}, "Default mirror:"),
+        ({"releases": []}, "at least one release"),
+        ({"releases": ["44", "44"]}, "listed twice"),
+        ({"releases": ["4 4"]}, "Release '4 4'"),
+        ({"releases": [{"id": "44", "default": True}, {"id": "43", "default": True}]},
+         "only one release"),
+        ({"releases": [{"id": "44", "eol": "soon"}]}, "eol must be a date"),
+        ({"releases": [{"id": "44", "codename": "x"}]}, "unsupported field codename"),
+        ({"id": "Fedora!"}, "ID may only contain"),
+        ({"boot_args": "x" * 1025}, "longer than 1024"),
+    ])
+    def test_bad_entries_rejected(self, change, message):
+        with pytest.raises(netboot.NetbootError, match=re.escape(message)):
+            netboot.validate_entry(dict(FEDORA, **change))
+
+    @pytest.mark.parametrize("member", ["../etc/passwd", "/abs/linux", "a/../../b", "a b"])
+    def test_archive_member_must_stay_inside(self, member):
+        with pytest.raises(netboot.NetbootError, match="path inside the archive"):
+            netboot.validate_entry(dict(ARCHIVE_ENTRY, kernel_member=member))
+
+    def test_release_lines_round_trip(self):
+        e = netboot.validate_entry(dict(FEDORA, releases=[
+            "43", {"id": "44", "default": True}, {"id": "42", "label": "Old one"}]))
+        text = netboot.release_lines(e)
+        assert text == "44\n43\n42 | Old one"
+        assert netboot.parse_releases(text + "\n\n") == [
+            {"id": "44"}, {"id": "43"}, {"id": "42", "label": "Old one"}]
+
+
+class TestCustomEntryImport:
+    def test_catalog_layout_list_and_single_entry(self):
+        assert [e["id"] for e in netboot.parse_import(
+            json.dumps({"distros": [FEDORA, ARCHIVE_ENTRY]}))] == ["fedora", "my-debian"]
+        assert len(netboot.parse_import(json.dumps([FEDORA]))) == 1
+        assert netboot.parse_import(json.dumps(FEDORA))[0]["name"] == "Fedora"
+
+    def test_one_bad_entry_imports_nothing_and_is_named(self):
+        bad = dict(ARCHIVE_ENTRY, name="Broken", boot_args="x={nope}")
+        with pytest.raises(netboot.NetbootError) as exc:
+            netboot.parse_import(json.dumps({"distros": [FEDORA, bad]}))
+        assert str(exc.value).startswith("Nothing was imported. Broken: ")
+        assert "{nope}" in str(exc.value)
+
+    @pytest.mark.parametrize("text, message", [
+        ("{not json", "not valid JSON"), ("[]", "holds no entries"),
+        ('{"distros": {}}', "holds no entries"), ('"x"', "holds no entries"),
+    ])
+    def test_unusable_file(self, text, message):
+        with pytest.raises(netboot.NetbootError, match=message):
+            netboot.parse_import(text)
+
+    def test_same_id_twice_in_file(self):
+        with pytest.raises(netboot.NetbootError, match="ID fedora is used by more"):
+            netboot.parse_import(json.dumps([FEDORA, FEDORA]))
+
+
+class TestCustomEntryStore:
+    def test_stored_entry_is_found_with_the_built_ins(self, db):
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        assert netboot.catalog_entry("fedora") is None
+        e = netboot.catalog_entry("fedora", db)
+        assert e["custom"] is True and e["kernel_url"] == FEDORA["kernel_url"]
+        assert [d["id"] for d in netboot.page_catalog(db)] == ["debian", "fedora"]
+
+    def test_free_id_skips_built_in_and_custom_ids(self, db):
+        assert netboot.free_entry_id(db, "debian") == "debian-2"
+        netboot.store_entry(db, netboot.validate_entry(dict(FEDORA, id="debian-2")))
+        assert netboot.free_entry_id(db, "debian") == "debian-3"
+
+    def test_preview_lists_every_release(self, no_url_checks):
+        rows = netboot.preview_entry(netboot.validate_entry(FEDORA))
+        assert [r["release"]["id"] for r in rows] == ["44", "43"]
+        assert [f["label"] for f in rows[0]["files"]] == ["Kernel", "Initrd"]
+        assert rows[1]["files"][0]["url"].endswith("/releases/43/Everything/x86_64/os/"
+                                                   "images/pxeboot/vmlinuz")
+        assert rows[1]["boot_args"].startswith("inst.repo=https://dl.fedoraproject.org")
+        assert len(no_url_checks) == 4
+
+    def test_check_url_reports_missing_file(self, monkeypatch):
+        def fail(req, timeout):
+            assert req.get_method() == "HEAD"
+            raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fail)
+        assert netboot.check_url("https://x/vmlinuz") == {
+            "ok": False, "text": "not found (the server answered 404)"}
+
+    def test_check_url_offline_is_not_a_failure(self, monkeypatch):
+        def offline(req, timeout):
+            raise urllib.error.URLError("no route")
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", offline)
+        assert netboot.check_url("https://x/vmlinuz")["ok"] is None
+
+
+class TestCustomEntryRoutes:
+    def test_preview_shows_command_line_then_save_stores(self, client, no_url_checks):
+        _login(client)
+        r = client.post("/images/catalog/entry", data=_form(action="preview"))
+        assert r.status_code == 200
+        assert ("inst.repo=https://dl.fedoraproject.org/pub/fedora/linux/releases/43/"
+                "Everything/x86_64/os ip=dhcp") in r.text
+        assert 'id="entry-save"' in r.text
+        db = app_db.SessionLocal()
+        assert netboot.custom_entries(db) == []
+        r = client.post("/images/catalog/entry", data=_form(action="save"),
+                        follow_redirects=False)
+        assert r.status_code == 303
+        assert netboot.custom_entry(db, "fedora")["releases"][1]["label"] == "Fedora 43 (older)"
+        db.close()
+        page = client.get("/images").text
+        assert "Saved the custom entry Fedora" in page
+        assert '<option value="fedora">Fedora (custom)</option>' in page
+
+    def test_bad_template_shows_error_and_no_save(self, client, no_url_checks):
+        _login(client)
+        r = client.post("/images/catalog/entry",
+                        data=_form(action="save", boot_args="ip={ip}"))
+        assert "unknown placeholder {ip}" in r.text
+        assert 'id="entry-save"' not in r.text
+        db = app_db.SessionLocal()
+        assert netboot.custom_entries(db) == []
+        db.close()
+
+    def test_new_entry_named_like_a_built_in_gets_its_own_id(self, client):
+        _login(client)
+        client.post("/images/catalog/entry", data=_form(action="save", name="Debian"))
+        db = app_db.SessionLocal()
+        assert [e["id"] for e in netboot.custom_entries(db)] == ["debian-2"]
+        assert netboot.catalog_entry("debian", db).get("custom") is None
+        db.close()
+
+    def test_edit_keeps_id_and_imported_release_fields(self, client):
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(dict(FEDORA, releases=[
+            {"id": "44", "number": "44", "eol": "2027-05-01"}, "43"])))
+        _login(client)
+        page = client.get("/images?edit=fedora").text
+        assert "Edit Fedora" in page and 'name="original_id" value="fedora"' in page
+        client.post("/images/catalog/entry", data=_form(
+            action="save", original_id="fedora", name="Fedora Linux", releases="44\n45"))
+        e = netboot.custom_entry(db, "fedora")
+        assert e["name"] == "Fedora Linux"
+        assert [{k: v for k, v in r.items() if k != "ended"} for r in e["releases"]] == [
+            {"id": "44", "label": "Fedora Linux 44", "number": "44", "eol": "2027-05-01",
+             "default": True},
+            {"id": "45", "label": "Fedora Linux 45"}]
+        assert len(netboot.custom_entries(db)) == 1
+        db.close()
+
+    def test_import_previews_then_saves_all(self, client, no_url_checks):
+        _login(client)
+        text = json.dumps({"distros": [FEDORA, ARCHIVE_ENTRY]})
+        r = client.post("/images/catalog/import", data={"action": "preview"},
+                        files={"file": ("mine.json", text.encode(), "application/json")})
+        assert "Import 2 entries" in r.text and "mirror/http/hostname=mirror.lan" in r.text
+        db = app_db.SessionLocal()
+        assert netboot.custom_entries(db) == []
+        r = client.post("/images/catalog/import", data={"action": "save", "content": text},
+                        follow_redirects=False)
+        assert r.status_code == 303
+        assert [e["id"] for e in netboot.custom_entries(db)] == ["fedora", "my-debian"]
+        db.close()
+        assert "Imported 2 custom entries: Fedora, My Debian." in client.get("/images").text
+
+    def test_import_reimport_replaces_same_id(self, client, no_url_checks):
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        _login(client)
+        text = json.dumps(dict(FEDORA, releases=["45"]))
+        r = client.post("/images/catalog/import", data={"action": "preview", "content": text})
+        assert "replaces the existing entry" in r.text
+        client.post("/images/catalog/import", data={"action": "save", "content": text},
+                    follow_redirects=False)
+        assert [r["id"] for r in netboot.custom_entry(db, "fedora")["releases"]] == ["45"]
+        db.close()
+        assert "1 replaced an entry with the same ID" in client.get("/images").text
+
+    def test_import_refuses_built_in_id(self, client):
+        _login(client)
+        r = client.post("/images/catalog/import", data={
+            "action": "save", "content": json.dumps(dict(FEDORA, id="debian"))})
+        assert "belongs to a built-in entry" in r.text
+        db = app_db.SessionLocal()
+        assert netboot.custom_entries(db) == []
+        db.close()
+
+    def test_delete(self, client):
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        _login(client)
+        r = client.post("/images/catalog/fedora/delete", follow_redirects=False)
+        assert r.status_code == 303
+        assert netboot.custom_entry(db, "fedora") is None
+        db.close()
+        assert "Deleted the custom entry Fedora" in client.get("/images").text
+
+    def test_unlisted_number_release_passes_through(self, client, tmp_path, monkeypatch):
+        """Fedora's releases are numbers; an unlisted one is not looked up on
+        Debian-style suites."""
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        _login(client)
+        r = client.post("/images/netboot", data={
+            "distro": "fedora", "release": "46", "mirror": "", "source": "mirror"},
+            follow_redirects=False)
+        assert r.status_code == 303
+        img = db.execute(select(Image)).scalar_one()
+        assert (img.catalog_id, img.release, img.source_url) == ("fedora", "46", "")
+        assert img.name == "Fedora 46 (netboot)"
+        db.close()
+
+    def test_separate_files_entry_only_downloads_from_mirror(self, client):
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        db.close()
+        _login(client)
+        r = client.post("/images/netboot", data={
+            "distro": "fedora", "release": "44", "source": "url",
+            "url": "https://x/netboot.tar.gz"})
+        assert "can only use Download from the mirror" in r.text
+
+    def _files_image(self, monkeypatch, files):
+        db = app_db.SessionLocal()
+        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        img = Image(name="f", filename="netboot-fedora-44-x.tar.gz", source="netboot",
+                    catalog_id="fedora", release="44",
+                    mirror="http://mirror.lan/fedora", status="pending")
+        db.add(img)
+        db.commit()
+        image_id = img.id
+        db.close()
+        fetched = []
+
+        def fake_download(url, dest, max_bytes=netboot.ARCHIVE_MAX_BYTES):
+            fetched.append(url)
+            dest.write_bytes(files[url.rsplit("/", 1)[-1]])
+        monkeypatch.setattr(netboot, "download", fake_download)
+        monkeypatch.setattr(image_svc, "SessionLocal", app_db.SessionLocal)
+        image_svc.process_image(image_id)
+        db = app_db.SessionLocal()
+        img = db.get(Image, image_id)
+        db.expunge(img)
+        db.close()
+        return img, fetched
+
+    def test_process_downloads_kernel_and_initrd(self, client, monkeypatch):
+        img, fetched = self._files_image(
+            monkeypatch, {"vmlinuz": KERNEL, "initrd.img": b"INITRD"})
+        assert img.status == "ready", img.message
+        assert fetched == [
+            "http://mirror.lan/fedora/releases/44/Everything/x86_64/os/images/pxeboot/vmlinuz",
+            "http://mirror.lan/fedora/releases/44/Everything/x86_64/os/images/pxeboot/initrd.img"]
+        assert img.boot_args == ("inst.repo=http://mirror.lan/fedora/releases/44/"
+                                 "Everything/x86_64/os ip=dhcp")
+        assert img.size_bytes == len(KERNEL) + 6
+        assert (config.BOOTROOT_DIR / img.initrd_path).read_bytes() == b"INITRD"
+
+    def test_process_refuses_a_page_that_is_not_a_kernel(self, client, monkeypatch):
+        img, _ = self._files_image(
+            monkeypatch, {"vmlinuz": b"<html>moved</html>", "initrd.img": b"I"})
+        assert img.status == "error"
+        assert "is not a Linux kernel" in img.message
+
+    def test_missing_files_message_says_reprocess_downloads(self, client, monkeypatch):
+        img, _ = self._files_image(monkeypatch, {"vmlinuz": KERNEL, "initrd.img": b"I"})
+        (config.BOOTROOT_DIR / img.kernel_path).unlink()
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 1
+        assert "Reprocess downloads them again" in db.get(Image, img.id).message
+        db.close()

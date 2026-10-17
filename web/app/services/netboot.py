@@ -4,6 +4,9 @@ The alternative to an ISO upload. The catalog (netboot_catalog.json) names a
 distro's netboot archive and the kernel arguments that point its installer at a
 package mirror. Beacon keeps only the kernel and initrd from the archive; the
 client's installer pulls everything else from the mirror.
+
+Admins can add their own entries in the same format (custom entries, stored in
+the database); see the custom entries section below.
 """
 import copy
 import csv
@@ -13,12 +16,16 @@ import json
 import logging
 import re
 import secrets
+import string
 import tarfile
 import time
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from urllib.parse import urlparse
+
+from ..models import CatalogEntry
 
 log = logging.getLogger("beacon.netboot")
 
@@ -63,11 +70,12 @@ def _past(day: str | None) -> bool:
         return False
 
 
-def catalog_entry(distro_id: str) -> dict | None:
+def catalog_entry(distro_id: str, db=None) -> dict | None:
+    """A built-in entry, or with a database session also a custom one."""
     for d in load_catalog():
         if d["id"] == distro_id:
             return d
-    return None
+    return custom_entry(db, distro_id) if db is not None else None
 
 
 def _match_release(releases: list[dict], text: str) -> dict | None:
@@ -279,15 +287,15 @@ def with_discovered(entry: dict, found: list[dict]) -> dict:
     return entry
 
 
-def page_catalog() -> list[dict]:
+def page_catalog(db=None) -> list[dict]:
     """The catalog as the Images page shows it: each distro's release list as
     its mirror carries it now, or the catalog's own list if the mirror is out
-    of reach."""
+    of reach. Custom entries follow the built-in ones."""
     out = []
     for d in load_catalog():
         found = _cached_discovery(d)
         out.append(with_discovered(d, found) if found else d)
-    return out
+    return out + (custom_entries(db) if db is not None else [])
 
 
 def validate_release(release: str) -> str:
@@ -562,3 +570,389 @@ def extract_boot_files(archive: Path, entry: dict, dest_dir: Path,
         raise NetbootError("The archive does not contain "
                            f"{', '.join(sorted(missing))}. Is it the right "
                            "distro and release?")
+
+
+# --- Custom entries ---------------------------------------------------------
+# Entries an admin adds, in the same format as netboot_catalog.json. They are
+# installers only (no live desktop, no release discovery), and name their boot
+# files either as an archive holding the kernel and initrd (Debian's
+# netboot.tar.gz) or as a kernel URL and an initrd URL (Fedora's
+# images/pxeboot/, Alpine's netboot/). The templates are the part that is easy
+# to get wrong, so every one is checked here and the Images page shows what
+# they produce before an entry is saved.
+
+_URL_FIELDS = ("mirror", "version")
+_ARGS_FIELDS = ("mirror", "version", "mirror_proto", "mirror_host", "mirror_path")
+_ENTRY_FIELDS = {
+    "id": "ID", "name": "Name", "default_mirror": "Default mirror",
+    "archive_url": "Archive URL", "kernel_member": "Kernel in the archive",
+    "initrd_member": "Initrd in the archive", "kernel_url": "Kernel URL",
+    "initrd_url": "Initrd URL", "boot_args": "Kernel arguments", "releases": "Releases",
+}
+_RELEASE_FIELDS = {"id", "label", "number", "default", "eol"}
+_ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
+_MEMBER_RE = re.compile(r"[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*")
+_NUMBER_RE = re.compile(r"[0-9][0-9.]{0,15}")
+MAX_CUSTOM_ENTRIES = 100
+MAX_RELEASES = 50
+IMPORT_MAX_BYTES = 256 * 1024
+
+
+def entry_id_for(name: str) -> str:
+    """The ID an entry gets from its name when none is given ("Fedora" -> fedora)."""
+    return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")[:32].strip("-") or "custom"
+
+
+def _template_fields(value: str, label: str, allowed: tuple[str, ...]) -> set[str]:
+    """The placeholders a template uses; anything not in allowed is refused.
+
+    The template is filled with str.format, so a field such as {mirror.__class__}
+    or a format spec must never reach it.
+    """
+    braces = "Write a literal { or } as {{ or }} (an iPXE variable is ${{name}})."
+    try:
+        parsed = list(string.Formatter().parse(value))
+    except ValueError:
+        raise NetbootError(f"{label} has an unmatched {{ or }}. {braces}")
+    used = set()
+    for _, field, spec, conversion in parsed:
+        if field is None:
+            continue
+        if field not in allowed or spec or conversion:
+            raw = "{" + field + (f"!{conversion}" if conversion else "") + (
+                f":{spec}" if spec else "") + "}"
+            names = ", ".join("{" + f + "}" for f in allowed)
+            raise NetbootError(f"{label} has an unknown placeholder {raw}. "
+                               f"Placeholders: {names}. {braces}")
+        used.add(field)
+    return used
+
+
+def _entry_text(raw: dict, key: str, limit: int, required: bool = True) -> str:
+    label = _ENTRY_FIELDS[key]
+    value = raw.get(key, "")
+    if value is None:
+        value = ""
+    if not isinstance(value, str):
+        raise NetbootError(f"{label} must be text.")
+    value = value.strip()
+    if re.search(r"[\x00-\x1f\x7f]", value):
+        raise NetbootError(f"{label} must be on one line.")
+    if len(value) > limit:
+        raise NetbootError(f"{label} is longer than {limit} characters.")
+    if required and not value:
+        raise NetbootError(f"{label} is required.")
+    return value
+
+
+def _entry_releases(value, name: str) -> list[dict]:
+    if not isinstance(value, list) or not value:
+        raise NetbootError("Releases: list at least one release.")
+    if len(value) > MAX_RELEASES:
+        raise NetbootError(f"Releases: at most {MAX_RELEASES} per entry.")
+    out, seen = [], set()
+    for item in value:
+        if isinstance(item, str):
+            item = {"id": item}
+        if not isinstance(item, dict):
+            raise NetbootError("Releases: each release is a name or an object with an \"id\".")
+        unknown = sorted(set(item) - _RELEASE_FIELDS)
+        if unknown:
+            raise NetbootError(f"Releases: unsupported field {', '.join(unknown)} "
+                               f"(a release takes {', '.join(sorted(_RELEASE_FIELDS))}).")
+        try:
+            rid = validate_release(str(item.get("id", "")))
+        except NetbootError as e:
+            raise NetbootError(f"Release '{item.get('id', '')}': {e}")
+        if rid.lower() in seen:
+            raise NetbootError(f"Release '{rid}' is listed twice.")
+        seen.add(rid.lower())
+        label = item.get("label") or f"{name} {rid}"
+        if (not isinstance(label, str) or len(label) > 128
+                or re.search(r"[\x00-\x1f\x7f]", label)):
+            raise NetbootError(f"Release '{rid}': the label must be one line of text, "
+                               "at most 128 characters.")
+        rel = {"id": rid, "label": label.strip()}
+        number = item.get("number")
+        if number not in (None, ""):
+            if not _NUMBER_RE.fullmatch(str(number)):
+                raise NetbootError(f"Release '{rid}': number must be a version number "
+                                   "such as 44 or 3.21.")
+            rel["number"] = str(number)
+        eol = item.get("eol")
+        if eol not in (None, ""):
+            try:
+                datetime.date.fromisoformat(str(eol))
+            except ValueError:
+                raise NetbootError(f"Release '{rid}': eol must be a date such as 2030-06-30.")
+            rel["eol"] = str(eol)
+        if item.get("default") not in (None, False, True):
+            raise NetbootError(f"Release '{rid}': default must be true or false.")
+        if item.get("default"):
+            rel["default"] = True
+        out.append(rel)
+    defaults = [r for r in out if r.get("default")]
+    if len(defaults) > 1:
+        raise NetbootError("Releases: only one release can be the default.")
+    if not defaults:
+        out[0]["default"] = True
+    return out
+
+
+def validate_entry(raw) -> dict:
+    """Check a custom entry and return it normalised, or raise NetbootError.
+
+    Every template is filled for every release with the default mirror, and the
+    result has to be a usable URL and a one-line kernel command line.
+    """
+    if not isinstance(raw, dict):
+        raise NetbootError("An entry must be a JSON object.")
+    unknown = sorted(set(raw) - set(_ENTRY_FIELDS))
+    if unknown:
+        raise NetbootError(f"Unsupported field {', '.join(unknown)}. Custom entries are "
+                           "installers and take: " + ", ".join(_ENTRY_FIELDS) + ".")
+    name = _entry_text(raw, "name", 64)
+    entry_id = _entry_text(raw, "id", 32, required=False).lower() or entry_id_for(name)
+    if not _ID_RE.fullmatch(entry_id):
+        raise NetbootError("ID may only contain lowercase letters, digits and '-' "
+                           "(for example: fedora).")
+    try:
+        mirror = validate_mirror(_entry_text(raw, "default_mirror", 255))
+    except NetbootError as e:
+        raise NetbootError(f"Default mirror: {e}")
+    entry = {"id": entry_id, "name": name, "default_mirror": mirror}
+    archive = _entry_text(raw, "archive_url", 512, required=False)
+    kernel_url = _entry_text(raw, "kernel_url", 512, required=False)
+    initrd_url = _entry_text(raw, "initrd_url", 512, required=False)
+    if archive and (kernel_url or initrd_url):
+        raise NetbootError("Give either an archive URL, or a kernel URL and an initrd "
+                           "URL, not both.")
+    if archive:
+        entry["archive_url"] = archive
+        for key in ("kernel_member", "initrd_member"):
+            member = _entry_text(raw, key, 255).removeprefix("./")
+            if (not _MEMBER_RE.fullmatch(member)
+                    or ".." in member.split("/")):
+                raise NetbootError(f"{_ENTRY_FIELDS[key]} must be a path inside the "
+                                   "archive, such as debian-installer/amd64/linux.")
+            entry[key] = member
+        url_keys = ["archive_url"]
+    elif kernel_url and initrd_url:
+        entry["kernel_url"], entry["initrd_url"] = kernel_url, initrd_url
+        url_keys = ["kernel_url", "initrd_url"]
+    else:
+        raise NetbootError("Give an archive URL, or both a kernel URL and an initrd URL.")
+    entry["boot_args"] = _entry_text(raw, "boot_args", 1024, required=False)
+    entry["releases"] = _entry_releases(raw.get("releases"), name)
+
+    _template_fields(entry["boot_args"], _ENTRY_FIELDS["boot_args"], _ARGS_FIELDS)
+    for key in url_keys:
+        used = _template_fields(entry[key], _ENTRY_FIELDS[key], _URL_FIELDS)
+        if len(entry["releases"]) > 1 and "version" not in used:
+            raise NetbootError(f"{_ENTRY_FIELDS[key]} has no {{version}}, so every "
+                               "release would boot the same files. Add {version} "
+                               "where the release goes, or list one release.")
+    for rel in entry["releases"]:
+        for key in url_keys:
+            try:
+                validate_source_url(entry[key].format(mirror=mirror, version=rel["id"]))
+            except NetbootError:
+                raise NetbootError(f"{_ENTRY_FIELDS[key]} does not give an http:// or "
+                                   f"https:// URL for release {rel['id']}.")
+        if len(boot_args(entry, mirror, rel["id"])) > 2048:
+            raise NetbootError("Kernel arguments are longer than 2048 characters once "
+                               "filled in.")
+    return entry
+
+
+def parse_releases(text: str) -> list[dict]:
+    """Releases typed one per line, the first being the default: "44" or
+    "44 | Fedora 44"."""
+    out = []
+    for line in text.splitlines():
+        rid, _, label = line.partition("|")
+        if rid.strip():
+            out.append({"id": rid.strip(), "label": label.strip()} if label.strip()
+                       else {"id": rid.strip()})
+    return out
+
+
+def release_lines(entry: dict) -> str:
+    """An entry's releases as parse_releases reads them, default first."""
+    releases = sorted(entry.get("releases", []), key=lambda r: not r.get("default"))
+    lines = []
+    for r in releases:
+        auto = r["label"] == f"{entry['name']} {r['id']}"
+        lines.append(r["id"] if auto else f"{r['id']} | {r['label']}")
+    return "\n".join(lines)
+
+
+def _custom_rows(db):
+    return db.query(CatalogEntry).order_by(CatalogEntry.id).all()
+
+
+def _custom_from_row(row) -> dict | None:
+    try:
+        entry = json.loads(row.data)
+    except ValueError:
+        log.warning("Custom catalog entry %s is not valid JSON; skipped", row.id)
+        return None
+    if not isinstance(entry, dict):
+        return None
+    entry.update(id=row.id, custom=True)
+    for rel in entry.get("releases", []):
+        rel["ended"] = _past(rel.get("eol"))
+    return entry
+
+
+def custom_entries(db) -> list[dict]:
+    """The custom entries, sorted by name."""
+    entries = [e for e in map(_custom_from_row, _custom_rows(db)) if e]
+    return sorted(entries, key=lambda e: e.get("name", "").lower())
+
+
+def custom_entry(db, entry_id: str) -> dict | None:
+    row = db.get(CatalogEntry, entry_id)
+    return _custom_from_row(row) if row else None
+
+
+def builtin_ids() -> set[str]:
+    return {d["id"] for d in load_catalog()}
+
+
+def free_entry_id(db, base: str) -> str:
+    """base, or base-2, base-3, ... if a built-in or custom entry has it."""
+    taken = builtin_ids()
+    candidate, n = base, 1
+    while candidate in taken or db.get(CatalogEntry, candidate) is not None:
+        n += 1
+        suffix = f"-{n}"
+        candidate = base[:32 - len(suffix)] + suffix
+    return candidate
+
+
+def store_entry(db, entry: dict) -> None:
+    """Save a validated entry under its ID, replacing one with the same ID."""
+    data = json.dumps({k: v for k, v in entry.items() if k not in ("id", "custom")})
+    row = db.get(CatalogEntry, entry["id"])
+    if row is None:
+        db.add(CatalogEntry(id=entry["id"], data=data))
+    else:
+        row.data = data
+    db.commit()
+
+
+def delete_entry(db, entry_id: str) -> bool:
+    row = db.get(CatalogEntry, entry_id)
+    if row is None:
+        return False
+    db.delete(row)
+    db.commit()
+    return True
+
+
+def parse_import(text: str) -> list[dict]:
+    """The entries in an imported file, all validated, or NetbootError naming
+    every entry that is wrong (then nothing is imported).
+
+    Takes netboot_catalog.json's own layout ({"distros": [...]}), a list of
+    entries, or a single entry.
+    """
+    try:
+        data = json.loads(text)
+    except ValueError as e:
+        raise NetbootError(f"The file is not valid JSON ({e}).")
+    if isinstance(data, dict) and "distros" in data:
+        items = data["distros"]
+    elif isinstance(data, dict):
+        items = [data]
+    else:
+        items = data
+    if not isinstance(items, list) or not items:
+        raise NetbootError("The file holds no entries. It should be an entry, a list of "
+                           "entries, or {\"distros\": [...]} as in the built-in catalog.")
+    if len(items) > MAX_CUSTOM_ENTRIES:
+        raise NetbootError(f"The file holds more than {MAX_CUSTOM_ENTRIES} entries.")
+    entries, problems = [], []
+    for n, raw in enumerate(items, 1):
+        named = raw.get("name") if isinstance(raw, dict) else None
+        label = named.strip() if isinstance(named, str) and named.strip() else f"Entry {n}"
+        try:
+            entries.append(validate_entry(raw))
+        except NetbootError as e:
+            problems.append(f"{label}: {e}")
+    ids = [e["id"] for e in entries]
+    problems += [f"ID {i} is used by more than one entry in the file."
+                 for i in sorted({i for i in ids if ids.count(i) > 1})]
+    if problems:
+        raise NetbootError("Nothing was imported. " + " ".join(problems))
+    return entries
+
+
+def boot_file_urls(entry: dict, mirror: str, release: str) -> list[tuple[str, str]]:
+    """(label, URL) for each file the entry downloads for a release."""
+    if entry.get("kernel_url"):
+        return [("Kernel", entry["kernel_url"].format(mirror=mirror, version=release)),
+                ("Initrd", entry["initrd_url"].format(mirror=mirror, version=release))]
+    return [("Archive", archive_url(entry, mirror, release))]
+
+
+def check_url(url: str) -> dict:
+    """Whether a URL answers, without downloading it: {"ok": True/False/None,
+    "text": ...}. None means it could not be checked (no internet, say)."""
+    req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "beacon-pxe"})
+    try:
+        with urllib.request.urlopen(req, timeout=_DISCOVERY_TIMEOUT) as resp:
+            size = resp.headers.get("Content-Length", "")
+    except urllib.error.HTTPError as exc:
+        if exc.code in (404, 410):
+            return {"ok": False, "text": f"not found (the server answered {exc.code})"}
+        return {"ok": None, "text": f"could not check (the server answered {exc.code})"}
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        return {"ok": None, "text": f"could not check ({getattr(exc, 'reason', exc)})"}
+    if size.isdigit():
+        return {"ok": True, "text": f"found ({int(size) / 1024 / 1024:.1f} MB)"}
+    return {"ok": True, "text": "found"}
+
+
+def preview_entry(entry: dict) -> list[dict]:
+    """What the entry gives for each release with its default mirror: the files
+    it downloads (each checked on the mirror) and the kernel command line the
+    boot menu will carry."""
+    mirror = entry["default_mirror"]
+    rows = [{"release": r, "files": boot_file_urls(entry, mirror, r["id"]),
+             "boot_args": boot_args(entry, mirror, r["id"])}
+            for r in entry["releases"]]
+    urls = [url for row in rows for _, url in row["files"]]
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        checks = dict(zip(urls, pool.map(check_url, urls)))
+    for row in rows:
+        row["files"] = [{"label": label, "url": url, "check": checks[url]}
+                        for label, url in row["files"]]
+    return rows
+
+
+def _is_kernel(path: Path) -> bool:
+    """True for an x86 Linux kernel (bzImage): "HdrS" at offset 0x202."""
+    try:
+        with open(path, "rb") as f:
+            f.seek(0x202)
+            return f.read(4) == b"HdrS"
+    except OSError:
+        return False
+
+
+def fetch_boot_files(entry: dict, mirror: str, release: str, dest_dir: Path) -> int:
+    """Download an entry's kernel and initrd into dest_dir; returns their size."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    (_, kernel), (_, initrd) = boot_file_urls(entry, mirror, release)
+    total = 0
+    for url, name in ((kernel, "vmlinuz"), (initrd, "initrd")):
+        download(url, dest_dir / name)
+        size = (dest_dir / name).stat().st_size
+        if not size:
+            raise NetbootError(f"{url} is empty.")
+        total += size
+    if not _is_kernel(dest_dir / "vmlinuz"):
+        raise NetbootError(f"{kernel} is not a Linux kernel. Check the entry's kernel URL.")
+    return total

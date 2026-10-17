@@ -117,6 +117,8 @@ main { padding: 28px; width: 100%; max-width: 1800px; margin: 0 auto; }
   box-shadow: var(--shadow);
 }
 .card h2 { margin: 0 0 4px; font-size: 1.05rem; }
+.card h3 { margin: 22px 0 4px; font-size: 0.95rem; }
+.card h4 { margin: 16px 0 8px; font-size: 0.9rem; }
 .card .sub { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 16px; }
 .card-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
 .card-head h2 { margin-bottom: 0; }
@@ -174,6 +176,10 @@ th, td { text-align: left; padding: 12px 14px; border-bottom: 1px solid var(--bo
 th { color: var(--text-dim); font-size: 0.78rem; text-transform: uppercase; letter-spacing: 0.04em; }
 tr:last-child td { border-bottom: none; }
 .num-col { text-align: right; font-variant-numeric: tabular-nums; font-weight: 700; }
+/* Custom catalog entry preview: URLs and command lines are long unbroken words. */
+.entry-preview { table-layout: fixed; }
+.entry-preview td { vertical-align: top; overflow-wrap: anywhere; }
+.entry-preview th:first-child { width: 16%; }
 /* Paired cards share the row height (stretch to the taller one) so Recent
    clients and Top deployed images line up edge to edge. */
 .grid.top { align-items: stretch; }

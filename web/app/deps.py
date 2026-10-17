@@ -6,7 +6,6 @@ from sqlalchemy.orm import Session
 
 from pathlib import Path
 
-from . import config
 from .db import get_db
 from .models import User
 from .services import updates as update_svc
@@ -98,7 +97,7 @@ def render(request: Request, db: Session, template: str, **ctx):
         # than fetched like the update badge, because /api/update/status is
         # admin-only and every user should be able to see the version.
         "build_version": update_svc.version_label(),
-        "build_channel": config.BEACON_TAG,
+        "build_channel": update_svc.running_channel(),
     }
     base.update(ctx)
     # Starlette >=1.0 takes the request as the first positional argument

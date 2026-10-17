@@ -10,6 +10,15 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- **Beta updates can be turned on from Settings → Updates.** **Include beta
+  versions** moves the update to the `beta` channel without editing `.env`;
+  turning it off returns to the `BEACON_TAG` channel at the next update (an older
+  build). Betas are published by hand (Actions → Publish images → Run workflow
+  on `dev`); pushing to `dev` no longer publishes one. A plain
+  `docker compose up -d` on the host still uses `BEACON_TAG` from `.env`.
+
 ## [0.7.1] - 2026-10-16
 
 **Fedora and RHEL netinstall ISOs boot again, and the dashboard copes with very

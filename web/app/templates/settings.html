@@ -120,6 +120,12 @@
     <span class="mono">docker compose -f docker-compose.yml -f
     docker-compose.dev.yml up -d --build</span> to get it back.
   </div>
+  <label style="display:flex;align-items:flex-start;gap:8px;margin:0 0 12px;">
+    <input id="upd-beta" type="checkbox" style="margin-top:3px;">
+    <span>Include beta versions
+      <small class="muted" style="display:block;">Updates move to test builds published by hand from the <span class="mono">dev</span> branch, ahead of the stable release. Turn it off to return to <span id="upd-base-channel"></span>; that installs an older build at the next update.</small>
+    </span>
+  </label>
   <div id="upd-status" class="muted">Checking…</div>
   <div class="toolbar" style="margin-top:14px;">
     <button class="btn ghost sm" id="btn-check">Check now</button>
@@ -134,6 +140,8 @@
   var buildEl  = document.getElementById("upd-build");
   var devEl    = document.getElementById("upd-dev");
   var devChanEl = document.getElementById("upd-dev-channel");
+  var betaEl   = document.getElementById("upd-beta");
+  var baseEl   = document.getElementById("upd-base-channel");
   var isDev    = false;
   var applyBtn = document.getElementById("btn-apply");
   var checkBtn = document.getElementById("btn-check");
@@ -163,7 +171,10 @@
     // Apply would swap a locally built image for the published one. Warn up
     // front, not only in the confirm dialog, so it's visible before deciding.
     isDev = !!d.dev_build;
-    devChanEl.textContent = d.channel || "published";
+    devChanEl.textContent = d.target_channel || d.channel || "published";
+    betaEl.checked = !!d.beta;
+    betaEl.disabled = !!d.in_progress;
+    baseEl.textContent = d.base_channel || "the stable channel";
     devEl.style.display = isDev ? "" : "none";
   }
 
@@ -287,6 +298,21 @@
       });
   };
 
+  function updBeta() {
+    betaEl.disabled = true;
+    checkBtn.disabled = true;
+    statusEl.textContent = "Checking…";
+    statusEl.className = "muted";
+    fetch("/api/update/beta", {
+      method: "POST",
+      headers: { Accept: "application/json", "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: betaEl.checked })
+    })
+      .then(function () { load(); })
+      .catch(function () { load(); });
+  }
+
+  betaEl.addEventListener("change", updBeta);
   checkBtn.addEventListener("click", updCheck);
   applyBtn.addEventListener("click", updApply);
   load();

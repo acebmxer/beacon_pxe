@@ -11,7 +11,8 @@
 #
 # BEACON_TAG selects the update channel and defaults to "latest" (rolling main
 # branch). Set BEACON_TAG=stable in .env to track tagged releases instead, or
-# BEACON_TAG=beta to track the dev branch (pre-release testing). The
+# BEACON_TAG=beta to track the hand-published dev builds (pre-release testing;
+# the "Include beta versions" switch in Settings -> Updates does the same). The
 # web app reads the same variable, so its update check always watches the tag
 # this file pulls.
 #

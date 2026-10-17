@@ -56,10 +56,16 @@ what `docker compose pull` installs and what the UI's update check watches:
 | --- | --- | --- |
 | `stable` | tagged releases | a new version is released |
 | `latest` | rolling `main` | any commit merged to `main` |
-| `beta` | rolling `dev` | any commit pushed to `dev` — pre-release, may be broken |
+| `beta` | `dev` builds published by hand | a beta is published — pre-release, may be broken |
 
 New installs default to `stable`. Switching channels takes effect on the next
 update.
+
+Rather than editing `.env`, an admin can turn on **Include beta versions** under
+**Settings → Updates**. Updates then move to `beta` whatever `BEACON_TAG` says;
+turning it off returns to the `.env` channel at the next update (an older build).
+It applies to updates started from the UI: a plain `docker compose up -d` on the
+host still uses `BEACON_TAG` from `.env`.
 
 > **Always update the whole stack with `docker compose`, not a per-container UI.**
 > `dnsmasq` and `nfs` run with host networking, which tools like Portainer

@@ -1,6 +1,7 @@
 """Update check and apply endpoints (admin only)."""
 import threading
 
+from pydantic import BaseModel
 from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -30,13 +31,32 @@ def update_status(user: User = Depends(require_admin), db: Session = Depends(get
         "last_checked": get_setting(db, "update_last_checked", ""),
         "last_result": update_svc.current_result(db),
         # Where updates come from and what's running now.
-        "channel": config.BEACON_TAG,
+        "channel": update_svc.running_channel(),
+        "target_channel": update_svc.target_channel(db),
+        "base_channel": config.BEACON_TAG,
+        "beta": update_svc.beta_enabled(db),
         "image": update_svc.image_ref(),
         "version": update_svc.version_label(),
         # Locally built images are replaced by the published ones on Apply; the
         # UI warns rather than letting that happen unannounced.
         "dev_build": update_svc.is_dev_build(),
     }
+
+
+class BetaIn(BaseModel):
+    enabled: bool
+
+
+@router.post("/api/update/beta")
+def set_beta(body: BetaIn, user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Switch beta updates on or off, then re-check against the new channel.
+
+    Nothing is installed here: turning it on only makes the beta builds the
+    thing "Apply update" moves to."""
+    if get_setting(db, "update_in_progress", "0") == "1":
+        return JSONResponse({"error": "Update already in progress"}, status_code=409)
+    update_svc.set_beta(db, body.enabled)
+    return {"beta": body.enabled, "available": update_svc.check_for_updates()}
 
 
 @router.post("/api/update/check")

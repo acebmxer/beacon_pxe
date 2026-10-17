@@ -10,17 +10,69 @@
       "boot_args": "mirror/country=manual mirror/protocol={mirror_proto} mirror/{mirror_proto}/hostname={mirror_host} mirror/{mirror_proto}/directory={mirror_path}",
       "releases": [
         {
+          "id": "forky",
+          "label": "Debian 14 (forky, testing \u2014 pre-release)",
+          "number": "14"
+        },
+        {
           "id": "trixie",
-          "label": "Debian 13 (trixie)"
+          "label": "Debian 13 (trixie)",
+          "default": true,
+          "number": "13"
         },
         {
           "id": "bookworm",
-          "label": "Debian 12 (bookworm)"
+          "label": "Debian 12 (bookworm)",
+          "number": "12"
         }
       ],
+      "number_lookup": {
+        "release_url": "{mirror}/dists/{suite}/Release",
+        "suites": [
+          "stable",
+          "oldstable",
+          "oldoldstable"
+        ],
+        "testing": "testing"
+      },
       "live": {
-        "base_url": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid",
-        "iso_regex": "debian-live-[0-9.]+-amd64-{flavour}\\.iso",
+        "iso_regex": "debian-live-(?:[0-9.]+|testing)-amd64-{flavour}\\.iso",
+        "releases": [
+          {
+            "id": "forky",
+            "name": "Debian 14",
+            "label": "Debian 14 (forky, testing \u2014 pre-release)",
+            "base_url": "https://cdimage.debian.org/cdimage/weekly-live-builds/amd64/iso-hybrid",
+            "number": "14"
+          },
+          {
+            "id": "trixie",
+            "name": "Debian 13",
+            "label": "Debian 13 (trixie)",
+            "base_url": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid",
+            "default": true,
+            "number": "13"
+          },
+          {
+            "id": "bookworm",
+            "name": "Debian 12",
+            "label": "Debian 12 (bookworm)",
+            "base_url": "https://cdimage.debian.org/cdimage/archive",
+            "dir_regex": "12\\.[0-9.]+-live/",
+            "subpath": "amd64/iso-hybrid",
+            "number": "12"
+          }
+        ],
+        "unlisted_folders": [
+          {
+            "base_url": "https://cdimage.debian.org/debian-cd/current-live/amd64/iso-hybrid"
+          },
+          {
+            "base_url": "https://cdimage.debian.org/cdimage/archive",
+            "dir_regex": "{number}\\.[0-9.]+-live/",
+            "subpath": "amd64/iso-hybrid"
+          }
+        ],
         "kernel_member": "live/vmlinuz",
         "initrd_member": "live/initrd.img",
         "root_member": "live/filesystem.squashfs",
@@ -58,7 +110,8 @@
             "id": "standard",
             "label": "Standard (no desktop)"
           }
-        ]
+        ],
+        "testing_folder": "https://cdimage.debian.org/cdimage/weekly-live-builds/amd64/iso-hybrid"
       }
     }
   ]

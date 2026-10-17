@@ -50,7 +50,7 @@
   <div class="sub">No ISO is kept. An <b>installer</b> keeps only the kernel and initrd and
     downloads its packages from the mirror; a <b>live desktop</b> keeps the kernel, initrd
     and root filesystem, which clients stream over HTTP.</div>
-  <form id="netboot-form" method="post" action="/images/netboot" enctype="multipart/form-data">
+  <form id="netboot-form" autocomplete="off" method="post" action="/images/netboot" enctype="multipart/form-data">
     <div class="row">
       <div>
         <label for="nb-variant">Type</label>
@@ -70,9 +70,16 @@
         <select id="nb-flavour" name="flavour"></select>
       </div>
       <div id="nb-release-wrap">
-        <label for="nb-release">Release</label>
-        <input id="nb-release" name="release" list="nb-releases" autocomplete="off">
-        <datalist id="nb-releases"></datalist>
+        <label for="nb-release-sel">Release</label>
+        <select id="nb-release-sel"></select>
+        <input id="nb-release" name="release" autocomplete="off" placeholder="e.g. 12 or bookworm"
+               style="display:none;margin-top:6px;">
+      </div>
+      <div id="nb-live-release-wrap" style="display:none;">
+        <label for="nb-live-release">Release</label>
+        <select id="nb-live-release"></select>
+        <input id="nb-live-other" name="live_release" autocomplete="off" placeholder="e.g. 12 or bookworm"
+               style="display:none;margin-top:6px;">
       </div>
       <div>
         <label for="nb-mirror">Mirror</label>
@@ -201,7 +208,8 @@
     var distroSel = document.getElementById("nb-distro");
     var mirrorIn = document.getElementById("nb-mirror");
     var releaseIn = document.getElementById("nb-release");
-    var datalist = document.getElementById("nb-releases");
+    var releaseSel = document.getElementById("nb-release-sel");
+    var liveReleaseSel = document.getElementById("nb-live-release");
     var sourceSel = document.getElementById("nb-source");
     var variantSel = document.getElementById("nb-variant");
     var flavourSel = document.getElementById("nb-flavour");
@@ -215,27 +223,67 @@
       var hasLive = !!d.live;
       document.getElementById("nb-live-opt").disabled = !hasLive;
       if (!hasLive) variantSel.value = "installer";
-      mirrorIn.value = isLive() ? d.live.base_url : d.default_mirror;
-      datalist.innerHTML = "";
-      (d.releases || []).forEach(function (r) {
+      var liveReleases = (d.live && d.live.releases) || [];
+      mirrorIn.value = d.default_mirror;
+      var addOption = function (sel, value, text) {
         var o = document.createElement("option");
-        o.value = r.id; o.label = r.label;
-        datalist.appendChild(o);
-      });
+        o.value = value; o.textContent = text;
+        sel.appendChild(o);
+      };
+      releaseSel.innerHTML = "";
+      (d.releases || []).forEach(function (r) { addOption(releaseSel, r.id, r.label); });
+      addOption(releaseSel, "", "Other (type a release name)…");
+      liveReleaseSel.innerHTML = "";
+      liveReleases.forEach(function (r) { addOption(liveReleaseSel, r.id, r.label); });
+      addOption(liveReleaseSel, "", "Other (type a release name)…");
       flavourSel.innerHTML = "";
       ((d.live && d.live.flavours) || []).forEach(function (f) {
         var o = document.createElement("option");
         o.value = f.id; o.textContent = f.label;
         flavourSel.appendChild(o);
       });
-      releaseIn.value = d.releases && d.releases.length ? d.releases[0].id : "";
-      releaseIn.required = !isLive();
+      var pick = function (list) {
+        return (list.filter(function (r) { return r.default; })[0] || list[0] || {}).id || "";
+      };
+      releaseSel.value = pick(d.releases || []);
+      syncRelease();
+      liveReleaseSel.value = pick(liveReleases);
+      syncLiveRelease();
+      syncLiveMirror();
       document.getElementById("nb-flavour-wrap").style.display = isLive() ? "" : "none";
+      document.getElementById("nb-live-release-wrap").style.display = isLive() ? "" : "none";
       document.getElementById("nb-release-wrap").style.display = isLive() ? "none" : "";
       // A live desktop is fetched as an ISO, so uploading an archive does not apply.
       sourceSel.querySelector('option[value="upload"]').disabled = isLive();
       if (isLive() && sourceSel.value === "upload") sourceSel.value = "mirror";
       showSource();
+    };
+    // A live release has its own ISO folder, shown in the Mirror box.
+    var liveOtherIn = document.getElementById("nb-live-other");
+    var syncLiveRelease = function () {
+      var other = liveReleaseSel.value === "";
+      if (!other) liveOtherIn.value = liveReleaseSel.value;
+      else if (liveOtherIn.dataset.fromSel) liveOtherIn.value = "";
+      liveOtherIn.dataset.fromSel = other ? "" : "1";
+      liveOtherIn.style.display = other ? "" : "none";
+      liveOtherIn.required = other && isLive();
+    };
+    var syncLiveMirror = function () {
+      var d = currentDistro();
+      if (!isLive()) { if (d) mirrorIn.value = d.default_mirror; return; }
+      var r = ((d && d.live && d.live.releases) || []).filter(function (x) {
+        return x.id === liveReleaseSel.value; })[0];
+      if (r) mirrorIn.value = r.base_url;
+    };
+    // The dropdown fills the release field that is submitted; "Other" shows it
+    // for a typed number or name.
+    var syncRelease = function () {
+      var other = releaseSel.value === "";
+      if (!other) releaseIn.value = releaseSel.value;
+      else if (releaseIn.dataset.fromSel) releaseIn.value = "";
+      releaseIn.dataset.fromSel = other ? "" : "1";
+      releaseIn.style.display = other ? "" : "none";
+      releaseIn.required = other && !isLive();
     };
     var showSource = function () {
       document.getElementById("nb-url-wrap").style.display =
@@ -246,7 +294,9 @@
     distroSel.addEventListener("change", fillDistro);
     variantSel.addEventListener("change", fillDistro);
     sourceSel.addEventListener("change", showSource);
+    releaseSel.addEventListener("change", syncRelease);
     fillDistro();
+    liveReleaseSel.addEventListener("change", function () { syncLiveRelease(); syncLiveMirror(); });
   }
 
   // --- Drag-and-drop ISO upload ------------------------------------------

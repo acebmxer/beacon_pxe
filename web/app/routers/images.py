@@ -133,7 +133,8 @@ async def upload(request: Request, background: BackgroundTasks,
 async def add_netboot(request: Request, background: BackgroundTasks,
                       user: User = Depends(require_admin),
                       distro: str = Form(...), variant: str = Form("installer"),
-                      release: str = Form(""), flavour: str = Form(""),
+                      release: str = Form(""), live_release: str = Form(""),
+                      flavour: str = Form(""),
                       mirror: str = Form(""), name: str = Form(""),
                       source: str = Form("mirror"), url: str = Form(""),
                       file: UploadFile | None = File(None),
@@ -153,19 +154,43 @@ async def add_netboot(request: Request, background: BackgroundTasks,
     try:
         if live:
             release = netboot_svc.validate_flavour(live, flavour)
-            mirror = netboot_svc.validate_mirror(mirror or live["base_url"])
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                live_rel = await run_in_threadpool(
+                    netboot_svc.live_release_from_mirror, entry, live, live_release)
+            mirror = netboot_svc.validate_mirror(mirror or live_rel["base_url"])
             if source == "url":
                 source_url = netboot_svc.validate_source_url(url)
             else:
-                source_url = await run_in_threadpool(
-                    netboot_svc.resolve_live_iso_url, live, mirror, release)
+                if live_rel.get("unlisted"):
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_unlisted_live_url, live,
+                        live_rel["unlisted"], release)
+                else:
+                    folder = await run_in_threadpool(
+                        netboot_svc.resolve_release_folder, live_rel, mirror)
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_live_iso_url, live, folder, release)
             label = next(f["label"] for f in live["flavours"] if f["id"] == release)
-            default_name = f"{entry['name']} Live {label}"
+            version = f"{live_rel['name']} " if live_release.strip() else ""
+            default_name = (f"{version or entry['name'] + ' '}Live {label}")
             filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
         else:
             variant = "installer"
-            release = netboot_svc.validate_release(release)
+            release = netboot_svc.resolve_release(entry, release)
             mirror = netboot_svc.validate_mirror(mirror or entry["default_mirror"])
+            if release not in {r["id"] for r in entry.get("releases", [])}:
+                found = await run_in_threadpool(
+                    netboot_svc.lookup_release, entry, mirror, release)
+                if found:
+                    release = found["codename"]
+                elif re.fullmatch(r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]),
+                                  release):
+                    raise netboot_svc.NetbootError(
+                        f"No release numbered {release} was found on {mirror}. "
+                        "Type its name instead.")
+            release = netboot_svc.validate_release(release)
             source_url = ""
             if source == "upload":
                 if file is None or not file.filename:

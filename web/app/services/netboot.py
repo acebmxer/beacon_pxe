@@ -53,6 +53,99 @@ def catalog_entry(distro_id: str) -> dict | None:
     return None
 
 
+def _match_release(releases: list[dict], text: str) -> dict | None:
+    """The release a typed or picked text means: "12", "Debian 12", "bookworm"
+    and the full list label all select bookworm."""
+    full = text.strip().lower()
+    for r in releases:
+        names = {r["id"], str(r.get("number", "")), r["label"], r.get("name", "")}
+        if full in {n.lower() for n in names if n}:
+            return r
+    return None
+
+
+def resolve_release(entry: dict, text: str) -> str:
+    """Turn what was typed or picked into a release name; anything that is not
+    a listed release is passed on as a literal release name."""
+    text = text.strip()
+    low = re.sub(r"^" + re.escape(entry.get("name", "").lower()) + r"\s+", "", text.lower())
+    match = _match_release(entry.get("releases", []), low) or _match_release(
+        entry.get("releases", []), text)
+    return match["id"] if match else text
+
+
+def _suite_info(url: str) -> dict:
+    """Codename and Version from a mirror's Release file ({} if unreadable)."""
+    req = urllib.request.Request(url, headers={"User-Agent": "beacon-pxe"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            text = resp.read(256 * 1024).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError):
+        return {}
+    return dict(m.groups() for m in re.finditer(r"^(Codename|Version): *(\S+)", text, re.M))
+
+
+def lookup_suites(entry: dict, mirror: str) -> list[dict]:
+    """Every release the mirror carries by suite name, with version and codename.
+
+    stable, oldstable, ... carry their version and codename; the testing suite
+    has no version, so it is numbered as the one after the newest stable.
+    """
+    lookup = entry.get("number_lookup")
+    if not lookup:
+        return []
+    found = []
+    for suite in lookup["suites"]:
+        info = _suite_info(lookup["release_url"].format(mirror=mirror, suite=suite))
+        major = re.match(r"[0-9]+", info.get("Version", ""))
+        if major and "Codename" in info:
+            found.append({"number": major.group(0), "codename": info["Codename"],
+                          "testing": False})
+    if found and lookup.get("testing"):
+        info = _suite_info(lookup["release_url"].format(mirror=mirror, suite=lookup["testing"]))
+        if "Codename" in info:
+            found.append({"number": str(max(int(f["number"]) for f in found) + 1),
+                          "codename": info["Codename"], "testing": True})
+    return found
+
+
+def lookup_release(entry: dict, mirror: str, text: str) -> dict | None:
+    """The mirror's release a typed number or name means ("15", "Debian 15",
+    "duke"), or None if the mirror has no such release."""
+    wanted = re.sub(r"^" + re.escape(entry.get("name", "").lower()) + r"\s+", "",
+                    text.strip().lower())
+    for r in lookup_suites(entry, mirror):
+        if wanted in (r["number"], r["codename"].lower()):
+            return r
+    return None
+
+
+def lookup_codename(entry: dict, mirror: str, text: str) -> str | None:
+    """The release name for a version number the catalog does not list."""
+    if not re.fullmatch(r"[0-9]{1,3}", re.sub(
+            r"^" + re.escape(entry.get("name", "").lower()) + r"\s+", "", text.strip().lower())):
+        return None
+    found = lookup_release(entry, mirror, text)
+    return found["codename"] if found else None
+
+
+def live_release_from_mirror(entry: dict, live: dict, text: str) -> dict:
+    """A live release that is not in the catalog, found on the mirror by number
+    or codename. Released versions are looked up in Debian's current and archive
+    ISO folders; the testing release uses the weekly build folder."""
+    found = lookup_release(entry, entry["default_mirror"], text)
+    if not found:
+        raise NetbootError(f"No Debian release '{text.strip()}' was found. Type its "
+                           "number or codename, or choose 'Download from a URL' to "
+                           "use any ISO.")
+    rel = {"id": found["codename"], "name": f"Debian {found['number']}",
+           "label": f"Debian {found['number']} ({found['codename']})"}
+    if found["testing"]:
+        return dict(rel, base_url=live["testing_folder"])
+    return dict(rel, base_url=live["unlisted_folders"][0]["base_url"],
+                unlisted=found["number"])
+
+
 def validate_release(release: str) -> str:
     release = release.strip()
     if not _RELEASE_RE.fullmatch(release):
@@ -114,6 +207,72 @@ def validate_flavour(live: dict, flavour: str) -> str:
     return flavour
 
 
+def validate_live_release(live: dict, release: str) -> dict:
+    """The live release named by the form; the first (current) one if blank."""
+    releases = live.get("releases", [])
+    if not release.strip() and releases:
+        return next((r for r in releases if r.get("default")), releases[0])
+    match = _match_release(releases, release)
+    if match:
+        return match
+    raise NetbootError("Unknown live release.")
+
+
+def resolve_unlisted_live_url(live: dict, number: str, flavour: str) -> str:
+    """Find a live ISO for a version that is not in the catalog.
+
+    Debian keeps the newest stable release's ISOs in one folder and moves older
+    ones to an archive folder named for the point release, so both are tried.
+    The file's own version must match, so asking for 14 never returns 13's ISO.
+    """
+    for folder in live["unlisted_folders"]:
+        rel = dict(folder, label=f"Debian {number}")
+        if rel.get("dir_regex"):
+            rel["dir_regex"] = rel["dir_regex"].format(number=re.escape(number))
+        try:
+            base = resolve_release_folder(rel, folder["base_url"])
+            url = resolve_live_iso_url(live, base, flavour)
+        except NetbootError:
+            continue
+        if re.search(rf"debian-live-{re.escape(number)}\.", url.rsplit("/", 1)[-1]):
+            return url
+    raise NetbootError(f"No live ISO for Debian {number} was found in Debian's current "
+                       "or archive folders. If it is a pre-release, choose "
+                       "'Download from a URL' and paste the ISO address.")
+
+
+def resolve_release_folder(rel: dict, base_url: str) -> str:
+    """The folder holding a live release's ISOs.
+
+    Current releases are served from one fixed folder. Older ones move into an
+    archive folder named for the point release (12.15.0-live/), so the newest
+    matching folder is read from the listing.
+    """
+    base_url = base_url.rstrip("/")
+    if not rel.get("dir_regex"):
+        return base_url
+    listing = _read_listing(base_url)
+    rx = re.compile(rel["dir_regex"])
+    dirs = sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
+    if not dirs:
+        raise NetbootError(f"No {rel['label']} live folder was found at {base_url}/.")
+    return "/".join(p for p in (base_url, dirs[-1].rstrip("/"), rel.get("subpath", "")) if p)
+
+
+def _version_key(name: str) -> list[int]:
+    return [int(n) for n in re.findall(r"\d+", name)]
+
+
+def _read_listing(base_url: str) -> str:
+    req = urllib.request.Request(base_url + "/", headers={"User-Agent": "beacon-pxe"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            return resp.read(4 * 1024 * 1024).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError) as exc:
+        raise NetbootError(f"Could not read {base_url}/ ({getattr(exc, 'reason', exc)}). "
+                           "Check the mirror and the Beacon host's internet access.")
+
+
 def resolve_live_iso_url(live: dict, base_url: str, flavour: str) -> str:
     """Find the current live ISO for a flavour in the mirror's directory listing.
 
@@ -121,15 +280,9 @@ def resolve_live_iso_url(live: dict, base_url: str, flavour: str) -> str:
     changes, so it is read from the listing rather than pinned in the catalog.
     """
     base_url = base_url.rstrip("/")
-    req = urllib.request.Request(base_url + "/", headers={"User-Agent": "beacon-pxe"})
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            listing = resp.read(4 * 1024 * 1024).decode("utf-8", "replace")
-    except (urllib.error.URLError, TimeoutError) as exc:
-        raise NetbootError(f"Could not read {base_url}/ ({getattr(exc, 'reason', exc)}). "
-                           "Check the mirror and the Beacon host's internet access.")
+    listing = _read_listing(base_url)
     rx = re.compile(live["iso_regex"].format(flavour=re.escape(flavour)))
-    names = sorted({m.group(0) for m in rx.finditer(listing)})
+    names = sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
     if not names:
         raise NetbootError(f"No live ISO for '{flavour}' was found at {base_url}/.")
     return f"{base_url}/{names[-1]}"

@@ -13,7 +13,7 @@ to do differently. Internal refactors that change nothing observable are omitted
 ### Added
 
 - **Debian installers and live desktops can be added without keeping an ISO.** **Add from a netboot
-  catalog** on the Images page takes a release (`trixie`, `bookworm`, or any
+  catalog** on the Images page takes a release (`14`, `trixie`, `bookworm`, or any
   other name the mirror carries) and a mirror (default `deb.debian.org`), then
   downloads Debian's netboot archive and keeps only its kernel and initrd. The
   client's installer fetches its packages from the mirror, so nothing is stored
@@ -24,7 +24,15 @@ to do differently. Internal refactors that change nothing observable are omitted
   **Live desktop** does the same for Debian's live desktops (KDE Plasma, GNOME,
   Xfce, Cinnamon, MATE, LXQt, LXDE, Standard): Beacon downloads the live ISO once,
   keeps the kernel, initrd and root filesystem, and deletes the ISO. Reprocess
-  downloads it again.
+  downloads it again. **Release** is a list on both Installer and Live desktop:
+  Debian 14 (forky, testing, a pre-release), Debian 13 (trixie) and Debian 12
+  (bookworm), the supported releases only. **Other** takes a number (`12`, `15`) or a codename
+  (`bookworm`, `duke`) on both. A release that is not in the list is found on
+  Debian's own mirror (its stable, oldstable and testing files give each
+  version and codename), so a new release works before it is added to the list;
+  Live desktop then fetches its ISO from Debian's current, archive or weekly
+  testing folder. Installer also takes any other release name the mirror carries.
+  A live image is named after its release, e.g. "Debian 12 Live KDE Plasma".
 
 ## [0.7.2] - 2026-10-17
 

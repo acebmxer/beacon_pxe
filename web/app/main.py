@@ -18,6 +18,7 @@ from .services import bootstrap
 from .routers import (auth, dashboard, settings, images, drivers, users, setup,
                       track, updates)
 from .services import updates as update_svc
+from .services import track_latest
 
 
 class _JsonFormatter(logging.Formatter):
@@ -56,6 +57,7 @@ async def lifespan(app: FastAPI):
     # actually landed. Runs before the checker so the state is settled first.
     update_svc.finish_pending_update()
     update_svc.start_background_checker()
+    track_latest.start_background_checker()
     yield
 
 

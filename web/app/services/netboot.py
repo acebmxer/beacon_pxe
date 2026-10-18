@@ -11,6 +11,7 @@ the database); see the custom entries section below.
 import copy
 import csv
 import datetime
+import email.utils
 import http.client
 import io
 import json
@@ -658,6 +659,173 @@ def resolve_live_iso_url(live: dict, base_url: str, flavour: str, version: str =
 
 def live_boot_args(live: dict, image_id: int) -> str:
     return live["boot_args"].format(image_id=image_id)
+
+
+def plan_image(entry: dict, variant: str, release: str, live_release: str, flavour: str,
+               mirror: str, source: str = "mirror", url: str = "",
+               has_upload: bool = False, allow_eol: bool = True) -> dict:
+    """Resolve the Add from a netboot catalog form into an image's fields.
+
+    Shared by the form and by Track latest (services.track_latest), which calls
+    it again with an image's own release and mirror, so a newer build is found
+    exactly the way the form finds the current one. Reads the mirror; raises
+    NetbootError with a message for the admin.
+
+    variant "installer": the distro's netboot archive (kernel + initrd).
+    variant "live": a live desktop; release is then the flavour, and the live
+    release goes in live_release.
+    """
+    live = live_entry(entry) if variant == "live" else None
+    if variant == "live" and live is None:
+        raise NetbootError(f"{entry['name']} has no live desktop entry.")
+    if variant != "live" and not has_installer(entry):
+        raise NetbootError(f"{entry['name']} has no installer entry; choose Live desktop.")
+    if live and live.get("folder"):
+        # The ISO folder follows a template per release and desktop.
+        try:
+            live_rel = validate_live_release(live, live_release)
+        except NetbootError:
+            rid = validate_release(resolve_release(entry, live_release))
+            live_rel = {"id": rid, "label": f"{entry['name']} {rid}"}
+        release = validate_flavour(live, flavour, live_rel["id"])
+        mirror = validate_mirror(mirror or live_mirror(entry, live, release))
+        if source == "url":
+            source_url = validate_source_url(url)
+        else:
+            source_url = resolve_flavour_iso_url(live, release, mirror, live_rel["id"])
+        picked = next(f for f in live["flavours"] if f["id"] == release)
+        version = live_rel.get("name") or (
+            f"{entry['name']} {live_rel.get('number') or live_rel['id']}")
+        default_name = picked.get("title") or f"{version} Live {picked['label']}"
+        filename = new_archive_name(entry["id"], "live-" + release, ".iso")
+    elif live:
+        release = validate_flavour(live, flavour)
+        try:
+            live_rel = validate_live_release(live, live_release)
+        except NetbootError:
+            live_rel = live_release_from_mirror(entry, live, live_release)
+        mirror = validate_mirror(mirror or live_rel["base_url"])
+        if source == "url":
+            source_url = validate_source_url(url)
+        elif live_rel.get("unlisted"):
+            source_url = resolve_unlisted_live_url(live, live_rel["unlisted"], release)
+        else:
+            folder = resolve_release_folder(live_rel, mirror)
+            source_url = resolve_live_iso_url(live, folder, release)
+            check_live_iso_matches(live, live_rel, source_url)
+        label = next(f["label"] for f in live["flavours"] if f["id"] == release)
+        version = f"{live_rel['name']} " if live_release.strip() else ""
+        default_name = (f"{version or entry['name'] + ' '}Live {label}")
+        filename = new_archive_name(entry["id"], "live-" + release, ".iso")
+    else:
+        variant = "installer"
+        live_rel = None
+        release = resolve_release(entry, release)
+        mirror = validate_mirror(mirror or entry["default_mirror"])
+        number = next((r.get("number") for r in entry.get("releases", [])
+                       if r["id"] == release), None)
+        if release not in {r["id"] for r in entry.get("releases", [])}:
+            found = lookup_release(entry, mirror, release)
+            if found:
+                release, number = found["codename"], found["number"]
+            elif entry.get("number_lookup") and re.fullmatch(
+                    r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]), release):
+                raise NetbootError(f"No release numbered {release} was found on {mirror}. "
+                                   "Type its name instead.")
+        release = validate_release(release)
+        source_url = ""
+        if entry.get("kernel_url"):
+            # Its kernel and initrd are fetched separately when it is processed.
+            if source != "mirror":
+                raise NetbootError(
+                    f"{entry['name']} downloads its kernel and initrd separately, "
+                    "so it can only use Download from the mirror.")
+        elif source == "upload":
+            if not has_upload:
+                raise NetbootError("Choose an archive file to upload.")
+        elif source == "url":
+            source_url = validate_source_url(url)
+        else:
+            source_url = resolve_archive_url(entry, mirror, release)
+        named = next((r.get("name") for r in entry.get("releases", [])
+                      if r["id"] == release), None)
+        if named:
+            default_name = f"{named} (netboot)"
+        elif number and number != release:
+            default_name = f"{entry['name']} {number} {release} (netboot)"
+        else:
+            default_name = f"{entry['name']} {release} (netboot)"
+        filename = new_archive_name(entry["id"], release)
+    ended = None if allow_eol else ended_release(
+        entry, live_rel["id"] if live else release, live=bool(live))
+    if ended:
+        raise NetbootError(
+            f"{ended['label']} has reached its end of life. Turn on Offer end-of-life "
+            "releases under Settings → Netboot catalog to add it.")
+    # Where the files come from: only an image built from the mirror has a newer
+    # build to look for (a live image's only other source is a URL).
+    origin = source if source == "url" or (source == "upload" and not live) else "mirror"
+    return {"variant": variant, "release": release,
+            "live_release": live_rel["id"] if live else "", "mirror": mirror,
+            "source_url": source_url, "origin": origin, "default_name": default_name,
+            "filename": filename}
+
+
+def build_stamp(files: list[tuple[str, int]]) -> str:
+    """What identifies one build of an image's boot files: each downloaded URL
+    with its size. A file name carries a point release (ubuntu-24.04.3-...), and
+    a file kept at one URL (Debian's current/, Arch's latest/, a "-latest" ISO)
+    changes size when it is rebuilt. Sizes rather than dates, because a mirror
+    network serves the same file from hosts whose dates can differ."""
+    return "\n".join(f"{size} {url}" for url, size in files)
+
+
+def stamp_urls(entry: dict, mirror: str, release: str, source_url: str) -> list[str]:
+    """The URLs build_stamp covers for an image: its archive or ISO, or the
+    kernel and initrd of an entry that downloads them separately."""
+    if source_url:
+        return [source_url]
+    return [url for _, url in boot_file_urls(entry, mirror, release)]
+
+
+class _KeepHeadRedirect(urllib.request.HTTPRedirectHandler):
+    """Follows a redirect with the same HEAD request. urllib turns it into a GET,
+    which would start downloading the file (a multi-GB ISO) only to drop it;
+    mirror networks such as download.opensuse.org redirect every request."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None and req.get_method() == "HEAD":
+            new.method = "HEAD"
+        return new
+
+
+_HEAD_OPENER = urllib.request.build_opener(_KeepHeadRedirect)
+
+
+def remote_build(urls: list[str], timeout: int = 30) -> tuple[str, str]:
+    """The build the mirror serves now: (build_stamp, date of the newest file as
+    YYYY-MM-DD, or "" if the server gives none). Raises NetbootError when a file
+    cannot be checked or the server does not say its size."""
+    files, days = [], []
+    for url in urls:
+        req = urllib.request.Request(url, method="HEAD", headers={"User-Agent": "beacon-pxe"})
+        try:
+            with _HEAD_OPENER.open(req, timeout=timeout) as resp:
+                size = resp.headers.get("Content-Length", "")
+                modified = resp.headers.get("Last-Modified", "")
+        except urllib.error.HTTPError as exc:
+            raise NetbootError(f"the server answered {exc.code} for {url}")
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise NetbootError(f"could not reach {url} ({getattr(exc, 'reason', exc)})")
+        if not size.isdigit():
+            raise NetbootError(f"the server does not give the size of {url}")
+        files.append((url, int(size)))
+        try:
+            days.append(email.utils.parsedate_to_datetime(modified).date().isoformat())
+        except (TypeError, ValueError):
+            pass
+    return build_stamp(files), max(days, default="")
 
 
 DOWNLOAD_ATTEMPTS = 4

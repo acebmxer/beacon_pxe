@@ -849,6 +849,10 @@ def _process_netboot(db, img: Image) -> None:
         if img.variant != "live" and entry.get("kernel_url"):
             img.size_bytes = netboot.fetch_boot_files(entry, img.mirror, img.release,
                                                       dest_dir)
+            kernel, initrd = netboot.stamp_urls(entry, img.mirror, img.release, "")
+            img.build = netboot.build_stamp([
+                (kernel, (dest_dir / "vmlinuz").stat().st_size),
+                (initrd, (dest_dir / "initrd").stat().st_size)])
         else:
             if img.source_url and not archive.exists():
                 netboot.download(
@@ -858,6 +862,8 @@ def _process_netboot(db, img: Image) -> None:
             if not archive.exists():
                 raise netboot.NetbootError(
                     "The uploaded archive is gone; add the image again.")
+            if img.source_url:
+                img.build = netboot.build_stamp([(img.source_url, archive.stat().st_size)])
             if img.variant == "live":
                 _extract_live_files(archive, live, dest_dir)
                 if live.get("root") == "nfs":

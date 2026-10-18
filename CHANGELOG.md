@@ -12,6 +12,17 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Added
 
+- **Catalog images can pick up newer builds of their release.** **Add newer builds
+  automatically** under **Settings → Netboot catalog** (off by default) has Beacon
+  look on the mirror once a day, or when **Check now** is pressed, for a newer
+  build of the release each catalog image was added from: a point release (Ubuntu
+  24.04.2 → 24.04.3), a respun live ISO, or a rebuilt file at the same address
+  (Debian's `current` installer, this month's Arch). It is downloaded as a new
+  image named with the build's date, beside the old image, which is left as it
+  is; a new release is never added this way. Only images downloaded from the
+  mirror are followed. Rolling releases get a new image each time they are
+  rebuilt. The last check's time and result are shown under the switch.
+
 - **The netboot catalog has the main distros beside Debian.** **Add from a netboot
   catalog** now lists Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream,
   openSUSE Leap, openSUSE Tumbleweed, Linux Mint, Kali Linux, Arch Linux, Alpine

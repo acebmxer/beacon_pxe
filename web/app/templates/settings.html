@@ -83,10 +83,15 @@
     <div class="checkbox"><input type="checkbox" id="svc_http" name="svc_http" {{ 'checked' if settings.svc_http=='1' }}><label for="svc_http">HTTP boot files (informational — served by nginx)</label></div>
   </div>
 
-  <div class="card" style="margin-top:18px;">
+  <div class="card" id="netboot-catalog" style="margin-top:18px;">
     <h2>Netboot catalog</h2>
     <div class="sub">Releases offered by <b>Add from a netboot catalog</b> on the Images page</div>
     <div class="checkbox"><input type="checkbox" id="netboot_show_eol" name="netboot_show_eol" {{ 'checked' if settings.netboot_show_eol=='1' }}><label for="netboot_show_eol">Offer end-of-life releases <span class="muted">— when off, releases past their end of life are not listed and cannot be added; images already added are not affected</span></label></div>
+    <div class="checkbox"><input type="checkbox" id="netboot_track_latest" name="netboot_track_latest" {{ 'checked' if settings.netboot_track_latest=='1' }}><label for="netboot_track_latest">Add newer builds automatically <span class="muted">— once a day, Beacon looks for a newer build of the release each catalog image was added from (Ubuntu 24.04.2 → 24.04.3, a respun live ISO) and downloads it as a new image beside the old one, which is left as it is; a new release is not added. Rolling releases (Arch, Tumbleweed, Kali, Debian testing) get a new image each time they are rebuilt, so keep an eye on disk space. Only images added from the mirror are followed</span></label></div>
+    <div class="toolbar" style="margin-top:10px;">
+      <button class="btn ghost sm" type="submit" form="track-latest-check" {{ 'disabled' if track.running }}>Check now</button>
+      <span class="muted">{% if track.running %}Checking for newer builds…{% elif track.checked %}Last checked {{ track.checked }}: {{ track.result }}{% else %}Not checked yet.{% endif %}</span>
+    </div>
   </div>
 
   <div class="card" style="margin-top:18px;">
@@ -113,6 +118,7 @@
     <button class="btn" type="submit">Save settings</button>
   </div>
 </form>
+<form id="track-latest-check" method="post" action="/settings/track-latest/check"></form>
 
 <div class="card" id="updates" style="margin-top:18px;">
   <h2>Updates</h2>

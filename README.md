@@ -8,12 +8,12 @@
 [![Issues](https://img.shields.io/github/issues/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/issues)
 [![Stars](https://img.shields.io/github/stars/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/stargazers)
 [![Forks](https://img.shields.io/github/forks/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/forks)
-[![Unique cloners](https://img.shields.io/badge/unique%20cloners-122-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
+[![Unique cloners](https://img.shields.io/badge/unique%20cloners-125-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](web/Dockerfile)
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-75%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-296%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -67,7 +67,8 @@ args edited. For an installer or live desktop without keeping an ISO, **Add from
 netboot catalog** keeps just the boot files (and, for a live desktop, its root
 filesystem) for Debian, Ubuntu and its flavours, Fedora and its spins, Rocky Linux,
 AlmaLinux, CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch (with
-EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers — see the
+EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers,
+and newer builds of a release can be added automatically — see the
 [guide](docs/guide.md#netboot-installers-no-iso).
 
 **Windows** needs SMB ports **139 + 445** reachable, and on Intel VMD / AMD RAID

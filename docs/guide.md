@@ -145,6 +145,26 @@ desktop not in the list is still added by uploading its ISO. A download that
 stalls or drops part-way is resumed where it stopped, up to four tries, before
 the image is marked as failed.
 
+**Add newer builds automatically** under **Server Settings → Netboot catalog**
+(off by default) keeps catalog images current without changing them. Once a day,
+and when **Check now** under the switch is pressed, Beacon looks on the mirror
+for a newer build of the release each catalog image was added from: a point
+release (Ubuntu 24.04.2 → 24.04.3, Debian 13.1 → 13.2), a respun live ISO, or a
+file rebuilt at the same address (Debian's `current` installer, Rocky's
+`-latest` ISO, this month's Arch). A build is told apart by its file names and
+sizes on the mirror. A newer one is downloaded as a new image named with the
+build's date, such as "Ubuntu 24.04 LTS Live Kubuntu (build 2026-08-07)", beside
+the old image, which is left as it is. A new release (26.04) is never added this
+way; add it as its own image. Images of one distro, desktop, release and mirror
+are followed together: only the newest is compared with the mirror, a release
+whose newest image failed is skipped until it is reprocessed or deleted, and a
+new image that is deleted is not added again (a later build still is). Only
+images whose files were downloaded from the mirror are followed, not a pasted
+URL or an uploaded archive, and not images added before Beacon 0.8.0. Rolling
+releases (Arch, Tumbleweed, Kali, Debian testing) get a new image each time they
+are rebuilt, so keep an eye on disk space. The last check's time and what it
+found are shown under the switch.
+
 **Custom catalog entries** add an installer for a distro the catalog does not
 have. Under **Custom catalog entries** on the Images page, give a name, a default
 mirror, the boot files and the kernel arguments, and list the releases one per

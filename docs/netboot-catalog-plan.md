@@ -58,8 +58,8 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    The kernel-argument template is the part admins can get wrong, so validate
    and show the final command line before saving.
 4. **The main distros and their flavours.** *(Built: Ubuntu, Fedora, Rocky, Alma,
-   CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch, Alpine;
-   no Kali live entry, as Kali publishes no live ISO on cdimage.kali.org now.)*
+   CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch, Alpine,
+   plus XCP-ng's installer; no Kali live entry, as Kali publishes no live ISO on cdimage.kali.org now.)*
    Built-in entries for the main
    distros beside Debian: Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream
    and openSUSE, and the other well-known ones, installer and live desktop where
@@ -70,7 +70,10 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    also offers its less-known flavours, picked the way Debian's Desktop list
    works: Ubuntu's Kubuntu, Xubuntu and the other official flavours, Fedora's
    desktop editions and spins (KDE, Xfce, Cinnamon and so on).
-5. **Track latest.** Images already built never change. When the distro
+5. **Track latest.** *(Built: one switch in Settings → Netboot catalog for every
+   catalog image, checked daily and by a Check now button; a build is told apart
+   by its file URLs and sizes; only images downloaded from the mirror are followed.)*
+   Images already built never change. When the distro
    publishes a newer build of the same release (Ubuntu 24.04 -> 24.04.1 ->
    24.04.2), Beacon fetches the latest available at that time and adds it as a
    **new** image, beside the old ones. A new release (26.04) is not an update to
@@ -86,8 +89,8 @@ Candidate distros (arguments and URLs not yet verified against each distro):
   their long-term support ends. What happens when one has left the mirror and is
   added is still to be seen.
 - Does a netboot archive need a local-mirror option for offline LANs?
-- Stage 5: what makes Beacon check for a newer release — a scheduled check, or
-  a button?
+- Stage 5: what makes Beacon check for a newer release: answered. A daily check
+  and a Check now button, under one switch for all catalog images.
 
 ## Also on the list
 

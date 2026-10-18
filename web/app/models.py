@@ -137,6 +137,15 @@ class Image(Base):
     mirror: Mapped[str] = mapped_column(String(255), default="")
     # Archive download URL; empty when the admin uploaded the archive instead.
     source_url: Mapped[str] = mapped_column(String(512), default="")
+    # Where the files came from: "mirror" (resolved from the catalog), "url"
+    # (pasted) or "upload"; empty for images added before this was recorded.
+    # Only "mirror" images are followed by Track latest (services.track_latest).
+    origin: Mapped[str] = mapped_column(String(16), default="")
+    # A live image's release (its `release` field holds the desktop), so the same
+    # release can be looked up again for a newer build.
+    live_release: Mapped[str] = mapped_column(String(64), default="")
+    # The build the boot files were downloaded from (netboot.build_stamp).
+    build: Mapped[str] = mapped_column(Text, default="")
 
 
 class CatalogEntry(Base):

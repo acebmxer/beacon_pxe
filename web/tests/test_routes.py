@@ -260,3 +260,73 @@ class TestApiTokenAuth:
         r = client.get("/images/status",
                        headers={"Authorization": "Bearer test-token-abc123"})
         assert r.status_code == 200
+
+
+class TestImagesBulk:
+    def test_reprocess_queues_ticked_images_but_not_one_processing(self, client, monkeypatch):
+        from app.services import images as image_svc
+        queued = []
+        monkeypatch.setattr(image_svc, "process_image", queued.append)
+        _login(client)
+        a = _seed_image(name="A")
+        b = _seed_image(name="B", status="error")
+        c = _seed_image(name="C", status="processing")
+        untouched = _seed_image(name="D")
+        r = client.post("/images/bulk", data={"action": "reprocess",
+                                              "ids": [a.id, b.id, c.id]},
+                        follow_redirects=False)
+        assert r.status_code == 303 and r.headers["location"] == "/images"
+        assert queued == [a.id, b.id]
+        db = _session()
+        try:
+            assert [db.get(Image, i).status for i in (a.id, b.id, c.id, untouched.id)] == [
+                "pending", "pending", "processing", "ready"]
+        finally:
+            db.close()
+        page = client.get("/images").text
+        assert "Reprocessing 2 images; 1 still processing was left alone." in page
+
+    def test_delete_removes_only_ticked_images(self, client, tmp_path, monkeypatch):
+        from app import config
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        _login(client)
+        a = _seed_image(name="A")
+        b = _seed_image(name="B")
+        keep = _seed_image(name="C")
+        client.post("/images/bulk", data={"action": "delete", "ids": [a.id, b.id, 999]},
+                    follow_redirects=False)
+        db = _session()
+        try:
+            assert [img.id for img in db.query(Image).all()] == [keep.id]
+        finally:
+            db.close()
+        assert "Deleted 2 images." in client.get("/images").text
+
+    def test_nothing_ticked_or_unknown_action_changes_nothing(self, client):
+        _login(client)
+        img = _seed_image()
+        client.post("/images/bulk", data={"action": "delete"})
+        client.post("/images/bulk", data={"action": "explode", "ids": [img.id]})
+        db = _session()
+        try:
+            assert db.get(Image, img.id).status == "ready"
+        finally:
+            db.close()
+
+    def test_page_has_a_checkbox_per_image(self, client):
+        _login(client)
+        a = _seed_image(name="A")
+        page = client.get("/images").text
+        assert f'name="ids" value="{a.id}"' in page and 'id="bulk-all"' in page
+        assert 'value="reprocess" disabled' in page and 'value="delete" disabled' in page
+
+    def test_needs_an_admin(self, client):
+        img = _seed_image()
+        r = client.post("/images/bulk", data={"action": "delete", "ids": [img.id]},
+                        follow_redirects=False)
+        assert r.status_code == 303 and "/login" in r.headers["location"]
+        db = _session()
+        try:
+            assert db.get(Image, img.id) is not None
+        finally:
+            db.close()

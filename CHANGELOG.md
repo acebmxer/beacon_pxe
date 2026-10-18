@@ -12,16 +12,19 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Added
 
-- **Catalog images can pick up newer builds of their release.** **Add newer builds
-  automatically** under **Settings → Netboot catalog** (off by default) has Beacon
-  look on the mirror once a day, or when **Check now** is pressed, for a newer
-  build of the release each catalog image was added from: a point release (Ubuntu
-  24.04.2 → 24.04.3), a respun live ISO, or a rebuilt file at the same address
-  (Debian's `current` installer, this month's Arch). It is downloaded as a new
-  image named with the build's date, beside the old image, which is left as it
-  is; a new release is never added this way. Only images downloaded from the
-  mirror are followed. Rolling releases get a new image each time they are
-  rebuilt. The last check's time and result are shown under the switch.
+- **The netboot catalog shows each release's newest build.** The **Release** list
+  of **Add from a netboot catalog** names the build each distro publishes now,
+  read from its mirror, so a point release shows up without a Beacon update:
+  "Ubuntu 26.04 LTS — 26.04.1", "Debian 13 (trixie) — 13.7", "Rocky Linux 10 —
+  10.2", Alpine's and AlmaLinux's point releases, XCP-ng's, Arch's monthly
+  release, and the current Tumbleweed snapshot, CentOS Stream compose and Kali
+  build. Adding the image downloads that build. The list is read again every
+  six hours; if a mirror is out of reach the release is listed without it.
+
+- **Several images can be reprocessed or deleted at once.** The Images table has
+  a tick box on each row, and one in the header for every image; **Reprocess
+  selected** and **Delete selected** act on the ticked images after asking. They
+  are reprocessed one after another, and an image still processing is left alone.
 
 - **The netboot catalog has the main distros beside Debian.** **Add from a netboot
   catalog** now lists Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream,

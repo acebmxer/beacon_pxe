@@ -37,10 +37,12 @@ def fresh_tables():
 
 @pytest.fixture(autouse=True)
 def no_release_discovery(monkeypatch):
-    """The Images page would ask the real mirror which releases exist; tests show
-    the catalog's own list instead. Discovery itself is tested with a fake mirror."""
+    """The Images page would ask the real mirror which releases exist and their
+    newest builds; tests show the catalog's own list instead. Both are tested
+    with a fake mirror."""
     from app.services import netboot
     monkeypatch.setattr(netboot, "_cached_discovery", lambda entry: None)
+    monkeypatch.setattr(netboot, "_cached_build", lambda entry, release: None)
 
 
 @pytest.fixture

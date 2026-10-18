@@ -81,6 +81,11 @@ raw ISO is kept at `/images/<file>.iso`. A best-effort kernel command line is
 filled in per distro — edit **boot args** on the Images page if a live ISO needs
 a tweak (a **Reprocess** re-derives them and overwrites your edit).
 
+To reprocess or delete several images at once, tick them in the Images table (the
+box in the header ticks every image) and press **Reprocess selected** or **Delete
+selected**; both ask first. The images are reprocessed one after another, and an
+image still processing is left alone.
+
 ### Netboot installers (no ISO)
 
 **Add from a netboot catalog** on the Images page creates an image without an
@@ -135,7 +140,12 @@ Ubuntu, Fedora, Rocky, Alma, CentOS Stream, Linux Mint, Alpine and XCP-ng read
 their release list from the mirror like Debian, so a new release appears on its own
 (Ubuntu's default is the newest LTS); end-of-life dates come from Ubuntu's
 distro-info-data, Fedora's Bodhi and Alpine's `releases.json`, or the catalog's
-own dates for the others. Live desktops whose root is a single squashfs (Fedora,
+own dates for the others. Each release in the list also names the newest build
+the distro publishes now, read from its mirror and refreshed every six hours, so
+a point release shows up on its own ("Ubuntu 26.04 LTS — 26.04.1", "Debian 13
+(trixie) — 13.7", Rocky's and Alma's 10.2, Alpine's 3.24.2, XCP-ng's 8.3.0,
+Arch's monthly release, and the current Tumbleweed snapshot, CentOS Stream
+compose and Kali build); adding the image downloads that build. Live desktops whose root is a single squashfs (Fedora,
 Rocky, Alma, CentOS Stream, Tumbleweed, EndeavourOS, CachyOS) are kept and streamed
 over HTTP like Debian's, so clients need RAM for it. Ubuntu's and Linux Mint's desktops boot
 with casper, which mounts its root over NFS only, so Beacon unpacks their ISO
@@ -144,26 +154,6 @@ ports 111, 2049 and 20048 to Beacon, as for an uploaded Ubuntu ISO. A distro or
 desktop not in the list is still added by uploading its ISO. A download that
 stalls or drops part-way is resumed where it stopped, up to four tries, before
 the image is marked as failed.
-
-**Add newer builds automatically** under **Server Settings → Netboot catalog**
-(off by default) keeps catalog images current without changing them. Once a day,
-and when **Check now** under the switch is pressed, Beacon looks on the mirror
-for a newer build of the release each catalog image was added from: a point
-release (Ubuntu 24.04.2 → 24.04.3, Debian 13.1 → 13.2), a respun live ISO, or a
-file rebuilt at the same address (Debian's `current` installer, Rocky's
-`-latest` ISO, this month's Arch). A build is told apart by its file names and
-sizes on the mirror. A newer one is downloaded as a new image named with the
-build's date, such as "Ubuntu 24.04 LTS Live Kubuntu (build 2026-08-07)", beside
-the old image, which is left as it is. A new release (26.04) is never added this
-way; add it as its own image. Images of one distro, desktop, release and mirror
-are followed together: only the newest is compared with the mirror, a release
-whose newest image failed is skipped until it is reprocessed or deleted, and a
-new image that is deleted is not added again (a later build still is). Only
-images whose files were downloaded from the mirror are followed, not a pasted
-URL or an uploaded archive, and not images added before Beacon 0.8.0. Rolling
-releases (Arch, Tumbleweed, Kali, Debian testing) get a new image each time they
-are rebuilt, so keep an eye on disk space. The last check's time and what it
-found are shown under the switch.
 
 **Custom catalog entries** add an installer for a distro the catalog does not
 have. Under **Custom catalog entries** on the Images page, give a name, a default

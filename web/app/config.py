@@ -130,8 +130,6 @@ DEFAULTS = {
     "menu_title": "Beacon",
     # Netboot catalog: offer releases past their end of life when adding an image.
     "netboot_show_eol": "1",
-    # Netboot catalog: add newer builds of catalog images' releases (Track latest).
-    "netboot_track_latest": "0",
     # Boot menu: timeout in seconds applied only when a default image is set.
     # 0 means wait indefinitely (no timeout).
     "boot_timeout": "30",

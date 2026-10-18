@@ -1571,3 +1571,103 @@ class TestXcpng:
         img = db.execute(select(Image)).scalar_one()
         assert img.name == "XCP-ng 8.3 (netboot)" and img.source_url == ""
         db.close()
+
+
+# Taken before conftest's fixture stubs it for every test.
+_REAL_CACHED_BUILD = netboot._cached_build
+
+
+class TestCurrentBuild:
+    """The newest build of each release, read from what each mirror serves
+    (texts copied from the real mirrors)."""
+
+    PAGES = {
+        "https://deb.debian.org/debian/dists/trixie/Release":
+            "Origin: Debian\nVersion: 13.7\nCodename: trixie\n",
+        "https://deb.debian.org/debian/dists/forky/Release":
+            "Origin: Debian\nSuite: testing\nCodename: forky\n",
+        "https://releases.ubuntu.com/26.04/":
+            '<a href="ubuntu-26.04-desktop-amd64.iso">x</a>'
+            '<a href="ubuntu-26.04.1-desktop-amd64.iso">x</a>'
+            '<a href="ubuntu-26.04.1-netboot-amd64.tar.gz">x</a>',
+        "https://dl.rockylinux.org/pub/rocky/":
+            '<a href="10.0/">10.0/</a><a href="10.1/">10.1/</a><a href="10.2/">10.2/</a>'
+            '<a href="9.6/">9.6/</a><a href="10/">10/</a>',
+        "https://mirror.stream.centos.org/10-stream/COMPOSE_ID":
+            "CentOS-Stream-10-20261013.0\n",
+        "https://download.opensuse.org/tumbleweed/repo/oss/media.1/products":
+            "/ openSUSE 20261016-1\n",
+        "https://http.kali.org/kali/dists/kali-rolling/Release":
+            "Origin: Kali\nCodename: kali-rolling\nDate: Fri, 16 Oct 2026 00:06:16 UTC\n",
+        "https://geo.mirror.pkgbuild.com/iso/latest/":
+            '<a href="archlinux-2026.10.01-x86_64.iso">x</a>',
+        "https://dl-cdn.alpinelinux.org/alpine/v3.22/releases/x86_64/":
+            '<a href="alpine-netboot-3.22.5-x86_64.tar.gz">x</a>'
+            '<a href="alpine-netboot-3.22.6-x86_64.tar.gz">x</a>',
+        "https://updates.xcp-ng.org/netinstall/8.3/.treeinfo":
+            "[platform]\nname = XCP\nversion = 3.4.0\n\n[branding]\nname = XCP-ng\n"
+            "version = 8.3.0\n",
+    }
+
+    @pytest.fixture(autouse=True)
+    def fake_mirror(self, monkeypatch):
+        monkeypatch.setattr(netboot, "_fetch_text", lambda url: self.PAGES.get(url))
+
+    @pytest.mark.parametrize("distro,release,build", [
+        ("debian", "trixie", "13.7"),
+        ("ubuntu", "26.04", "26.04.1"),
+        ("rocky", "10", "10.2"),
+        ("centos-stream", "10", "20261013.0"),
+        ("opensuse-tumbleweed", "tumbleweed", "20261016"),
+        ("kali", "kali-rolling", "16 Oct 2026"),
+        ("arch", "latest", "2026.10.01"),
+        ("alpine", "3.22", "3.22.6"),
+        ("xcp-ng", "8.3", "8.3.0"),
+    ])
+    def test_read_from_the_mirror(self, distro, release, build):
+        assert netboot.current_build(netboot.catalog_entry(distro), release) == build
+
+    def test_none_when_there_is_no_point_version_or_no_mirror(self):
+        assert netboot.current_build(netboot.catalog_entry("debian"), "forky") is None
+        assert netboot.current_build(netboot.catalog_entry("debian"), "bookworm") is None
+        assert netboot.current_build(netboot.catalog_entry("fedora"), "44") is None
+
+    def test_release_list_shows_the_newest_build(self, monkeypatch):
+        monkeypatch.setattr(netboot, "_cached_build", netboot.current_build)
+        catalog = {d["id"]: d for d in netboot.page_catalog()}
+        ubuntu = catalog["ubuntu"]
+        rel = next(r for r in ubuntu["releases"] if r["id"] == "26.04")
+        assert rel["label"].endswith(" — 26.04.1") and rel["build"] == "26.04.1"
+        live = next(r for r in ubuntu["live"]["releases"] if r["id"] == "26.04")
+        assert live["label"].endswith(" — 26.04.1")
+        debian = next(r for r in catalog["debian"]["releases"] if r["id"] == "trixie")
+        assert debian["label"] == "Debian 13 (trixie) — 13.7"
+        forky = next(r for r in catalog["debian"]["releases"] if r["id"] == "forky")
+        assert "build" not in forky
+        tw = catalog["opensuse-tumbleweed"]["releases"][0]
+        assert tw["label"].endswith(" — snapshot 20261016")
+        # Arch's live desktops (EndeavourOS, CachyOS) have their own builds.
+        assert "build" not in catalog["arch"]["live"]["releases"][0]
+        assert catalog["arch"]["releases"][0]["label"].endswith(" — 2026.10.01")
+        # The catalog file itself is left as it is.
+        assert netboot.catalog_entry("ubuntu")["releases"][1]["label"].endswith(")")
+
+    def test_a_build_equal_to_the_release_is_not_repeated(self):
+        entry = netboot.with_builds(netboot.catalog_entry("xcp-ng"), {"8.3": "8.3"})
+        assert "build" not in entry["releases"][0]
+
+    def test_mirror_out_of_reach_shows_the_plain_list(self, monkeypatch):
+        monkeypatch.setattr(netboot, "_fetch_text", lambda url: None)
+        monkeypatch.setattr(netboot, "_cached_build", netboot.current_build)
+        ubuntu = {d["id"]: d for d in netboot.page_catalog()}["ubuntu"]
+        assert all("build" not in r for r in ubuntu["releases"])
+
+    def test_results_are_kept_for_a_while(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(netboot, "current_build",
+                            lambda entry, release: calls.append(release) or "13.7")
+        monkeypatch.setattr(netboot, "_build_cache", {})
+        entry = netboot.catalog_entry("debian")
+        assert _REAL_CACHED_BUILD(entry, "trixie") == "13.7"
+        assert _REAL_CACHED_BUILD(entry, "trixie") == "13.7"
+        assert calls == ["trixie"]

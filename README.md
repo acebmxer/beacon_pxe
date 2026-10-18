@@ -13,7 +13,7 @@
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-296%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-282%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -63,12 +63,11 @@ Chosen in the wizard, changeable under **Server Settings**:
 Upload an `.iso` in the web UI and it becomes a boot-menu entry — the kernel and
 initrd are extracted automatically. Linux, **Windows** (installer via WinPE),
 and **XCP-NG** are supported. Entries can be enabled/disabled and have their boot
-args edited. For an installer or live desktop without keeping an ISO, **Add from a
+args edited, and several can be ticked to reprocess or delete together. For an installer or live desktop without keeping an ISO, **Add from a
 netboot catalog** keeps just the boot files (and, for a live desktop, its root
 filesystem) for Debian, Ubuntu and its flavours, Fedora and its spins, Rocky Linux,
 AlmaLinux, CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch (with
-EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers,
-and newer builds of a release can be added automatically — see the
+EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers — see the
 [guide](docs/guide.md#netboot-installers-no-iso).
 
 **Windows** needs SMB ports **139 + 445** reachable, and on Intel VMD / AMD RAID

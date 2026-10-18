@@ -298,13 +298,20 @@
         {% if user.is_admin %} — drag rows to reorder; ★ marks the default boot entry{% endif %}
       </div>
     </div>
+    {% if user.is_admin and images %}
+    <form id="bulk-form" class="toolbar" method="post" action="/images/bulk">
+      <span class="muted" id="bulk-count">None selected</span>
+      <button class="btn ghost sm" type="submit" name="action" value="reprocess" disabled>Reprocess selected</button>
+      <button class="btn danger sm" type="submit" name="action" value="delete" disabled>Delete selected</button>
+    </form>
+    {% endif %}
   </div>
   {% if not images %}
     <p class="muted">No images yet.{% if user.is_admin %} Upload one above.{% endif %}</p>
   {% else %}
   <table id="images-table">
     <thead><tr>
-      {% if user.is_admin %}<th class="drag-col"></th>{% endif %}
+      {% if user.is_admin %}<th class="select-col"><input type="checkbox" id="bulk-all" title="Select all images"></th><th class="drag-col"></th>{% endif %}
       <th>Name</th><th>OS</th><th>Status</th><th>In menu</th><th>Boot args</th>
       {% if user.is_admin %}<th></th>{% endif %}
     </tr></thead>
@@ -313,6 +320,7 @@
       <tr data-image-id="{{ img.id }}" data-status="{{ img.status }}"
           {% if user.is_admin %}draggable="true"{% endif %}>
         {% if user.is_admin %}
+        <td class="select-col"><input type="checkbox" class="bulk-pick" form="bulk-form" name="ids" value="{{ img.id }}" title="Select {{ img.name }}"></td>
         <td class="drag-col drag-handle" title="Drag to reorder">⠿</td>
         {% endif %}
         <td>
@@ -615,6 +623,39 @@
       label.textContent = "Uploading…";
       xhr.send(new FormData(form));
     });
+  }
+
+  // --- Select several images to reprocess or delete ----------------------
+  var bulkForm = document.getElementById("bulk-form");
+  if (bulkForm) {
+    var picks = Array.prototype.slice.call(document.querySelectorAll(".bulk-pick"));
+    var all = document.getElementById("bulk-all");
+    var count = document.getElementById("bulk-count");
+    var bulkButtons = bulkForm.querySelectorAll("button");
+    var picked = function () { return picks.filter(function (c) { return c.checked; }); };
+    var refresh = function () {
+      var n = picked().length;
+      count.textContent = n ? n + " selected" : "None selected";
+      Array.prototype.forEach.call(bulkButtons, function (b) { b.disabled = !n; });
+      all.checked = n === picks.length;
+      all.indeterminate = n > 0 && n < picks.length;
+    };
+    picks.forEach(function (c) { c.addEventListener("change", refresh); });
+    all.addEventListener("change", function () {
+      picks.forEach(function (c) { c.checked = all.checked; });
+      refresh();
+    });
+    bulkForm.addEventListener("submit", function (e) {
+      var n = picked().length;
+      var action = e.submitter && e.submitter.value;
+      if (!n) { e.preventDefault(); return; }
+      var what = n === 1 ? "1 image" : n + " images";
+      var question = action === "delete"
+        ? "Delete " + what + " and their boot files?"
+        : "Reprocess " + what + "? Catalog live desktops download their ISO again.";
+      if (!window.confirm(question)) e.preventDefault();
+    });
+    refresh();
   }
 
   // --- Drag-to-reorder rows -----------------------------------------------

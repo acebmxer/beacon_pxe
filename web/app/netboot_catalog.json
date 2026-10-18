@@ -4,6 +4,7 @@
       "id": "debian",
       "name": "Debian",
       "default_mirror": "https://deb.debian.org/debian",
+      "current_build": {"url": "{mirror}/dists/{version}/Release", "regex": "^Version: *([0-9.]+)"},
       "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
       "kernel_member": "debian-installer/amd64/linux",
       "initrd_member": "debian-installer/amd64/initrd.gz",
@@ -141,6 +142,7 @@
       "id": "ubuntu",
       "name": "Ubuntu",
       "default_mirror": "https://releases.ubuntu.com",
+      "current_build": {"url": "{mirror}/{version}/", "regex": "ubuntu-({version}(?:\\.[0-9]+)?)-"},
       "archive_listing": {
         "folder": "{mirror}/{version}",
         "regex": "ubuntu-{version}(?:\\.[0-9]+)*-netboot-amd64\\.tar\\.gz"
@@ -429,6 +431,7 @@
       "id": "rocky",
       "name": "Rocky Linux",
       "default_mirror": "https://dl.rockylinux.org/pub/rocky",
+      "current_build": {"url": "{mirror}/", "regex": "href=\"({version}\\.[0-9]+)/\""},
       "releases": [
         {
           "id": "10",
@@ -529,6 +532,7 @@
       "id": "almalinux",
       "name": "AlmaLinux",
       "default_mirror": "https://repo.almalinux.org/almalinux",
+      "current_build": {"url": "{mirror}/", "regex": "href=\"({version}\\.[0-9]+)/\""},
       "releases": [
         {
           "id": "10",
@@ -625,6 +629,7 @@
       "id": "centos-stream",
       "name": "CentOS Stream",
       "default_mirror": "https://mirror.stream.centos.org",
+      "current_build": {"url": "{mirror}/{version}-stream/COMPOSE_ID", "regex": "CentOS-Stream-{version}-([0-9]{8}\\.[0-9]+)", "show": "compose {build}", "installer_only": true},
       "releases": [
         {
           "id": "10",
@@ -737,6 +742,7 @@
       "id": "opensuse-tumbleweed",
       "name": "openSUSE Tumbleweed",
       "default_mirror": "https://download.opensuse.org",
+      "current_build": {"url": "{mirror}/tumbleweed/repo/oss/media.1/products", "regex": "openSUSE ([0-9]{8})", "show": "snapshot {build}", "installer_only": true},
       "kernel_url": "{mirror}/tumbleweed/repo/oss/boot/x86_64/loader/linux",
       "initrd_url": "{mirror}/tumbleweed/repo/oss/boot/x86_64/loader/initrd",
       "boot_args": "install={mirror}/tumbleweed/repo/oss/",
@@ -864,6 +870,7 @@
       "id": "kali",
       "name": "Kali Linux",
       "default_mirror": "https://http.kali.org/kali",
+      "current_build": {"url": "{mirror}/dists/{version}/Release", "regex": "^Date: *\\w+, ([0-9]+ \\w+ [0-9]{4})", "show": "build {build}"},
       "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
       "kernel_member": "debian-installer/amd64/linux",
       "initrd_member": "debian-installer/amd64/initrd.gz",
@@ -883,6 +890,7 @@
       "id": "arch",
       "name": "Arch Linux",
       "default_mirror": "https://geo.mirror.pkgbuild.com",
+      "current_build": {"url": "{mirror}/iso/latest/", "regex": "archlinux-([0-9.]+)-x86_64\\.iso", "installer_only": true},
       "kernel_url": "{mirror}/iso/{version}/arch/boot/x86_64/vmlinuz-linux",
       "initrd_url": "{mirror}/iso/{version}/arch/boot/x86_64/initramfs-linux.img",
       "extra_files": [
@@ -958,6 +966,7 @@
       "id": "alpine",
       "name": "Alpine Linux",
       "default_mirror": "https://dl-cdn.alpinelinux.org/alpine",
+      "current_build": {"url": "{mirror}/v{version}/releases/x86_64/", "regex": "alpine-netboot-({version}\\.[0-9]+)-x86_64"},
       "kernel_url": "{mirror}/v{version}/releases/x86_64/netboot/vmlinuz-lts",
       "initrd_url": "{mirror}/v{version}/releases/x86_64/netboot/initramfs-lts",
       "extra_files": [
@@ -1007,6 +1016,7 @@
       "id": "xcp-ng",
       "name": "XCP-ng",
       "default_mirror": "https://updates.xcp-ng.org",
+      "current_build": {"url": "{mirror}/netinstall/{version}/.treeinfo", "regex": "\\[branding\\]\\s*name *= *[^\\n]*\\s*version *= *([0-9.]+)"},
       "family": "xcpng",
       "kernel_url": "{mirror}/netinstall/{version}/boot/vmlinuz",
       "initrd_url": "{mirror}/netinstall/{version}/install.img",

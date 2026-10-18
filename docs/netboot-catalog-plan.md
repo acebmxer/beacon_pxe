@@ -70,14 +70,13 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    also offers its less-known flavours, picked the way Debian's Desktop list
    works: Ubuntu's Kubuntu, Xubuntu and the other official flavours, Fedora's
    desktop editions and spins (KDE, Xfce, Cinnamon and so on).
-5. **Track latest.** *(Built: one switch in Settings → Netboot catalog for every
-   catalog image, checked daily and by a Check now button; a build is told apart
-   by its file URLs and sizes; only images downloaded from the mirror are followed.)*
-   Images already built never change. When the distro
-   publishes a newer build of the same release (Ubuntu 24.04 -> 24.04.1 ->
-   24.04.2), Beacon fetches the latest available at that time and adds it as a
-   **new** image, beside the old ones. A new release (26.04) is not an update to
-   24.04; it is added as its own release. Off by default.
+5. **Track latest.** *(Built: each release in the catalog's Release list shows
+   the newest build the distro publishes, read from its mirror and refreshed
+   every six hours; adding an image downloads that build.)* When Ubuntu
+   releases 26.04.1, the catalog shows 26.04.1 without a Beacon update, and an
+   image added from it is 26.04.1. Nothing is created or changed on its own, and
+   images already built stay as they are. *(An earlier version that added new
+   images by itself was built and taken out, as it was not this.)*
 
 ## Open questions
 
@@ -89,8 +88,8 @@ Candidate distros (arguments and URLs not yet verified against each distro):
   their long-term support ends. What happens when one has left the mirror and is
   added is still to be seen.
 - Does a netboot archive need a local-mirror option for offline LANs?
-- Stage 5: what makes Beacon check for a newer release: answered. A daily check
-  and a Check now button, under one switch for all catalog images.
+- Stage 5: what makes Beacon check for a newer release: answered. The catalog
+  reads each mirror when the Images page is shown (kept for six hours).
 
 ## Also on the list
 

@@ -190,17 +190,112 @@ async def add_netboot(request: Request, background: BackgroundTasks,
     entry = netboot_svc.catalog_entry(distro, db)
     if entry is None:
         return _page(request, db, error="Unknown distro.")
+    live = netboot_svc.live_entry(entry) if variant == "live" else None
+    if variant == "live" and live is None:
+        return _page(request, db, error=f"{entry['name']} has no live desktop entry.")
+    if variant != "live" and not netboot_svc.has_installer(entry):
+        return _page(request, db, error=f"{entry['name']} has no installer entry; "
+                                        "choose Live desktop.")
     try:
-        plan = await run_in_threadpool(
-            netboot_svc.plan_image, entry, variant, release, live_release, flavour,
-            mirror, source, url, bool(file is not None and file.filename),
-            netboot_svc.show_eol(db))
+        if live and live.get("folder"):
+            # The ISO folder follows a template per release and desktop.
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                rid = netboot_svc.validate_release(
+                    netboot_svc.resolve_release(entry, live_release))
+                live_rel = {"id": rid, "label": f"{entry['name']} {rid}"}
+            release = netboot_svc.validate_flavour(live, flavour, live_rel["id"])
+            mirror = netboot_svc.validate_mirror(
+                mirror or netboot_svc.live_mirror(entry, live, release))
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_flavour_iso_url, live, release, mirror,
+                    live_rel["id"])
+            picked = next(f for f in live["flavours"] if f["id"] == release)
+            version = live_rel.get("name") or (
+                f"{entry['name']} {live_rel.get('number') or live_rel['id']}")
+            default_name = picked.get("title") or f"{version} Live {picked['label']}"
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        elif live:
+            release = netboot_svc.validate_flavour(live, flavour)
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                live_rel = await run_in_threadpool(
+                    netboot_svc.live_release_from_mirror, entry, live, live_release)
+            mirror = netboot_svc.validate_mirror(mirror or live_rel["base_url"])
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                if live_rel.get("unlisted"):
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_unlisted_live_url, live,
+                        live_rel["unlisted"], release)
+                else:
+                    folder = await run_in_threadpool(
+                        netboot_svc.resolve_release_folder, live_rel, mirror)
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_live_iso_url, live, folder, release)
+                    netboot_svc.check_live_iso_matches(live, live_rel, source_url)
+            label = next(f["label"] for f in live["flavours"] if f["id"] == release)
+            version = f"{live_rel['name']} " if live_release.strip() else ""
+            default_name = (f"{version or entry['name'] + ' '}Live {label}")
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        else:
+            variant = "installer"
+            release = netboot_svc.resolve_release(entry, release)
+            mirror = netboot_svc.validate_mirror(mirror or entry["default_mirror"])
+            number = next((r.get("number") for r in entry.get("releases", [])
+                           if r["id"] == release), None)
+            if release not in {r["id"] for r in entry.get("releases", [])}:
+                found = await run_in_threadpool(
+                    netboot_svc.lookup_release, entry, mirror, release)
+                if found:
+                    release, number = found["codename"], found["number"]
+                elif entry.get("number_lookup") and re.fullmatch(
+                        r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]), release):
+                    raise netboot_svc.NetbootError(
+                        f"No release numbered {release} was found on {mirror}. "
+                        "Type its name instead.")
+            release = netboot_svc.validate_release(release)
+            source_url = ""
+            if entry.get("kernel_url"):
+                # Its kernel and initrd are fetched separately when it is processed.
+                if source != "mirror":
+                    raise netboot_svc.NetbootError(
+                        f"{entry['name']} downloads its kernel and initrd separately, "
+                        "so it can only use Download from the mirror.")
+            elif source == "upload":
+                if file is None or not file.filename:
+                    raise netboot_svc.NetbootError("Choose an archive file to upload.")
+            elif source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_archive_url, entry, mirror, release)
+            named = next((r.get("name") for r in entry.get("releases", [])
+                          if r["id"] == release), None)
+            if named:
+                default_name = f"{named} (netboot)"
+            elif number and number != release:
+                default_name = f"{entry['name']} {number} {release} (netboot)"
+            else:
+                default_name = f"{entry['name']} {release} (netboot)"
+            filename = netboot_svc.new_archive_name(entry["id"], release)
+        ended = (None if netboot_svc.show_eol(db) else netboot_svc.ended_release(
+            entry, live_rel["id"] if live else release, live=bool(live)))
+        if ended:
+            raise netboot_svc.NetbootError(
+                f"{ended['label']} has reached its end of life. Turn on Offer end-of-life "
+                "releases under Settings → Netboot catalog to add it.")
     except netboot_svc.NetbootError as e:
         return _page(request, db, error=str(e))
 
     size = 0
-    filename = plan["filename"]
-    if plan["origin"] == "upload":
+    if not live and source == "upload":
         with open(image_svc.iso_path(filename), "wb") as out:
             while chunk := await file.read(1024 * 1024):
                 out.write(chunk)
@@ -208,11 +303,10 @@ async def add_netboot(request: Request, background: BackgroundTasks,
 
     img = Image(
         # name is written verbatim into boot.ipxe; see upload().
-        name=strip_control_chars(name.strip()) or plan["default_name"],
+        name=strip_control_chars(name.strip()) or default_name,
         filename=filename, status="pending", size_bytes=size,
-        source="netboot", variant=plan["variant"], catalog_id=entry["id"],
-        release=plan["release"], live_release=plan["live_release"],
-        mirror=plan["mirror"], source_url=plan["source_url"], origin=plan["origin"],
+        source="netboot", variant=variant, catalog_id=entry["id"],
+        release=release, mirror=mirror, source_url=source_url,
     )
     db.add(img)
     db.commit()
@@ -297,6 +391,39 @@ def delete(image_id: int, user: User = Depends(require_admin),
     img = db.get(Image, image_id)
     if img:
         image_svc.delete_image(db, img)
+    return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/bulk")
+def bulk(request: Request, background: BackgroundTasks,
+         action: str = Form(...), ids: list[int] = Form([]),
+         user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Reprocess or delete the images ticked on the Images page.
+
+    Reprocess queues each one as the row's own Reprocess does; the background
+    tasks run one after another, so several downloads do not compete. An image
+    still processing is left alone, as a second run would wipe its files mid-way.
+    """
+    images = [img for img in (db.get(Image, i) for i in dict.fromkeys(ids)) if img]
+    if action == "reprocess":
+        queued = [img for img in images if img.status != "processing"]
+        for img in queued:
+            img.status = "pending"
+        db.commit()
+        for img in queued:
+            background.add_task(image_svc.process_image, img.id)
+        skipped = len(images) - len(queued)
+        notice = (f"Reprocessing {len(queued)} image{'s' if len(queued) != 1 else ''}"
+                  + (f"; {skipped} still processing {'was' if skipped == 1 else 'were'} "
+                     "left alone." if skipped else "."))
+    elif action == "delete":
+        for img in images:
+            image_svc.delete_image(db, img)
+        notice = f"Deleted {len(images)} image{'s' if len(images) != 1 else ''}."
+    else:
+        return RedirectResponse("/images", status_code=303)
+    if images:
+        request.session["image_notice"] = notice
     return RedirectResponse("/images", status_code=303)
 
 

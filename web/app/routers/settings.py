@@ -17,13 +17,11 @@ from ..store import all_settings, set_setting, strip_control_chars
 from ..services import dnsmasq, ipxe
 from ..services import images as image_svc
 from ..services import restore as restore_svc
-from ..services import track_latest
 
 router = APIRouter()
 
 # Settings the form is allowed to write, with simple coercion.
-BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http", "netboot_show_eol",
-             "netboot_track_latest"}
+BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http", "netboot_show_eol"}
 TEXT_KEYS = {
     "server_ip", "boot_interface", "dhcp_mode", "dhcp_range_start",
     "dhcp_range_end", "dhcp_subnet_mask", "dhcp_gateway", "dhcp_dns",
@@ -36,8 +34,7 @@ def settings_page(request: Request, user: User = Depends(require_admin),
                   db: Session = Depends(get_db)):
     return render(request, db, "settings.html",
                   active="settings", settings=all_settings(db), saved=False,
-                  restore_notice=restore_svc.current_notice(db),
-                  track=track_latest.status(db))
+                  restore_notice=restore_svc.current_notice(db))
 
 
 @router.post("/settings")
@@ -68,15 +65,7 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     image_svc.rebuild_windows_setup_all(db)
     return render(request, db, "settings.html",
                   active="settings", settings=all_settings(db), saved=True,
-                  restore_notice=restore_svc.current_notice(db),
-                  track=track_latest.status(db))
-
-
-@router.post("/settings/track-latest/check")
-def track_latest_check(user: User = Depends(require_admin)):
-    """Check now: look for newer builds of every followed catalog image."""
-    track_latest.start_check()
-    return RedirectResponse("/settings#netboot-catalog", status_code=303)
+                  restore_notice=restore_svc.current_notice(db))
 
 
 @router.post("/theme")

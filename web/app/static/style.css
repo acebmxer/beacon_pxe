@@ -273,6 +273,7 @@ tr:last-child td { border-bottom: none; }
 
 /* ---------- Drag-to-reorder rows ----------------------------------------- */
 .drag-col { width: 28px; padding: 0 6px; }
+.select-col { width: 28px; padding: 0 6px; text-align: center; }
 .drag-handle {
   cursor: grab; color: var(--text-dim); font-size: 1.1rem;
   text-align: center; user-select: none;

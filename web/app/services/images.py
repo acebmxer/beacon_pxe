@@ -3,6 +3,7 @@
 Extraction uses bsdtar (libarchive) to read files straight out of the ISO9660
 image — no privileged loop mount, so it works in an unprivileged container.
 """
+import gzip
 import logging
 import re
 import shutil
@@ -825,9 +826,11 @@ def _process_netboot(db, img: Image) -> None:
     """Build a catalog image without keeping an ISO.
 
     Installer: fetch the netboot archive if needed and keep its kernel and
-    initrd; a custom entry that names a kernel URL and an initrd URL instead has
-    both downloaded on every run. Live: fetch the distro's live ISO, keep the
-    kernel, initrd and root filesystem (served over HTTP) and delete the ISO.
+    initrd; an entry that names a kernel URL and an initrd URL instead has both
+    (and any extra files it lists) downloaded on every run. Live: fetch the
+    distro's live ISO, keep the kernel, initrd and root filesystem (served over
+    HTTP) and delete the ISO. A casper live desktop (Ubuntu, Linux Mint) can only
+    mount its root over NFS, so its ISO is unpacked for the nfs service instead.
     """
     entry = netboot.catalog_entry(img.catalog_id, db)
     live = netboot.live_entry(entry) if entry else None
@@ -836,10 +839,14 @@ def _process_netboot(db, img: Image) -> None:
         img.message = f"Catalog entry '{img.catalog_id}' no longer exists."
         db.commit()
         return
+    if live and img.variant == "live":
+        # A live image's release field holds its desktop (flavour).
+        live = netboot.live_for_flavour(live, img.release)
     archive = iso_path(img.filename)
     dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
+    values = {}
     try:
-        if entry.get("kernel_url"):
+        if img.variant != "live" and entry.get("kernel_url"):
             img.size_bytes = netboot.fetch_boot_files(entry, img.mirror, img.release,
                                                       dest_dir)
         else:
@@ -853,24 +860,40 @@ def _process_netboot(db, img: Image) -> None:
                     "The uploaded archive is gone; add the image again.")
             if img.variant == "live":
                 _extract_live_files(archive, live, dest_dir)
+                if live.get("root") == "nfs":
+                    try:
+                        _extract_tree(archive, config.NFS_DIR / str(img.id))
+                    except subprocess.CalledProcessError as e:
+                        raise netboot.NetbootError(
+                            f"Live filesystem extraction failed: {e.stderr or e}")
                 # Everything needed is extracted; the ISO is only kept by ISO images.
                 archive.unlink(missing_ok=True)
             else:
-                netboot.extract_boot_files(archive, entry, dest_dir, img.release)
+                values = netboot.archive_values(entry, img.mirror, netboot.extract_boot_files(
+                    archive, entry, dest_dir, img.release))
     except netboot.NetbootError as e:
         img.status = "error"
         img.message = str(e)
         db.commit()
+        return
+    if entry.get("family") == "xcpng":
+        _finish_xcpng_netboot(db, img, entry, dest_dir)
         return
     img.os_family = "linux"
     img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
     img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/initrd"
     if img.variant == "live":
         img.boot_args = netboot.live_boot_args(live, img.id)
-        img.size_bytes = (dest_dir / "filesystem.squashfs").stat().st_size
-        img.message = f"{entry['name']} live desktop ({img.release}); root filesystem served over HTTP"
+        if live.get("root") == "nfs":
+            img.size_bytes = _tree_size(config.NFS_DIR / str(img.id))
+            img.message = (f"{entry['name']} live desktop ({img.release}); unpacked ISO "
+                           "served over NFS")
+        else:
+            img.size_bytes = (dest_dir / live.get("root_dest", "filesystem.squashfs")
+                              ).stat().st_size
+            img.message = f"{entry['name']} live desktop ({img.release}); root filesystem served over HTTP"
     else:
-        img.boot_args = netboot.boot_args(entry, img.mirror, img.release)
+        img.boot_args = netboot.boot_args(entry, img.mirror, img.release, img.id, values)
         if not entry.get("kernel_url"):
             img.size_bytes = archive.stat().st_size
         img.message = (f"{entry['name']} {img.release} installer; packages come "
@@ -879,24 +902,65 @@ def _process_netboot(db, img: Image) -> None:
     db.commit()
 
 
+def _finish_xcpng_netboot(db, img: Image, entry: dict, dest_dir: Path) -> None:
+    """Lay out XCP-ng's downloaded netinstall files the way an XCP-ng ISO image
+    has them (xen, vmlinuz, install.img) and build its UEFI GRUB chainloader.
+    The dom0 arguments are kept across Reprocess, as for an uploaded ISO."""
+    dom0_args = img.boot_args or XCPNG_DOM0_ARGS
+    try:
+        (dest_dir / "initrd").replace(dest_dir / "install.img")
+        with gzip.open(dest_dir / "xen.gz") as src, open(dest_dir / "xen", "wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
+        (dest_dir / "xen.gz").unlink()
+        _build_xcpng_grub(img, dest_dir, dom0_args, all_settings(db).get("server_ip", ""))
+    except (OSError, EOFError, subprocess.CalledProcessError) as e:
+        img.status = "error"
+        img.message = f"XCP-NG boot files could not be prepared: {getattr(e, 'stderr', '') or e}"
+        db.commit()
+        return
+    img.os_family = "xcpng"
+    img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/xen"
+    img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
+    img.boot_args = dom0_args
+    img.status = "ready"
+    img.message = (f"{entry['name']} {img.release} installer; Xen multiboot via UEFI GRUB "
+                   f"chainloader; packages come from {img.mirror}")
+    db.commit()
+
+
+def _tree_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+
+
 def _extract_live_files(iso: Path, live: dict, dest_dir: Path) -> None:
-    """Pull the kernel, initrd and root filesystem out of a live ISO."""
+    """Pull the kernel, initrd and root filesystem out of a live ISO.
+
+    A member can be a list of paths, tried in order, where a distro's releases
+    lay out their ISOs differently (images/pxeboot/ or boot/x86_64/loader/). An
+    NFS live desktop needs only the kernel and initrd here; its root is the
+    unpacked ISO.
+    """
     try:
         entries = _list_iso(iso)
-        wanted = {live["kernel_member"]: "vmlinuz", live["initrd_member"]: "initrd",
-                  live["root_member"]: "filesystem.squashfs"}
-        for member, name in wanted.items():
+        wanted = {"kernel_member": "vmlinuz", "initrd_member": "initrd"}
+        if live.get("root") != "nfs":
+            wanted["root_member"] = live.get("root_dest", "filesystem.squashfs")
+        for key, name in wanted.items():
+            options = live[key] if isinstance(live[key], list) else [live[key]]
+            member = options[0]
             # The ISO lists vmlinuz and vmlinuz-<version> as hard links to each
             # other and which one holds the data depends on the order, so reading
             # the plain name can give an empty file. Try the plain name, then the
             # versioned ones, and keep the first that has content.
-            rx = re.compile(re.escape(member) + r"(-.+)?", re.IGNORECASE)
-            candidates = sorted(
-                (e for e in entries if rx.fullmatch(e.lstrip("./"))),
-                key=lambda e: e.lstrip("./") != member)
+            candidates = []
+            for option in options:
+                rx = re.compile(re.escape(option) + r"(-.+)?", re.IGNORECASE)
+                candidates += sorted(
+                    (e for e in entries if rx.fullmatch(e.lstrip("./"))),
+                    key=lambda e, o=option: e.lstrip("./") != o)
             if not candidates:
                 raise netboot.NetbootError(
-                    f"The live ISO does not contain {member}.")
+                    f"The live ISO does not contain {' or '.join(options)}.")
             for found in candidates:
                 _extract_one(iso, found, dest_dir / name)
                 if (dest_dir / name).stat().st_size:
@@ -904,6 +968,11 @@ def _extract_live_files(iso: Path, live: dict, dest_dir: Path) -> None:
             else:
                 raise netboot.NetbootError(
                     f"{member} is empty in the live ISO.")
+        # Files the live system checks beside its root (archiso's .sha512).
+        listed = {e.lstrip("./"): e for e in entries}
+        for extra in live.get("extra_members", []):
+            if extra["member"] in listed:
+                _extract_one(iso, listed[extra["member"]], dest_dir / extra["dest"])
     except subprocess.CalledProcessError as e:
         raise netboot.NetbootError(f"Could not read the live ISO: {e.stderr or e}")
 
@@ -1063,12 +1132,21 @@ def _required_paths(img: Image) -> list[Path]:
         args = img.boot_args or ""
         if "netboot=nfs" in args:
             paths.append(config.NFS_DIR / str(img.id))
-        if "inst.repo=" in args or "inst.stage2=" in args:  # unpacked HTTP tree
-            paths.append(dest_dir / "tree" / ".treeinfo")
-        if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
-            paths.append(dest_dir / "squashfs.img")
-        if img.source == "netboot" and img.variant == "live":
-            paths.append(dest_dir / "filesystem.squashfs")
+        if img.source == "netboot":
+            # A catalog image keeps its own file names; its installer arguments
+            # point at the mirror, not at an unpacked tree.
+            entry = netboot.catalog_entry(img.catalog_id)
+            if img.variant == "live" and "netboot=nfs" not in args:
+                live = (entry or {}).get("live") or {}
+                paths.append(dest_dir / live.get("root_dest", "filesystem.squashfs"))
+            elif entry and img.variant != "live":
+                for extra in netboot.for_release(entry, img.release).get("extra_files", []):
+                    paths.append(dest_dir / extra["dest"])
+        else:
+            if "inst.repo=" in args or "inst.stage2=" in args:  # unpacked HTTP tree
+                paths.append(dest_dir / "tree" / ".treeinfo")
+            if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
+                paths.append(dest_dir / "squashfs.img")
         basedir = re.search(r"archisobasedir=(\S+)", args)
         if basedir:
             paths.append(dest_dir / basedir.group(1))
@@ -1082,12 +1160,12 @@ def _missing_message(db, img: Image, missing: list[Path]) -> str:
         shown += f", and {len(missing) - 3} more"
     if img.source == "netboot":
         entry = netboot.catalog_entry(img.catalog_id, db) or {}
-        if entry.get("kernel_url"):
-            return (f"Boot files are missing ({shown}). Reprocess downloads "
-                    "them again.")
         if img.variant == "live":
             return (f"Boot files are missing ({shown}). Reprocess downloads "
                     "the live ISO again and rebuilds them.")
+        if entry.get("kernel_url"):
+            return (f"Boot files are missing ({shown}). Reprocess downloads "
+                    "them again.")
         return (f"Boot files are missing ({shown}). Reprocess rebuilds them "
                 "from the saved archive.")
     if not iso_path(img.filename).exists():

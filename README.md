@@ -63,9 +63,11 @@ Chosen in the wizard, changeable under **Server Settings**:
 Upload an `.iso` in the web UI and it becomes a boot-menu entry — the kernel and
 initrd are extracted automatically. Linux, **Windows** (installer via WinPE),
 and **XCP-NG** are supported. Entries can be enabled/disabled and have their boot
-args edited. For a Debian installer or live desktop without keeping an ISO, **Add from a
+args edited. For an installer or live desktop without keeping an ISO, **Add from a
 netboot catalog** keeps just the boot files (and, for a live desktop, its root
-filesystem); custom entries add other distros' installers, such as Fedora — see the
+filesystem) for Debian, Ubuntu and its flavours, Fedora and its spins, Rocky Linux,
+AlmaLinux, CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch (with
+EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers — see the
 [guide](docs/guide.md#netboot-installers-no-iso).
 
 **Windows** needs SMB ports **139 + 445** reachable, and on Intel VMD / AMD RAID

@@ -84,6 +84,12 @@
   </div>
 
   <div class="card" style="margin-top:18px;">
+    <h2>Netboot catalog</h2>
+    <div class="sub">Releases offered by <b>Add from a netboot catalog</b> on the Images page</div>
+    <div class="checkbox"><input type="checkbox" id="netboot_show_eol" name="netboot_show_eol" {{ 'checked' if settings.netboot_show_eol=='1' }}><label for="netboot_show_eol">Offer end-of-life releases <span class="muted">— when off, releases past their end of life are not listed and cannot be added; images already added are not affected</span></label></div>
+  </div>
+
+  <div class="card" style="margin-top:18px;">
     <h2>Appearance &amp; boot menu</h2>
     <div class="row">
       <div>

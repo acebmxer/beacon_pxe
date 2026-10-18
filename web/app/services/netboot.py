@@ -11,11 +11,13 @@ the database); see the custom entries section below.
 import copy
 import csv
 import datetime
+import http.client
 import io
 import json
 import logging
 import re
 import secrets
+import ssl
 import string
 import tarfile
 import time
@@ -26,6 +28,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from ..models import CatalogEntry
+from ..store import get_setting
 
 log = logging.getLogger("beacon.netboot")
 
@@ -55,11 +58,31 @@ def load_catalog() -> list[dict]:
         distros = json.loads(_CATALOG_PATH.read_text()).get("distros", [])
     except (OSError, ValueError):
         return []
-    distros = [d for d in distros if d.get("id") and d.get("archive_url")]
+    distros = [d for d in distros if d.get("id") and (has_installer(d) or d.get("live"))]
     for d in distros:
-        for rel in d.get("releases", []) + (d.get("live") or {}).get("releases", []):
+        live = d.get("live")
+        # A live desktop found by folder template uses the installer's releases
+        # unless it lists its own.
+        if live and live.get("folder") and "releases" not in live:
+            live["releases"] = copy.deepcopy(d.get("releases", []))
+        for rel in d.get("releases", []) + (live or {}).get("releases", []):
             rel["ended"] = _past(rel.get("eol"))
     return distros
+
+
+def has_installer(entry: dict) -> bool:
+    """True if the entry names installer boot files (some distros are live only)."""
+    return bool(entry.get("archive_url") or entry.get("archive_listing")
+                or entry.get("kernel_url"))
+
+
+def for_release(entry: dict, release: str) -> dict:
+    """The entry with a release's own boot arguments and extra files, where the
+    catalog gives that release different ones (openSUSE Leap 15.6 installs with
+    YaST, 16 with Agama)."""
+    rel = next((r for r in entry.get("releases", []) if r["id"] == release), None)
+    over = {k: rel[k] for k in ("boot_args", "extra_files") if rel and k in rel}
+    return dict(entry, **over) if over else entry
 
 
 def _past(day: str | None) -> bool:
@@ -168,6 +191,8 @@ def live_release_from_mirror(entry: dict, live: dict, text: str) -> dict:
 
 
 def _release_label(entry: dict, found: dict) -> str:
+    if found["codename"] == found["number"]:
+        return f"{entry['name']} {found['number']}"
     if found["testing"]:
         return (f"{entry['name']} {found['number']} "
                 f"({found['codename']}, testing \u2014 pre-release)")
@@ -194,33 +219,83 @@ _DISCOVERY_RETRY = 600
 _discovery_cache: dict[str, tuple[float, list[dict] | None]] = {}
 
 
-def _eol_dates(entry: dict) -> dict[str, str]:
-    """Codename -> the date support ends, from the distro's published release
-    data (Debian's distro-info-data). Long-term support counts as supported, so
-    the LTS end date is used where there is one. {} if it cannot be read."""
-    url = entry.get("eol_dates_url")
-    if not url:
-        return {}
+def _fetch_text(url: str) -> str | None:
     req = urllib.request.Request(url, headers={"User-Agent": "beacon-pxe"})
     try:
         with urllib.request.urlopen(req, timeout=_DISCOVERY_TIMEOUT) as resp:
-            text = resp.read(256 * 1024).decode("utf-8", "replace")
-    except (urllib.error.URLError, TimeoutError):
+            return resp.read(1024 * 1024).decode("utf-8", "replace")
+    except (urllib.error.URLError, TimeoutError, OSError):
+        return None
+
+
+def _iso_day(day) -> bool:
+    try:
+        datetime.date.fromisoformat(day)
+        return True
+    except (TypeError, ValueError):
+        return False
+
+
+def _eol_dates(entry: dict) -> dict[str, str]:
+    """Codename or version -> the date support ends, from the distro's published
+    release data: distro-info-data's CSV (Debian, Ubuntu) or a JSON list (Fedora's
+    Bodhi, Alpine's releases.json). Long-term support counts as supported, so the
+    LTS end date is used where there is one. {} if it cannot be read."""
+    spec = entry.get("eol_json")
+    url = spec["url"] if spec else entry.get("eol_dates_url")
+    text = _fetch_text(url) if url else None
+    if not text:
         return {}
     dates = {}
+    if spec:
+        try:
+            items = json.loads(text).get(spec["list"], [])
+        except (ValueError, AttributeError):
+            return {}
+        for item in items if isinstance(items, list) else []:
+            if not isinstance(item, dict):
+                continue
+            m = re.search(spec["id_regex"], str(item.get(spec["id"], "")))
+            if m and _iso_day(item.get(spec["date"])):
+                dates[m.group(1).lower()] = item[spec["date"]]
+        return dates
     for row in csv.DictReader(io.StringIO(text)):
         day = (row.get("eol-lts") or row.get("eol") or "").strip()
-        try:
-            datetime.date.fromisoformat(day)
-        except ValueError:
+        if not _iso_day(day):
             continue
         dates[(row.get("series") or "").strip().lower()] = day
+        # Ubuntu's releases are picked by number ("24.04 LTS" -> 24.04).
+        number = (row.get("version") or "").split(" ")[0].strip()
+        if number:
+            dates.setdefault(number, day)
     return dates
+
+
+def _discover_listing(entry: dict) -> list[dict] | None:
+    """Releases read from a folder listing on the mirror (Fedora's releases/,
+    Rocky's numbered folders), newest first; None if it cannot be read."""
+    spec = entry["release_listing"]
+    try:
+        listing = _read_listing(spec["url"].format(mirror=entry["default_mirror"]).rstrip("/"),
+                                _DISCOVERY_TIMEOUT)
+    except NetbootError:
+        return None
+    ids = {m.group(1) for m in re.finditer(r'href="(?:\./)?' + spec["regex"] + '"', listing)}
+    if spec.get("min"):
+        ids = {i for i in ids if _version_key(i) >= _version_key(spec["min"])}
+    newest = sorted(ids, key=_version_key, reverse=True)[:spec.get("count", 10)]
+    if not newest:
+        return None
+    dates = _eol_dates(entry)
+    return [{"number": i, "codename": i, "testing": False, "eol": dates.get(i.lower())}
+            for i in newest]
 
 
 def discover_releases(entry: dict) -> list[dict] | None:
     """The releases the default mirror carries now, newest first, each with the
     date its support ends (None if unknown). None if the mirror cannot be read."""
+    if entry.get("release_listing"):
+        return _discover_listing(entry)
     lookup = entry.get("number_lookup")
     if not lookup:
         return None
@@ -244,7 +319,7 @@ def _cached_discovery(entry: dict) -> list[dict] | None:
     if hit and hit[0] > now:
         return hit[1]
     found = discover_releases(entry)
-    if found is None:
+    if found is None and (entry.get("number_lookup") or entry.get("release_listing")):
         log.info("Release lookup for %s failed; showing the catalog's list", entry["id"])
     _discovery_cache[entry["id"]] = (now + (_DISCOVERY_TTL if found else _DISCOVERY_RETRY),
                                      found)
@@ -262,6 +337,11 @@ def with_discovered(entry: dict, found: list[dict]) -> dict:
     entry = copy.deepcopy(entry)
     seen = {f["codename"] for f in found}
     stable = next((f["codename"] for f in found if not f["testing"]), None)
+    # Ubuntu's default is the newest long-term release, not the newest one.
+    prefer = (entry.get("release_listing") or {}).get("prefer")
+    if prefer:
+        stable = next((f["codename"] for f in found if re.search(prefer, f["codename"])),
+                      stable)
 
     def merged(listed: list[dict], make) -> list[dict]:
         by_id = {r["id"]: r for r in listed}
@@ -278,24 +358,58 @@ def with_discovered(entry: dict, found: list[dict]) -> dict:
         out.extend(r for r in listed if r["id"] not in seen)
         return out
 
-    entry["releases"] = merged(entry.get("releases", []), lambda f: {
-        "id": f["codename"], "number": f["number"], "label": _release_label(entry, f)})
+    def plain(f):
+        return {"id": f["codename"], "number": f["number"], "label": _release_label(entry, f)}
+
+    if has_installer(entry):
+        entry["releases"] = merged(entry.get("releases", []), plain)
     live = entry.get("live")
     if live:
-        live["releases"] = merged(live.get("releases", []),
-                                  lambda f: _live_release_for(entry, live, f))
+        live["releases"] = merged(live.get("releases", []), plain if live.get("folder")
+                                  else lambda f: _live_release_for(entry, live, f))
     return entry
 
 
 def page_catalog(db=None) -> list[dict]:
     """The catalog as the Images page shows it: each distro's release list as
     its mirror carries it now, or the catalog's own list if the mirror is out
-    of reach. Custom entries follow the built-in ones."""
-    out = []
-    for d in load_catalog():
-        found = _cached_discovery(d)
-        out.append(with_discovered(d, found) if found else d)
-    return out + (custom_entries(db) if db is not None else [])
+    of reach. Custom entries follow the built-in ones. The mirrors are asked at
+    the same time, so an unreachable one costs one timeout, not one per distro."""
+    distros = load_catalog()
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        founds = list(pool.map(_cached_discovery, distros))
+    out = [with_discovered(d, found) if found else d for d, found in zip(distros, founds)]
+    out += custom_entries(db) if db is not None else []
+    if db is not None and not show_eol(db):
+        out = [_without_ended(d) for d in out]
+    return out
+
+
+def show_eol(db) -> bool:
+    """Settings → Netboot catalog → Offer end-of-life releases."""
+    return get_setting(db, "netboot_show_eol") == "1"
+
+
+def _without_ended(entry: dict) -> dict:
+    entry = copy.deepcopy(entry)
+    if "releases" in entry:
+        entry["releases"] = [r for r in entry["releases"] if not r.get("ended")]
+    if entry.get("live"):
+        entry["live"]["releases"] = [r for r in entry["live"].get("releases", [])
+                                     if not r.get("ended")]
+    return entry
+
+
+def ended_release(entry: dict, release: str, live: bool = False) -> dict | None:
+    """The listed release, if its end of life has passed, by the same dates the
+    Images page shows (the mirror's where it was read, else the catalog's)."""
+    if not entry.get("custom"):
+        found = _cached_discovery(entry)
+        if found:
+            entry = with_discovered(entry, found)
+    listed = (entry.get("live") or {}).get("releases", []) if live else entry.get("releases", [])
+    rel = next((r for r in listed if r["id"] == release), None)
+    return rel if rel and rel.get("ended") else None
 
 
 def validate_release(release: str) -> str:
@@ -335,11 +449,44 @@ def archive_url(entry: dict, mirror: str, release: str) -> str:
     return entry["archive_url"].format(mirror=mirror, version=release)
 
 
-def boot_args(entry: dict, mirror: str, release: str) -> str:
+def resolve_archive_url(entry: dict, mirror: str, release: str) -> str:
+    """The archive to download. Ubuntu names its archive for the point release
+    (ubuntu-24.04.5-netboot-amd64.tar.gz), so the newest one is read from the
+    mirror's listing."""
+    spec = entry.get("archive_listing")
+    if not spec:
+        return archive_url(entry, mirror, release)
+    folder = spec["folder"].format(mirror=mirror, version=release)
+    listing = _read_listing(folder)
+    rx = re.compile(r"(?<![\w.-])" + spec["regex"].format(version=re.escape(release)))
+    names = sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
+    if not names:
+        raise NetbootError(f"No {entry['name']} {release} netboot archive was found at "
+                           f"{folder}/. Check the release and the mirror.")
+    return f"{folder}/{names[-1]}"
+
+
+def boot_args(entry: dict, mirror: str, release: str, image_id: int = 0,
+              values: dict | None = None) -> str:
+    """The kernel command line. image_id places files kept on Beacon
+    (${boot-url}/os/<id>/...); values are read from the archive (Ubuntu's ISO URL)."""
     parsed = urlparse(mirror)
-    return entry.get("boot_args", "").format(
+    return for_release(entry, release).get("boot_args", "").format(
         mirror=mirror, version=release, mirror_proto=parsed.scheme,
-        mirror_host=parsed.netloc, mirror_path=parsed.path or "/")
+        mirror_host=parsed.netloc, mirror_path=parsed.path or "/", image_id=image_id,
+        **(values or {}))
+
+
+def archive_values(entry: dict, mirror: str, values: dict) -> dict:
+    """Values read from an archive, on the image's mirror: Ubuntu's archive names
+    its ISO on releases.ubuntu.com, which is swapped for a mirror the admin set."""
+    default = entry.get("default_mirror", "")
+    out = {}
+    for key, value in values.items():
+        if mirror != default and value.startswith(default + "/"):
+            value = mirror + value[len(default):]
+        out[key] = value
+    return out
 
 
 def new_archive_name(distro_id: str, release: str, ext: str = ".tar.gz") -> str:
@@ -352,11 +499,49 @@ def live_entry(entry: dict) -> dict | None:
     return entry.get("live") or None
 
 
-def validate_flavour(live: dict, flavour: str) -> str:
+def validate_flavour(live: dict, flavour: str, release: str | None = None) -> str:
     flavour = flavour.strip()
-    if flavour not in {f["id"] for f in live.get("flavours", [])}:
+    found = next((f for f in live.get("flavours", []) if f["id"] == flavour), None)
+    if found is None:
         raise NetbootError("Choose one of the listed desktops.")
+    if release is not None and found.get("only") and release not in found["only"]:
+        raise NetbootError(f"{found['label']} is only published for release "
+                           f"{', '.join(found['only'])}.")
     return flavour
+
+
+def live_for_flavour(live: dict, flavour: str) -> dict:
+    """The live settings for one desktop: a flavour can have its own folder, file
+    pattern or mirror (Ubuntu's own desktop is on releases.ubuntu.com, the
+    flavours on cdimage.ubuntu.com)."""
+    found = next((f for f in live.get("flavours", []) if f["id"] == flavour), {})
+    over = {k: found[k] for k in ("folder", "iso_regex", "default_mirror", "dir_regex",
+                                  "kernel_member", "initrd_member") if k in found}
+    return dict(live, **over) if over else live
+
+
+def live_mirror(entry: dict, live: dict, flavour: str) -> str:
+    return live_for_flavour(live, flavour).get("default_mirror") or entry["default_mirror"]
+
+
+def _flavour_fields(live: dict, flavour: str) -> dict:
+    """A flavour's text fields (dir, file, ...) for the folder and file templates."""
+    found = next((f for f in live.get("flavours", []) if f["id"] == flavour), {})
+    return {k: v for k, v in found.items()
+            if isinstance(v, str) and k not in ("flavour", "version", "mirror", "dir_regex")}
+
+
+def resolve_flavour_iso_url(live: dict, flavour: str, mirror: str, version: str) -> str:
+    """The newest live ISO of a flavour and release, for a distro whose ISO folder
+    follows a template ({mirror}/releases/{version}/Spins/x86_64/iso)."""
+    lv = live_for_flavour(live, flavour)
+    folder = lv["folder"].format(mirror=mirror, version=version, flavour=flavour,
+                                 **_flavour_fields(live, flavour))
+    if lv.get("dir_regex"):
+        # One folder per build (CachyOS's ISO/desktop/260809/): take the newest.
+        folder = resolve_release_folder({"dir_regex": lv["dir_regex"], "label": flavour},
+                                        folder)
+    return resolve_live_iso_url(lv, folder, flavour, version)
 
 
 def validate_live_release(live: dict, release: str) -> dict:
@@ -435,20 +620,24 @@ def resolve_release_folder(rel: dict, base_url: str) -> str:
 
 
 def _version_key(name: str) -> list[int]:
+    """The numbers in a file or folder name, for finding the newest. Architecture
+    names are not versions: in ubuntu-26.04-netboot-amd64 the 64 would otherwise
+    sort the release above its point release 26.04.1."""
+    name = re.sub(r"x86_64|amd64|arm64|aarch64|ppc64le|s390x|i[3-6]86", "", name)
     return [int(n) for n in re.findall(r"\d+", name)]
 
 
-def _read_listing(base_url: str) -> str:
+def _read_listing(base_url: str, timeout: int = 30) -> str:
     req = urllib.request.Request(base_url + "/", headers={"User-Agent": "beacon-pxe"})
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             return resp.read(4 * 1024 * 1024).decode("utf-8", "replace")
     except (urllib.error.URLError, TimeoutError) as exc:
         raise NetbootError(f"Could not read {base_url}/ ({getattr(exc, 'reason', exc)}). "
                            "Check the mirror and the Beacon host's internet access.")
 
 
-def resolve_live_iso_url(live: dict, base_url: str, flavour: str) -> str:
+def resolve_live_iso_url(live: dict, base_url: str, flavour: str, version: str = "") -> str:
     """Find the current live ISO for a flavour in the mirror's directory listing.
 
     The file name carries the point release (debian-live-13.7.0-...), which
@@ -456,7 +645,11 @@ def resolve_live_iso_url(live: dict, base_url: str, flavour: str) -> str:
     """
     base_url = base_url.rstrip("/")
     listing = _read_listing(base_url)
-    rx = re.compile(live["iso_regex"].format(flavour=re.escape(flavour)))
+    fields = {k: re.escape(v) for k, v in _flavour_fields(live, flavour).items()}
+    # Anchored at the start of a file name, so "ubuntu-..." never matches inside
+    # "kubuntu-...".
+    rx = re.compile(r"(?<![\w.-])" + live["iso_regex"].format(
+        **fields, flavour=re.escape(flavour), version=re.escape(version)))
     names = sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
     if not names:
         raise NetbootError(f"No live ISO for '{flavour}' was found at {base_url}/.")
@@ -467,36 +660,78 @@ def live_boot_args(live: dict, image_id: int) -> str:
     return live["boot_args"].format(image_id=image_id)
 
 
+DOWNLOAD_ATTEMPTS = 4
+_RETRY_PAUSE = 5
+
+
 def download(url: str, dest: Path, max_bytes: int = ARCHIVE_MAX_BYTES) -> None:
     """Stream url to dest (via a .part file) with a size cap and timeout.
+
+    A connection that stalls or drops part-way is resumed where it stopped
+    (an HTTP Range request), up to DOWNLOAD_ATTEMPTS tries in all, so one hiccup
+    does not throw away a multi-GB live ISO. A server that ignores the range is
+    read again from the start.
 
     Separate from services.drivers._download on purpose: that one is https-only
     and pinned to a hash, while a netboot mirror is often plain http.
     """
     part = dest.with_name(dest.name + ".part")
-    req = urllib.request.Request(url, headers={"User-Agent": "beacon-pxe"})
+    part.unlink(missing_ok=True)
     size = 0
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp, open(part, "wb") as out:
-            while chunk := resp.read(1024 * 1024):
-                size += len(chunk)
-                if size > max_bytes:
-                    raise NetbootError("Download exceeded the size limit; "
-                                       "refusing to continue.")
-                out.write(chunk)
-        part.replace(dest)
-    except urllib.error.HTTPError as exc:
-        raise NetbootError(f"Download failed: the server answered {exc.code} "
-                           f"for {url}. Check the release name and mirror.")
-    except urllib.error.URLError as exc:
-        raise NetbootError(f"Download failed ({getattr(exc, 'reason', exc)}). "
-                           "The Beacon host needs internet access, or upload "
-                           "the archive instead.")
-    except TimeoutError:
-        raise NetbootError("Download timed out. Check the Beacon host's "
-                           "internet access and try again.")
+        for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+            headers = {"User-Agent": "beacon-pxe"}
+            if size:
+                headers["Range"] = f"bytes={size}-"
+            req = urllib.request.Request(url, headers=headers)
+            try:
+                with urllib.request.urlopen(req, timeout=30) as resp:
+                    if size and resp.status != 206:
+                        size = 0
+                    expected = _expected_size(resp, size)
+                    with open(part, "ab" if size else "wb") as out:
+                        while chunk := resp.read(1024 * 1024):
+                            size += len(chunk)
+                            if size > max_bytes:
+                                raise NetbootError("Download exceeded the size limit; "
+                                                   "refusing to continue.")
+                            out.write(chunk)
+                if expected and size < expected:
+                    raise http.client.IncompleteRead(b"", expected - size)
+                part.replace(dest)
+                return
+            except urllib.error.HTTPError as exc:
+                raise NetbootError(f"Download failed: the server answered {exc.code} "
+                                   f"for {url}. Check the release name and mirror.")
+            except (urllib.error.URLError, TimeoutError, ConnectionError, ssl.SSLError,
+                    http.client.HTTPException) as exc:
+                if attempt == DOWNLOAD_ATTEMPTS:
+                    if isinstance(exc, TimeoutError) or isinstance(
+                            getattr(exc, "reason", None), TimeoutError):
+                        raise NetbootError(
+                            f"Download timed out ({DOWNLOAD_ATTEMPTS} tries). Check the "
+                            "Beacon host's internet access and try again.")
+                    if isinstance(exc, urllib.error.URLError):
+                        raise NetbootError(f"Download failed ({getattr(exc, 'reason', exc)}). "
+                                           "The Beacon host needs internet access, or upload "
+                                           "the archive instead.")
+                    raise NetbootError(f"Download failed: the connection to {url} kept "
+                                       f"dropping ({DOWNLOAD_ATTEMPTS} tries).")
+                log.info("Download of %s interrupted at %d bytes (%s); trying again",
+                         url, size, exc)
+                time.sleep(_RETRY_PAUSE)
     finally:
         part.unlink(missing_ok=True)
+
+
+def _expected_size(resp, offset: int) -> int | None:
+    """The full file size the server announced, if any (Content-Length, or the
+    total in Content-Range for a resumed request)."""
+    if resp.status == 206:
+        m = re.search(r"/([0-9]+)\s*$", resp.headers.get("Content-Range", ""))
+        return int(m.group(1)) if m else None
+    length = resp.headers.get("Content-Length", "")
+    return int(length) if length.isdigit() else None
 
 
 def _testing_or_unknown(entry: dict, release: str) -> bool:
@@ -535,13 +770,16 @@ def _is_iso(path: Path) -> bool:
 
 
 def extract_boot_files(archive: Path, entry: dict, dest_dir: Path,
-                       release: str | None = None) -> None:
+                       release: str | None = None) -> dict:
     """Copy just the kernel and initrd out of the archive into dest_dir.
 
     Only the two named members are read (never extractall), so a hostile archive
     can't write anywhere else. With a release, an archive whose own version file
     names a different release is refused: its kernel would not match the
     packages the installer then fetches from the mirror.
+
+    Returns the values the entry reads from the archive for its kernel
+    arguments (Ubuntu's iso-url, from the archive's own boot menu).
     """
     if _is_iso(archive):
         raise NetbootError("This file is an ISO image, not a netboot archive. Add an "
@@ -549,7 +787,8 @@ def extract_boot_files(archive: Path, entry: dict, dest_dir: Path,
                            "distro's netboot.tar.gz here.")
     dest_dir.mkdir(parents=True, exist_ok=True)
     wanted = {entry["kernel_member"]: "vmlinuz", entry["initrd_member"]: "initrd"}
-    found = set()
+    reads = {v["member"]: v for v in entry.get("archive_values", [])}
+    found, values = set(), {}
     try:
         with tarfile.open(archive) as tar:
             for member in tar:
@@ -557,6 +796,11 @@ def extract_boot_files(archive: Path, entry: dict, dest_dir: Path,
                 if release and name == entry.get("version_member") and member.isreg():
                     _check_archive_release(entry, tar.extractfile(member).read(4096),
                                            release)
+                if name in reads and member.isreg():
+                    text = tar.extractfile(member).read(64 * 1024).decode("utf-8", "replace")
+                    m = re.search(reads[name]["regex"], text)
+                    if m and validate_source_url(m.group(1)):
+                        values[reads[name]["name"]] = m.group(1)
                 if name in wanted and member.isreg():
                     src = tar.extractfile(member)
                     with open(dest_dir / wanted[name], "wb") as out:
@@ -570,6 +814,11 @@ def extract_boot_files(archive: Path, entry: dict, dest_dir: Path,
         raise NetbootError("The archive does not contain "
                            f"{', '.join(sorted(missing))}. Is it the right "
                            "distro and release?")
+    unread = sorted(m for m, v in reads.items() if v["name"] not in values)
+    if unread:
+        raise NetbootError(f"The archive's {', '.join(unread)} does not give the "
+                           "address its installer needs. Is it the right distro?")
+    return values
 
 
 # --- Custom entries ---------------------------------------------------------
@@ -943,16 +1192,28 @@ def _is_kernel(path: Path) -> bool:
 
 
 def fetch_boot_files(entry: dict, mirror: str, release: str, dest_dir: Path) -> int:
-    """Download an entry's kernel and initrd into dest_dir; returns their size."""
+    """Download an entry's kernel and initrd into dest_dir; returns their size.
+
+    A built-in entry can also name extra files kept beside them: the root
+    filesystem of a live installer (Arch, openSUSE Leap 16), Alpine's modloop, or
+    an EL installer's own runtime image.
+    """
     dest_dir.mkdir(parents=True, exist_ok=True)
     (_, kernel), (_, initrd) = boot_file_urls(entry, mirror, release)
+    files = [(kernel, dest_dir / "vmlinuz", ARCHIVE_MAX_BYTES),
+             (initrd, dest_dir / "initrd", ARCHIVE_MAX_BYTES)]
+    for extra in for_release(entry, release).get("extra_files", []):
+        files.append((extra["url"].format(mirror=mirror, version=release),
+                      dest_dir / extra["dest"], LIVE_ISO_MAX_BYTES))
     total = 0
-    for url, name in ((kernel, "vmlinuz"), (initrd, "initrd")):
-        download(url, dest_dir / name)
-        size = (dest_dir / name).stat().st_size
+    for url, dest, cap in files:
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        download(url, dest, cap)
+        size = dest.stat().st_size
         if not size:
             raise NetbootError(f"{url} is empty.")
         total += size
-    if not _is_kernel(dest_dir / "vmlinuz"):
-        raise NetbootError(f"{kernel} is not a Linux kernel. Check the entry's kernel URL.")
+        if dest.name == "vmlinuz" and not _is_kernel(dest):
+            raise NetbootError(f"{kernel} is not a Linux kernel. Check the entry's "
+                               "kernel URL.")
     return total

@@ -47,15 +47,16 @@
 {% if catalog %}
 <div class="card" style="margin-top:18px;">
   <h2>Add from a netboot catalog</h2>
-  <div class="sub">No ISO is kept. An <b>installer</b> keeps only the kernel and initrd and
-    downloads its packages from the mirror; a <b>live desktop</b> keeps the kernel, initrd
-    and root filesystem, which clients stream over HTTP.</div>
+  <div class="sub">No ISO is kept. An <b>installer</b> keeps the kernel and initrd (and, for
+    some distros, the installer's own system) and downloads its packages from the mirror; a
+    <b>live desktop</b> keeps the kernel, initrd and root filesystem, which clients stream over
+    HTTP. Ubuntu and Linux Mint desktops keep the unpacked ISO instead, served over NFS.</div>
   <form id="netboot-form" autocomplete="off" method="post" action="/images/netboot" enctype="multipart/form-data">
     <div class="row">
       <div>
         <label for="nb-variant">Type</label>
         <select id="nb-variant" name="variant">
-          <option value="installer">Installer</option>
+          <option value="installer" id="nb-installer-opt">Installer</option>
           <option value="live" id="nb-live-opt">Live desktop</option>
         </select>
       </div>
@@ -393,8 +394,11 @@
       var d = currentDistro();
       if (!d) return;
       var hasLive = !!d.live;
+      var hasInstaller = !!(d.archive_url || d.archive_listing || d.kernel_url);
       document.getElementById("nb-live-opt").disabled = !hasLive;
+      document.getElementById("nb-installer-opt").disabled = !hasInstaller;
       if (!hasLive) variantSel.value = "installer";
+      if (!hasInstaller) variantSel.value = "live";
       var liveReleases = (d.live && d.live.releases) || [];
       mirrorIn.value = d.default_mirror;
       var releaseText = function (r) {
@@ -411,12 +415,12 @@
       liveReleaseSel.innerHTML = "";
       liveReleases.forEach(function (r) { addOption(liveReleaseSel, r.id, releaseText(r)); });
       addOption(liveReleaseSel, "", "Other (type a release name)…");
-      flavourSel.innerHTML = "";
-      ((d.live && d.live.flavours) || []).forEach(function (f) {
-        var o = document.createElement("option");
-        o.value = f.id; o.textContent = f.label;
-        flavourSel.appendChild(o);
-      });
+      var hint = function (list) {
+        return list.length ? "e.g. " + list.slice(0, 2).map(function (r) { return r.id; }).join(" or ")
+                           : "a release name";
+      };
+      releaseIn.placeholder = hint(d.releases || []);
+      liveOtherIn.placeholder = hint(liveReleases);
       var pick = function (list) {
         return (list.filter(function (r) { return r.default; })[0] || list[0] || {}).id || "";
       };
@@ -424,19 +428,36 @@
       syncRelease();
       liveReleaseSel.value = pick(liveReleases);
       syncLiveRelease();
+      fillFlavours();
       syncLiveMirror();
       document.getElementById("nb-flavour-wrap").style.display = isLive() ? "" : "none";
       document.getElementById("nb-live-release-wrap").style.display = isLive() ? "" : "none";
       document.getElementById("nb-release-wrap").style.display = isLive() ? "none" : "";
       // A live desktop is fetched as an ISO, so uploading an archive does not apply;
-      // an entry with separate kernel and initrd URLs only downloads from the mirror.
-      var separate = !!d.kernel_url;
+      // an installer with separate kernel and initrd URLs only downloads from the mirror.
+      var separate = !!d.kernel_url && !isLive();
       sourceSel.querySelector('option[value="upload"]').disabled = isLive() || separate;
       sourceSel.querySelector('option[value="url"]').disabled = separate;
       if ((isLive() && sourceSel.value === "upload") || separate) sourceSel.value = "mirror";
       showSource();
     };
-    // A live release has its own ISO folder, shown in the Mirror box.
+    // Desktops published only for some releases (Rocky's Cinnamon: 9) are
+    // listed for those releases.
+    var fillFlavours = function () {
+      var d = currentDistro();
+      var keep = flavourSel.value;
+      flavourSel.innerHTML = "";
+      ((d && d.live && d.live.flavours) || []).forEach(function (f) {
+        if (f.only && liveReleaseSel.value && f.only.indexOf(liveReleaseSel.value) < 0) return;
+        var o = document.createElement("option");
+        o.value = f.id; o.textContent = f.label;
+        flavourSel.appendChild(o);
+      });
+      if (keep && flavourSel.querySelector('option[value="' + keep + '"]')) flavourSel.value = keep;
+    };
+    // A live release has its own ISO folder, shown in the Mirror box; a distro
+    // whose folder follows a template shows its mirror (Ubuntu's desktops have
+    // one per desktop).
     var liveOtherIn = document.getElementById("nb-live-other");
     var syncLiveRelease = function () {
       var other = liveReleaseSel.value === "";
@@ -449,6 +470,11 @@
     var syncLiveMirror = function () {
       var d = currentDistro();
       if (!isLive()) { if (d) mirrorIn.value = d.default_mirror; return; }
+      if (d && d.live && d.live.folder) {
+        var f = (d.live.flavours || []).filter(function (x) { return x.id === flavourSel.value; })[0];
+        mirrorIn.value = (f && f.default_mirror) || d.live.default_mirror || d.default_mirror;
+        return;
+      }
       var r = ((d && d.live && d.live.releases) || []).filter(function (x) {
         return x.id === liveReleaseSel.value; })[0];
       if (r) mirrorIn.value = r.base_url;
@@ -474,7 +500,9 @@
     sourceSel.addEventListener("change", showSource);
     releaseSel.addEventListener("change", syncRelease);
     fillDistro();
-    liveReleaseSel.addEventListener("change", function () { syncLiveRelease(); syncLiveMirror(); });
+    liveReleaseSel.addEventListener("change", function () {
+      syncLiveRelease(); fillFlavours(); syncLiveMirror(); });
+    flavourSel.addEventListener("change", syncLiveMirror);
   }
 
   // --- Custom catalog entry form ------------------------------------------

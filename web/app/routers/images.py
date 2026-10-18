@@ -193,8 +193,33 @@ async def add_netboot(request: Request, background: BackgroundTasks,
     live = netboot_svc.live_entry(entry) if variant == "live" else None
     if variant == "live" and live is None:
         return _page(request, db, error=f"{entry['name']} has no live desktop entry.")
+    if variant != "live" and not netboot_svc.has_installer(entry):
+        return _page(request, db, error=f"{entry['name']} has no installer entry; "
+                                        "choose Live desktop.")
     try:
-        if live:
+        if live and live.get("folder"):
+            # The ISO folder follows a template per release and desktop.
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                rid = netboot_svc.validate_release(
+                    netboot_svc.resolve_release(entry, live_release))
+                live_rel = {"id": rid, "label": f"{entry['name']} {rid}"}
+            release = netboot_svc.validate_flavour(live, flavour, live_rel["id"])
+            mirror = netboot_svc.validate_mirror(
+                mirror or netboot_svc.live_mirror(entry, live, release))
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_flavour_iso_url, live, release, mirror,
+                    live_rel["id"])
+            picked = next(f for f in live["flavours"] if f["id"] == release)
+            version = live_rel.get("name") or (
+                f"{entry['name']} {live_rel.get('number') or live_rel['id']}")
+            default_name = picked.get("title") or f"{version} Live {picked['label']}"
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        elif live:
             release = netboot_svc.validate_flavour(live, flavour)
             try:
                 live_rel = netboot_svc.validate_live_release(live, live_release)
@@ -249,10 +274,23 @@ async def add_netboot(request: Request, background: BackgroundTasks,
             elif source == "url":
                 source_url = netboot_svc.validate_source_url(url)
             else:
-                source_url = netboot_svc.archive_url(entry, mirror, release)
-            default_name = (f"{entry['name']} {number} {release} (netboot)" if number
-                            else f"{entry['name']} {release} (netboot)")
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_archive_url, entry, mirror, release)
+            named = next((r.get("name") for r in entry.get("releases", [])
+                          if r["id"] == release), None)
+            if named:
+                default_name = f"{named} (netboot)"
+            elif number and number != release:
+                default_name = f"{entry['name']} {number} {release} (netboot)"
+            else:
+                default_name = f"{entry['name']} {release} (netboot)"
             filename = netboot_svc.new_archive_name(entry["id"], release)
+        ended = (None if netboot_svc.show_eol(db) else netboot_svc.ended_release(
+            entry, live_rel["id"] if live else release, live=bool(live)))
+        if ended:
+            raise netboot_svc.NetbootError(
+                f"{ended['label']} has reached its end of life. Turn on Offer end-of-life "
+                "releases under Settings → Netboot catalog to add it.")
     except netboot_svc.NetbootError as e:
         return _page(request, db, error=str(e))
 

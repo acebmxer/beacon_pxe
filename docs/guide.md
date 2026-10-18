@@ -84,7 +84,8 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 ### Netboot installers (no ISO)
 
 **Add from a netboot catalog** on the Images page creates an image without an
-ISO. Pick a distro (**Debian** is built in; others are added as custom entries, below), a release (pick from the list, which is read from the mirror and marks
+ISO. Pick a distro (the built-in ones are listed in the table after this
+paragraph; others are added as custom entries, below), a release (pick from the list, which is read from the mirror and marks
 releases past their long-term support "end of life"; type `12` or `bookworm`; or enter any
 other release name the mirror carries, or a newer version number, which is read
 from the mirror) and a mirror (pre-filled, editable).
@@ -103,12 +104,46 @@ the ISO again. Pick the **Release**: the list is read from Debian's
 mirror, so it shows the releases Debian carries now (today 14 testing, a
 pre-release built weekly, then 13, 12 and 11) and a new release appears on its
 own. A release whose long-term support has ended, by Debian's published dates,
-stays listed, marked "end of life". The live ISO's folder is the **Mirror**
+stays listed, marked "end of life", unless **Offer end-of-life releases** under
+**Server Settings → Netboot catalog** is turned off: then such releases are not
+listed for any distro and cannot be added, while images already added stay as
+they are. The live ISO's folder is the **Mirror**
 field, and the file name is read from it, so new point releases are picked up.
 For Debian 12 the newest point release is found in Debian's archive. **Other**
 accepts a version number or codename that is not in the list (`15` or its
 codename): Beacon finds it on Debian's mirror, then looks for the live ISO in
 Debian's current, archive or weekly testing folder.
+
+The other built-in distros work the same way, each in the way the distro
+publishes its boot files:
+
+| Distro | Installer | Live desktops |
+|--------|-----------|---------------|
+| Debian | netboot archive (kernel and initrd) | KDE Plasma, GNOME, Xfce, Cinnamon, MATE, LXQt, LXDE, Standard |
+| Ubuntu | Ubuntu Server: netboot archive; the client downloads the live-server ISO from the mirror into RAM | Ubuntu, Kubuntu, Xubuntu, Lubuntu, Ubuntu MATE, Ubuntu Budgie, Ubuntu Cinnamon, Ubuntu Unity, Ubuntu Studio, Edubuntu, Ubuntu Kylin (unpacked ISO over NFS) |
+| Fedora | kernel and initrd; the installer is loaded from the mirror | Workstation, KDE Plasma and the spins (Xfce, Cinnamon, LXQt, MATE, Budgie, COSMIC, Sway, i3, LXDE, MiracleWM, KDE Plasma Mobile, Sugar on a Stick) |
+| Rocky Linux, AlmaLinux, CentOS Stream | kernel, initrd and the installer's own system (about 1 GB, kept so a point release on the mirror cannot leave them out of step) | Rocky: Workstation, Workstation Lite, KDE Plasma, Xfce, MATE, Cinnamon. Alma: GNOME, GNOME Mini, KDE Plasma, Xfce, MATE. CentOS Stream (Alternative Images SIG): GNOME, KDE Plasma, Cinnamon, MATE, Xfce, MAX, MIN. Some only for some releases |
+| openSUSE Leap | 16.0: kernel, initrd and the Agama installer system (about 420 MB). 15.6: kernel and initrd, YaST loaded from the mirror | none |
+| openSUSE Tumbleweed | kernel and initrd, YaST loaded from the mirror | GNOME, KDE Plasma, Xfce |
+| Linux Mint | none (it installs from the live desktop) | Cinnamon, MATE, Xfce (unpacked ISO over NFS) |
+| Kali Linux | netboot archive, as Debian | none |
+| Arch Linux | kernel, initrd and the live root filesystem (about 1 GB) | EndeavourOS, CachyOS (Arch-based; kernel, initrd and `airootfs.sfs` taken from their ISO, booted like Arch's own) |
+| Alpine Linux | kernel, initramfs and modloop; packages from the mirror | none |
+| XCP-ng | Xen, dom0 kernel and `install.img` from XCP-ng's netinstall folder, booted like an uploaded XCP-ng ISO (UEFI GRUB chainloader); packages from the mirror | none |
+
+Ubuntu, Fedora, Rocky, Alma, CentOS Stream, Linux Mint, Alpine and XCP-ng read
+their release list from the mirror like Debian, so a new release appears on its own
+(Ubuntu's default is the newest LTS); end-of-life dates come from Ubuntu's
+distro-info-data, Fedora's Bodhi and Alpine's `releases.json`, or the catalog's
+own dates for the others. Live desktops whose root is a single squashfs (Fedora,
+Rocky, Alma, CentOS Stream, Tumbleweed, EndeavourOS, CachyOS) are kept and streamed
+over HTTP like Debian's, so clients need RAM for it. Ubuntu's and Linux Mint's desktops boot
+with casper, which mounts its root over NFS only, so Beacon unpacks their ISO
+into the NFS share (about the ISO's size) and deletes the ISO; clients need
+ports 111, 2049 and 20048 to Beacon, as for an uploaded Ubuntu ISO. A distro or
+desktop not in the list is still added by uploading its ISO. A download that
+stalls or drops part-way is resumed where it stopped, up to four tries, before
+the image is marked as failed.
 
 **Custom catalog entries** add an installer for a distro the catalog does not
 have. Under **Custom catalog entries** on the Images page, give a name, a default
@@ -121,7 +156,7 @@ are (Fedora's `images/pxeboot/`, Alpine's `netboot/`); those are fetched again o
 `{mirror}` is the image's mirror and `{version}` the release; the kernel arguments
 also take `{mirror_proto}`, `{mirror_host}` and `{mirror_path}`. A literal brace
 is written twice, so the iPXE variable `${boot-url}` is `${{boot-url}}`. For
-example, Fedora:
+example, Fedora's installer (also built in) as a custom entry:
 
 | Field | Value |
 |-------|-------|

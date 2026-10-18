@@ -57,7 +57,10 @@ Candidate distros (arguments and URLs not yet verified against each distro):
    mirror.)* A form and a file import for entries in the same format.
    The kernel-argument template is the part admins can get wrong, so validate
    and show the final command line before saving.
-4. **The main distros and their flavours.** Built-in entries for the main
+4. **The main distros and their flavours.** *(Built: Ubuntu, Fedora, Rocky, Alma,
+   CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch, Alpine;
+   no Kali live entry, as Kali publishes no live ISO on cdimage.kali.org now.)*
+   Built-in entries for the main
    distros beside Debian: Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream
    and openSUSE, and the other well-known ones, installer and live desktop where
    the distro has them. A distro (or flavour) is only added if it can boot this
@@ -76,7 +79,9 @@ Candidate distros (arguments and URLs not yet verified against each distro):
 ## Open questions
 
 - Which distro goes first in stage 1?
-- Ubuntu's legacy netboot archive: still published for current releases? Check.
+- Ubuntu's legacy netboot archive: answered. The debian-installer one ended with
+  20.04; 24.04 and later publish a Subiquity netboot archive whose installer
+  downloads the live-server ISO (`iso-url=`). 22.04 has none.
 - End-of-life releases: answered. They stay listed, marked "end of life" once
   their long-term support ends. What happens when one has left the mirror and is
   added is still to be seen.

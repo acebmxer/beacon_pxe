@@ -542,13 +542,13 @@ class TestReleaseDiscovery:
         assert len(calls) == 1
 
 
-FEDORA = {
-    "name": "Fedora",
+MAGEIA = {
+    "name": "Mageia",
     "default_mirror": "https://dl.fedoraproject.org/pub/fedora/linux/",
     "kernel_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz",
     "initrd_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img",
     "boot_args": "inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp",
-    "releases": ["44", {"id": "43", "label": "Fedora 43 (older)"}],
+    "releases": ["44", {"id": "43", "label": "Mageia 43 (older)"}],
 }
 
 ARCHIVE_ENTRY = {
@@ -566,9 +566,9 @@ KERNEL = b"\0" * 0x202 + b"HdrS" + b"\0" * 64
 
 
 def _form(**over):
-    data = {"name": "Fedora", "default_mirror": FEDORA["default_mirror"], "kind": "files",
-            "kernel_url": FEDORA["kernel_url"], "initrd_url": FEDORA["initrd_url"],
-            "boot_args": FEDORA["boot_args"], "releases": "44\n43 | Fedora 43 (older)"}
+    data = {"name": "Mageia", "default_mirror": MAGEIA["default_mirror"], "kind": "files",
+            "kernel_url": MAGEIA["kernel_url"], "initrd_url": MAGEIA["initrd_url"],
+            "boot_args": MAGEIA["boot_args"], "releases": "44\n43 | Mageia 43 (older)"}
     data.update(over)
     return data
 
@@ -586,11 +586,11 @@ def no_url_checks(monkeypatch):
 
 class TestCustomEntryValidation:
     def test_files_entry_is_normalised(self):
-        e = netboot.validate_entry(FEDORA)
-        assert e["id"] == "fedora"
+        e = netboot.validate_entry(MAGEIA)
+        assert e["id"] == "mageia"
         assert e["default_mirror"] == "https://dl.fedoraproject.org/pub/fedora/linux"
-        assert e["releases"] == [{"id": "44", "label": "Fedora 44", "default": True},
-                                 {"id": "43", "label": "Fedora 43 (older)"}]
+        assert e["releases"] == [{"id": "44", "label": "Mageia 44", "default": True},
+                                 {"id": "43", "label": "Mageia 43 (older)"}]
         assert netboot.boot_args(e, e["default_mirror"], "44") == (
             "inst.repo=https://dl.fedoraproject.org/pub/fedora/linux/releases/44/"
             "Everything/x86_64/os ip=dhcp")
@@ -612,24 +612,24 @@ class TestCustomEntryValidation:
     ])
     def test_bad_boot_args_template_rejected(self, args, message):
         with pytest.raises(netboot.NetbootError, match=re.escape(message)):
-            netboot.validate_entry(dict(FEDORA, boot_args=args))
+            netboot.validate_entry(dict(MAGEIA, boot_args=args))
 
     def test_ipxe_variable_written_with_doubled_braces(self):
-        e = netboot.validate_entry(dict(FEDORA, boot_args="ks=${{boot-url}}/ks.cfg"))
+        e = netboot.validate_entry(dict(MAGEIA, boot_args="ks=${{boot-url}}/ks.cfg"))
         assert netboot.boot_args(e, e["default_mirror"], "44") == "ks=${boot-url}/ks.cfg"
 
     def test_url_template_takes_no_mirror_parts(self):
         with pytest.raises(netboot.NetbootError, match="Kernel URL has an unknown"):
-            netboot.validate_entry(dict(FEDORA, kernel_url="{mirror_host}/vmlinuz"))
+            netboot.validate_entry(dict(MAGEIA, kernel_url="{mirror_host}/vmlinuz"))
 
     def test_several_releases_need_version_in_urls(self):
         with pytest.raises(netboot.NetbootError, match="no {version}"):
-            netboot.validate_entry(dict(FEDORA, kernel_url="{mirror}/vmlinuz"))
-        netboot.validate_entry(dict(FEDORA, kernel_url="{mirror}/vmlinuz", releases=["44"]))
+            netboot.validate_entry(dict(MAGEIA, kernel_url="{mirror}/vmlinuz"))
+        netboot.validate_entry(dict(MAGEIA, kernel_url="{mirror}/vmlinuz", releases=["44"]))
 
     def test_url_must_come_out_as_http(self):
         with pytest.raises(netboot.NetbootError, match="does not give an http"):
-            netboot.validate_entry(dict(FEDORA, kernel_url="ftp://x/{version}/vmlinuz"))
+            netboot.validate_entry(dict(MAGEIA, kernel_url="ftp://x/{version}/vmlinuz"))
 
     @pytest.mark.parametrize("change, message", [
         ({"archive_url": ARCHIVE_ENTRY["archive_url"]}, "not both"),
@@ -645,12 +645,12 @@ class TestCustomEntryValidation:
          "only one release"),
         ({"releases": [{"id": "44", "eol": "soon"}]}, "eol must be a date"),
         ({"releases": [{"id": "44", "codename": "x"}]}, "unsupported field codename"),
-        ({"id": "Fedora!"}, "ID may only contain"),
+        ({"id": "Mageia!"}, "ID may only contain"),
         ({"boot_args": "x" * 1025}, "longer than 1024"),
     ])
     def test_bad_entries_rejected(self, change, message):
         with pytest.raises(netboot.NetbootError, match=re.escape(message)):
-            netboot.validate_entry(dict(FEDORA, **change))
+            netboot.validate_entry(dict(MAGEIA, **change))
 
     @pytest.mark.parametrize("member", ["../etc/passwd", "/abs/linux", "a/../../b", "a b"])
     def test_archive_member_must_stay_inside(self, member):
@@ -658,7 +658,7 @@ class TestCustomEntryValidation:
             netboot.validate_entry(dict(ARCHIVE_ENTRY, kernel_member=member))
 
     def test_release_lines_round_trip(self):
-        e = netboot.validate_entry(dict(FEDORA, releases=[
+        e = netboot.validate_entry(dict(MAGEIA, releases=[
             "43", {"id": "44", "default": True}, {"id": "42", "label": "Old one"}]))
         text = netboot.release_lines(e)
         assert text == "44\n43\n42 | Old one"
@@ -669,14 +669,14 @@ class TestCustomEntryValidation:
 class TestCustomEntryImport:
     def test_catalog_layout_list_and_single_entry(self):
         assert [e["id"] for e in netboot.parse_import(
-            json.dumps({"distros": [FEDORA, ARCHIVE_ENTRY]}))] == ["fedora", "my-debian"]
-        assert len(netboot.parse_import(json.dumps([FEDORA]))) == 1
-        assert netboot.parse_import(json.dumps(FEDORA))[0]["name"] == "Fedora"
+            json.dumps({"distros": [MAGEIA, ARCHIVE_ENTRY]}))] == ["mageia", "my-debian"]
+        assert len(netboot.parse_import(json.dumps([MAGEIA]))) == 1
+        assert netboot.parse_import(json.dumps(MAGEIA))[0]["name"] == "Mageia"
 
     def test_one_bad_entry_imports_nothing_and_is_named(self):
         bad = dict(ARCHIVE_ENTRY, name="Broken", boot_args="x={nope}")
         with pytest.raises(netboot.NetbootError) as exc:
-            netboot.parse_import(json.dumps({"distros": [FEDORA, bad]}))
+            netboot.parse_import(json.dumps({"distros": [MAGEIA, bad]}))
         assert str(exc.value).startswith("Nothing was imported. Broken: ")
         assert "{nope}" in str(exc.value)
 
@@ -689,25 +689,26 @@ class TestCustomEntryImport:
             netboot.parse_import(text)
 
     def test_same_id_twice_in_file(self):
-        with pytest.raises(netboot.NetbootError, match="ID fedora is used by more"):
-            netboot.parse_import(json.dumps([FEDORA, FEDORA]))
+        with pytest.raises(netboot.NetbootError, match="ID mageia is used by more"):
+            netboot.parse_import(json.dumps([MAGEIA, MAGEIA]))
 
 
 class TestCustomEntryStore:
     def test_stored_entry_is_found_with_the_built_ins(self, db):
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
-        assert netboot.catalog_entry("fedora") is None
-        e = netboot.catalog_entry("fedora", db)
-        assert e["custom"] is True and e["kernel_url"] == FEDORA["kernel_url"]
-        assert [d["id"] for d in netboot.page_catalog(db)] == ["debian", "fedora"]
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
+        assert netboot.catalog_entry("mageia") is None
+        e = netboot.catalog_entry("mageia", db)
+        assert e["custom"] is True and e["kernel_url"] == MAGEIA["kernel_url"]
+        assert [d["id"] for d in netboot.page_catalog(db)] == [
+            d["id"] for d in netboot.load_catalog()] + ["mageia"]
 
     def test_free_id_skips_built_in_and_custom_ids(self, db):
         assert netboot.free_entry_id(db, "debian") == "debian-2"
-        netboot.store_entry(db, netboot.validate_entry(dict(FEDORA, id="debian-2")))
+        netboot.store_entry(db, netboot.validate_entry(dict(MAGEIA, id="debian-2")))
         assert netboot.free_entry_id(db, "debian") == "debian-3"
 
     def test_preview_lists_every_release(self, no_url_checks):
-        rows = netboot.preview_entry(netboot.validate_entry(FEDORA))
+        rows = netboot.preview_entry(netboot.validate_entry(MAGEIA))
         assert [r["release"]["id"] for r in rows] == ["44", "43"]
         assert [f["label"] for f in rows[0]["files"]] == ["Kernel", "Initrd"]
         assert rows[1]["files"][0]["url"].endswith("/releases/43/Everything/x86_64/os/"
@@ -743,11 +744,11 @@ class TestCustomEntryRoutes:
         r = client.post("/images/catalog/entry", data=_form(action="save"),
                         follow_redirects=False)
         assert r.status_code == 303
-        assert netboot.custom_entry(db, "fedora")["releases"][1]["label"] == "Fedora 43 (older)"
+        assert netboot.custom_entry(db, "mageia")["releases"][1]["label"] == "Mageia 43 (older)"
         db.close()
         page = client.get("/images").text
-        assert "Saved the custom entry Fedora" in page
-        assert '<option value="fedora">Fedora (custom)</option>' in page
+        assert "Saved the custom entry Mageia" in page
+        assert '<option value="mageia">Mageia (custom)</option>' in page
 
     def test_bad_template_shows_error_and_no_save(self, client, no_url_checks):
         _login(client)
@@ -769,25 +770,25 @@ class TestCustomEntryRoutes:
 
     def test_edit_keeps_id_and_imported_release_fields(self, client):
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(dict(FEDORA, releases=[
+        netboot.store_entry(db, netboot.validate_entry(dict(MAGEIA, releases=[
             {"id": "44", "number": "44", "eol": "2027-05-01"}, "43"])))
         _login(client)
-        page = client.get("/images?edit=fedora").text
-        assert "Edit Fedora" in page and 'name="original_id" value="fedora"' in page
+        page = client.get("/images?edit=mageia").text
+        assert "Edit Mageia" in page and 'name="original_id" value="mageia"' in page
         client.post("/images/catalog/entry", data=_form(
-            action="save", original_id="fedora", name="Fedora Linux", releases="44\n45"))
-        e = netboot.custom_entry(db, "fedora")
-        assert e["name"] == "Fedora Linux"
+            action="save", original_id="mageia", name="Mageia Linux", releases="44\n45"))
+        e = netboot.custom_entry(db, "mageia")
+        assert e["name"] == "Mageia Linux"
         assert [{k: v for k, v in r.items() if k != "ended"} for r in e["releases"]] == [
-            {"id": "44", "label": "Fedora Linux 44", "number": "44", "eol": "2027-05-01",
+            {"id": "44", "label": "Mageia Linux 44", "number": "44", "eol": "2027-05-01",
              "default": True},
-            {"id": "45", "label": "Fedora Linux 45"}]
+            {"id": "45", "label": "Mageia Linux 45"}]
         assert len(netboot.custom_entries(db)) == 1
         db.close()
 
     def test_import_previews_then_saves_all(self, client, no_url_checks):
         _login(client)
-        text = json.dumps({"distros": [FEDORA, ARCHIVE_ENTRY]})
+        text = json.dumps({"distros": [MAGEIA, ARCHIVE_ENTRY]})
         r = client.post("/images/catalog/import", data={"action": "preview"},
                         files={"file": ("mine.json", text.encode(), "application/json")})
         assert "Import 2 entries" in r.text and "mirror/http/hostname=mirror.lan" in r.text
@@ -796,27 +797,27 @@ class TestCustomEntryRoutes:
         r = client.post("/images/catalog/import", data={"action": "save", "content": text},
                         follow_redirects=False)
         assert r.status_code == 303
-        assert [e["id"] for e in netboot.custom_entries(db)] == ["fedora", "my-debian"]
+        assert [e["id"] for e in netboot.custom_entries(db)] == ["mageia", "my-debian"]
         db.close()
-        assert "Imported 2 custom entries: Fedora, My Debian." in client.get("/images").text
+        assert "Imported 2 custom entries: Mageia, My Debian." in client.get("/images").text
 
     def test_import_reimport_replaces_same_id(self, client, no_url_checks):
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
         _login(client)
-        text = json.dumps(dict(FEDORA, releases=["45"]))
+        text = json.dumps(dict(MAGEIA, releases=["45"]))
         r = client.post("/images/catalog/import", data={"action": "preview", "content": text})
         assert "replaces the existing entry" in r.text
         client.post("/images/catalog/import", data={"action": "save", "content": text},
                     follow_redirects=False)
-        assert [r["id"] for r in netboot.custom_entry(db, "fedora")["releases"]] == ["45"]
+        assert [r["id"] for r in netboot.custom_entry(db, "mageia")["releases"]] == ["45"]
         db.close()
         assert "1 replaced an entry with the same ID" in client.get("/images").text
 
     def test_import_refuses_built_in_id(self, client):
         _login(client)
         r = client.post("/images/catalog/import", data={
-            "action": "save", "content": json.dumps(dict(FEDORA, id="debian"))})
+            "action": "save", "content": json.dumps(dict(MAGEIA, id="debian"))})
         assert "belongs to a built-in entry" in r.text
         db = app_db.SessionLocal()
         assert netboot.custom_entries(db) == []
@@ -824,46 +825,46 @@ class TestCustomEntryRoutes:
 
     def test_delete(self, client):
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
         _login(client)
-        r = client.post("/images/catalog/fedora/delete", follow_redirects=False)
+        r = client.post("/images/catalog/mageia/delete", follow_redirects=False)
         assert r.status_code == 303
-        assert netboot.custom_entry(db, "fedora") is None
+        assert netboot.custom_entry(db, "mageia") is None
         db.close()
-        assert "Deleted the custom entry Fedora" in client.get("/images").text
+        assert "Deleted the custom entry Mageia" in client.get("/images").text
 
     def test_unlisted_number_release_passes_through(self, client, tmp_path, monkeypatch):
-        """Fedora's releases are numbers; an unlisted one is not looked up on
+        """Mageia's releases are numbers; an unlisted one is not looked up on
         Debian-style suites."""
         monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
         monkeypatch.setattr(image_svc, "process_image", lambda i: None)
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
         _login(client)
         r = client.post("/images/netboot", data={
-            "distro": "fedora", "release": "46", "mirror": "", "source": "mirror"},
+            "distro": "mageia", "release": "46", "mirror": "", "source": "mirror"},
             follow_redirects=False)
         assert r.status_code == 303
         img = db.execute(select(Image)).scalar_one()
-        assert (img.catalog_id, img.release, img.source_url) == ("fedora", "46", "")
-        assert img.name == "Fedora 46 (netboot)"
+        assert (img.catalog_id, img.release, img.source_url) == ("mageia", "46", "")
+        assert img.name == "Mageia 46 (netboot)"
         db.close()
 
     def test_separate_files_entry_only_downloads_from_mirror(self, client):
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
         db.close()
         _login(client)
         r = client.post("/images/netboot", data={
-            "distro": "fedora", "release": "44", "source": "url",
+            "distro": "mageia", "release": "44", "source": "url",
             "url": "https://x/netboot.tar.gz"})
         assert "can only use Download from the mirror" in r.text
 
     def _files_image(self, monkeypatch, files):
         db = app_db.SessionLocal()
-        netboot.store_entry(db, netboot.validate_entry(FEDORA))
-        img = Image(name="f", filename="netboot-fedora-44-x.tar.gz", source="netboot",
-                    catalog_id="fedora", release="44",
+        netboot.store_entry(db, netboot.validate_entry(MAGEIA))
+        img = Image(name="f", filename="netboot-mageia-44-x.tar.gz", source="netboot",
+                    catalog_id="mageia", release="44",
                     mirror="http://mirror.lan/fedora", status="pending")
         db.add(img)
         db.commit()
@@ -907,4 +908,666 @@ class TestCustomEntryRoutes:
         db = app_db.SessionLocal()
         assert image_svc.reconcile_statuses(db) == 1
         assert "Reprocess downloads them again" in db.get(Image, img.id).message
+        db.close()
+
+
+# --- Built-in distros beyond Debian ------------------------------------------
+
+def _entry(distro_id):
+    entry = netboot.catalog_entry(distro_id)
+    assert entry is not None, distro_id
+    return entry
+
+
+def _fill(template, **fields):
+    return template.format(mirror="https://m.example/x", version="1.0", image_id=7,
+                           flavour="f", iso_url="https://m.example/x.iso", **fields)
+
+
+class TestBuiltInDistros:
+    IDS = ["debian", "ubuntu", "fedora", "rocky", "almalinux", "centos-stream",
+           "opensuse-leap", "opensuse-tumbleweed", "linuxmint", "kali", "arch", "alpine",
+           "xcp-ng"]
+
+    def test_catalog_lists_every_distro(self):
+        assert [d["id"] for d in netboot.load_catalog()] == self.IDS
+
+    @pytest.mark.parametrize("distro_id", IDS)
+    def test_every_template_fills_to_an_http_url(self, distro_id):
+        """A stray brace or unknown placeholder would only show up when an admin
+        adds the image, so every built-in template is filled here."""
+        e = _entry(distro_id)
+        urls = [e[k] for k in ("archive_url", "kernel_url", "initrd_url") if k in e]
+        if e.get("archive_listing"):
+            urls.append(e["archive_listing"]["folder"])
+        for rel in e.get("releases", []):
+            for extra in netboot.for_release(e, rel["id"]).get("extra_files", []):
+                urls.append(extra["url"])
+                assert ".." not in extra["dest"].split("/")
+            args = netboot.boot_args(e, "https://m.example/x", rel["id"], 7,
+                                     {"iso_url": "https://m.example/x.iso"})
+            assert "{" not in args.replace("${", "") and "\n" not in args
+        live = e.get("live")
+        for f in (live or {}).get("flavours", []):
+            lv = netboot.live_for_flavour(live, f["id"])
+            if lv.get("folder"):
+                urls.append(_fill(lv["folder"], **netboot._flavour_fields(live, f["id"])))
+                re.compile(lv["iso_regex"].format(
+                    **netboot._flavour_fields(live, f["id"]), flavour="f", version="1"))
+        for url in urls:
+            netboot.validate_source_url(_fill(url))
+        if live:
+            assert netboot.live_boot_args(live, 7).count("/7") == 1
+
+    def test_live_only_distro_has_no_installer(self):
+        assert not netboot.has_installer(_entry("linuxmint"))
+        assert netboot.has_installer(_entry("fedora"))
+
+    def test_live_folder_entries_use_the_installer_releases(self):
+        fedora = _entry("fedora")
+        assert [r["id"] for r in fedora["live"]["releases"]] == [
+            r["id"] for r in fedora["releases"]]
+
+    def test_leap_15_installs_with_yast_and_16_with_agama(self):
+        leap = _entry("opensuse-leap")
+        old = netboot.boot_args(leap, "https://download.opensuse.org", "15.6", 3)
+        new = netboot.boot_args(leap, "https://download.opensuse.org", "16.0", 3)
+        assert old == "install=https://download.opensuse.org/distribution/leap/15.6/repo/oss/"
+        assert new.startswith("root=live:${boot-url}/os/3/LiveOS/squashfs.img rd.live.image")
+        assert netboot.for_release(leap, "15.6")["extra_files"] == []
+        assert len(netboot.for_release(leap, "16.0")["extra_files"]) == 1
+
+    def test_el_installer_keeps_its_stage2(self):
+        rocky = _entry("rocky")
+        args = netboot.boot_args(rocky, "https://dl.rockylinux.org/pub/rocky", "9", 4)
+        assert args == ("inst.stage2=${boot-url}/os/4/stage2 inst.repo=https://"
+                        "dl.rockylinux.org/pub/rocky/9/BaseOS/x86_64/os ip=dhcp")
+
+    def test_arch_boot_args_carry_the_ipxe_mac(self):
+        args = netboot.boot_args(_entry("arch"), "https://geo.mirror.pkgbuild.com", "latest", 5)
+        assert args == ("archiso_http_srv=${boot-url}/os/5/ archisobasedir=arch "
+                        "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp")
+
+
+def _listing(*names):
+    return "".join(f'<a href="{n}">{n}</a>' for n in names).encode()
+
+
+class TestListingDiscovery:
+    def _serve(self, monkeypatch, pages):
+        def fake(req, **k):
+            for key, body in pages.items():
+                if key in req.full_url:
+                    if body is None:
+                        raise netboot.urllib.error.URLError("down")
+                    return _Resp(body)
+            raise netboot.urllib.error.URLError("not served")
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fake)
+
+    def test_fedora_newest_two_with_bodhi_dates(self, monkeypatch):
+        bodhi = json.dumps({"releases": [
+            {"name": "F45", "eol": "2027-11-24"}, {"name": "F44", "eol": "2027-06-02"},
+            {"name": "EPEL-9", "eol": None}]}).encode()
+        # Bodhi's URL also has /releases/ in it, so it is matched first.
+        self._serve(monkeypatch, {"bodhi": bodhi,
+                                  "/releases/": _listing("7/", "42/", "44/", "45/", "test/")})
+        found = netboot.discover_releases(_entry("fedora"))
+        assert [(f["codename"], f["eol"]) for f in found] == [
+            ("45", "2027-11-24"), ("44", "2027-06-02")]
+        entry = netboot.with_discovered(_entry("fedora"), found)
+        rel = {r["id"]: r for r in entry["releases"]}
+        assert rel["45"]["label"] == "Fedora 45" and rel["45"]["default"]
+        # A catalog release the listing no longer shows stays, after the others.
+        assert [r["id"] for r in entry["releases"]] == ["45", "44", "43"]
+        assert [r["id"] for r in entry["live"]["releases"]] == ["45", "44", "43"]
+
+    def test_listing_with_dot_slash_links_and_minimum(self, monkeypatch):
+        self._serve(monkeypatch, {"/": _listing("./8/", "./8.10/", "./9/", "./10/", "./7/")})
+        found = netboot.discover_releases(_entry("rocky"))
+        assert [f["codename"] for f in found] == ["10", "9", "8"]
+
+    def test_ubuntu_default_is_newest_lts_and_dates_by_version(self, monkeypatch):
+        csv_text = (b"version,codename,series,created,release,eol,eol-server\n"
+                    b"26.04 LTS,Resolute Raccoon,resolute,2025-10-09,2026-04-23,2031-05-29\n"
+                    b"26.10,Stonking Stingray,stonking,2026-04-24,2026-10-15,2027-07-15\n"
+                    b"27.04,Tenacious T-Rex,tenacious,2026-10-16,2027-04-22,2028-01-20\n")
+        self._serve(monkeypatch, {"ubuntu.csv": csv_text, "releases.ubuntu.com/": _listing(
+            "22.04/", "24.04/", "26.04/", "26.10/", "27.04/", "noble/")})
+        found = netboot.discover_releases(_entry("ubuntu"))
+        assert [f["codename"] for f in found] == ["27.04", "26.10", "26.04", "24.04"]
+        assert found[0]["eol"] == "2028-01-20"
+        entry = netboot.with_discovered(_entry("ubuntu"), found)
+        assert [r["id"] for r in entry["releases"] if r.get("default")] == ["26.04"]
+        # 22.04 has no netboot archive, but its desktop is still listed.
+        assert "22.04" not in [r["id"] for r in entry["releases"]]
+        assert "22.04" in [r["id"] for r in entry["live"]["releases"]]
+
+    def test_alpine_dates_from_releases_json(self, monkeypatch):
+        rel = json.dumps({"release_branches": [{"rel_branch": "edge"},
+                                               {"rel_branch": "v3.25", "eol_date": "2028-11-01"},
+                                               {"rel_branch": "v3.24", "eol_date": "2028-06-01"}]})
+        self._serve(monkeypatch, {"releases.json": rel.encode(), "/alpine/": _listing(
+            "v3.9/", "v3.22/", "v3.23/", "v3.24/", "v3.25/", "edge/", "latest-stable/")})
+        found = netboot.discover_releases(_entry("alpine"))
+        assert [(f["codename"], f["eol"]) for f in found] == [
+            ("3.25", "2028-11-01"), ("3.24", "2028-06-01"), ("3.23", None), ("3.22", None)]
+
+    def test_live_only_distro_keeps_no_installer_list(self, monkeypatch):
+        self._serve(monkeypatch, {"/stable/": _listing("20.3/", "21/", "22.3/", "23/")})
+        entry = netboot.with_discovered(_entry("linuxmint"),
+                                        netboot.discover_releases(_entry("linuxmint")))
+        assert "releases" not in entry
+        assert entry["live"]["releases"][0]["id"] == "23"
+
+    def test_unreadable_listing_gives_none(self, monkeypatch):
+        self._serve(monkeypatch, {"/releases/": None})
+        assert netboot.discover_releases(_entry("fedora")) is None
+
+
+class TestUbuntuInstaller:
+    def test_archive_is_newest_point_release_in_the_folder(self, monkeypatch):
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", lambda *a, **k: _Resp(_listing(
+            "ubuntu-24.04-netboot-amd64.tar.gz",
+            "ubuntu-24.04.4-netboot-amd64.tar.gz", "ubuntu-24.04.5-netboot-amd64.tar.gz",
+            "ubuntu-24.04.5-netboot-amd64.tar.gz.zsync", "ubuntu-24.04.10-wsl-amd64.wsl")))
+        assert netboot.resolve_archive_url(
+            _entry("ubuntu"), "https://releases.ubuntu.com", "24.04") == (
+            "https://releases.ubuntu.com/24.04/ubuntu-24.04.5-netboot-amd64.tar.gz")
+
+    def test_no_archive_for_release(self, monkeypatch):
+        monkeypatch.setattr(netboot.urllib.request, "urlopen",
+                            lambda *a, **k: _Resp(_listing("ubuntu-22.04.5-desktop-amd64.iso")))
+        with pytest.raises(netboot.NetbootError, match="No Ubuntu 22.04 netboot archive"):
+            netboot.resolve_archive_url(_entry("ubuntu"), "https://r", "22.04")
+
+    GRUB = (b'menuentry "Install Ubuntu Server" {\n  linux linux iso-url=https://releases.'
+            b'ubuntu.com/26.04.1/ubuntu-26.04.1-live-server-amd64.iso ip=dhcp ---\n}\n')
+
+    def test_iso_url_is_read_from_the_archive_and_moved_to_the_mirror(self, tmp_path):
+        archive = tmp_path / "u.tar.gz"
+        _archive(archive, {"./amd64/linux": b"K", "./amd64/initrd": b"I",
+                           "./amd64/grub/grub.cfg": self.GRUB})
+        e = _entry("ubuntu")
+        values = netboot.extract_boot_files(archive, e, tmp_path / "out", "26.04")
+        assert values == {"iso_url": "https://releases.ubuntu.com/26.04.1/"
+                                     "ubuntu-26.04.1-live-server-amd64.iso"}
+        moved = netboot.archive_values(e, "http://mirror.lan/ubuntu-releases", values)
+        assert netboot.boot_args(e, "http://mirror.lan/ubuntu-releases", "26.04", 1, moved) == (
+            "iso-url=http://mirror.lan/ubuntu-releases/26.04.1/"
+            "ubuntu-26.04.1-live-server-amd64.iso ip=dhcp")
+
+    def test_archive_without_its_boot_menu_is_refused(self, tmp_path):
+        archive = tmp_path / "u.tar.gz"
+        _archive(archive, {"./amd64/linux": b"K", "./amd64/initrd": b"I"})
+        with pytest.raises(netboot.NetbootError, match="amd64/grub/grub.cfg does not give"):
+            netboot.extract_boot_files(archive, _entry("ubuntu"), tmp_path / "out", "26.04")
+
+    def test_route_names_server_installer(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", lambda *a, **k: _Resp(
+            _listing("ubuntu-26.04.1-netboot-amd64.tar.gz")))
+        _login(client)
+        r = client.post("/images/netboot", data={
+            "distro": "ubuntu", "release": "26.04", "source": "mirror"}, follow_redirects=False)
+        assert r.status_code == 303
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.name == "Ubuntu 26.04 (netboot)"
+        assert img.source_url.endswith("/26.04/ubuntu-26.04.1-netboot-amd64.tar.gz")
+        db.close()
+
+
+def _netboot_image(**fields):
+    db = app_db.SessionLocal()
+    img = Image(name="n", filename="x", source="netboot", status="pending", **fields)
+    db.add(img)
+    db.commit()
+    image_id = img.id
+    db.close()
+    return image_id
+
+
+def _processed(monkeypatch, image_id):
+    monkeypatch.setattr(image_svc, "SessionLocal", app_db.SessionLocal)
+    image_svc.process_image(image_id)
+    db = app_db.SessionLocal()
+    img = db.get(Image, image_id)
+    db.expunge(img)
+    db.close()
+    return img
+
+
+class TestExtraFiles:
+    def test_arch_keeps_kernel_initrd_and_root_filesystem(self, client, monkeypatch):
+        fetched = []
+
+        def fake_download(url, dest, max_bytes=netboot.ARCHIVE_MAX_BYTES):
+            fetched.append((url, max_bytes))
+            dest.write_bytes(KERNEL if url.endswith("vmlinuz-linux") else b"data")
+        monkeypatch.setattr(netboot, "download", fake_download)
+        image_id = _netboot_image(catalog_id="arch", release="latest",
+                                  mirror="https://geo.mirror.pkgbuild.com")
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready", img.message
+        d = config.BOOTROOT_DIR / "os" / str(image_id)
+        assert (d / "arch/x86_64/airootfs.sfs").read_bytes() == b"data"
+        assert (d / "arch/x86_64/airootfs.sha512").exists()
+        assert [u.rsplit("/", 1)[-1] for u, _ in fetched] == [
+            "vmlinuz-linux", "initramfs-linux.img", "airootfs.sfs", "airootfs.sha512"]
+        # The root filesystem is far larger than a netboot archive.
+        assert fetched[2][1] == netboot.LIVE_ISO_MAX_BYTES
+        assert img.boot_args.startswith(f"archiso_http_srv=${{boot-url}}/os/{image_id}/ ")
+        assert img.size_bytes == len(KERNEL) + 12
+
+        (d / "arch/x86_64/airootfs.sfs").unlink()
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 1
+        assert db.get(Image, image_id).status == image_svc.NEEDS_REPROCESS
+        db.close()
+
+    def test_installer_pointing_at_the_mirror_is_not_reported_missing(self, client, monkeypatch):
+        """A netboot installer's inst.repo= is the mirror, not an unpacked tree
+        on Beacon, so startup must not ask for it to be reprocessed."""
+        monkeypatch.setattr(netboot, "download",
+                            lambda url, dest, max_bytes=0: dest.write_bytes(KERNEL))
+        image_id = _netboot_image(catalog_id="fedora", release="44",
+                                  mirror="https://dl.fedoraproject.org/pub/fedora/linux")
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready" and "inst.repo=https://dl.fedoraproject.org" in img.boot_args
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 0
+        db.close()
+
+
+FEDORA_SPINS = ('<a href="Fedora-Xfce-Live-43-1.6.x86_64.iso">x</a>'
+                '<a href="Fedora-Sway-Live-x86_64-43-1.6.iso">x</a>'
+                '<a href="Fedora-Spins-43-1.6-x86_64-CHECKSUM">x</a>')
+
+
+class TestTemplateLive:
+    def _fake(self, monkeypatch, pages):
+        seen = []
+
+        def fake(req, **k):
+            seen.append(req.full_url)
+            return _Resp(next(v for key, v in pages.items() if req.full_url.endswith(key)).encode())
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fake)
+        return seen
+
+    @pytest.mark.parametrize("flavour, name", [
+        ("xfce", "Fedora-Xfce-Live-43-1.6.x86_64.iso"),
+        ("sway", "Fedora-Sway-Live-x86_64-43-1.6.iso")])
+    def test_fedora_spin_both_file_name_styles(self, monkeypatch, flavour, name):
+        seen = self._fake(monkeypatch, {"/43/Spins/x86_64/iso/": FEDORA_SPINS})
+        live = _entry("fedora")["live"]
+        url = netboot.resolve_flavour_iso_url(live, flavour, "https://m", "43")
+        assert url == f"https://m/releases/43/Spins/x86_64/iso/{name}"
+        assert seen == ["https://m/releases/43/Spins/x86_64/iso/"]
+
+    def test_ubuntu_desktop_never_picks_a_flavour_iso(self, monkeypatch):
+        self._fake(monkeypatch, {"/24.04/": '<a href="kubuntu-24.04.5-desktop-amd64.iso">x</a>'
+                                            '<a href="ubuntu-24.04.5.1-desktop-amd64.iso">x</a>'
+                                            '<a href="ubuntu-24.04-desktop-amd64.iso">x</a>'
+                                            '<a href="ubuntu-24.04.4-desktop-amd64.iso">x</a>'})
+        live = _entry("ubuntu")["live"]
+        assert netboot.live_mirror(_entry("ubuntu"), live, "ubuntu") == "https://releases.ubuntu.com"
+        assert netboot.live_mirror(_entry("ubuntu"), live, "kubuntu") == "https://cdimage.ubuntu.com"
+        assert netboot.resolve_flavour_iso_url(
+            live, "ubuntu", "https://releases.ubuntu.com", "24.04") == (
+            "https://releases.ubuntu.com/24.04/ubuntu-24.04.5.1-desktop-amd64.iso")
+
+    def test_flavour_only_offered_for_its_releases(self):
+        live = _entry("rocky")["live"]
+        assert netboot.validate_flavour(live, "cinnamon", "9") == "cinnamon"
+        with pytest.raises(netboot.NetbootError, match="only published for release 9"):
+            netboot.validate_flavour(live, "cinnamon", "10")
+
+    def test_route_adds_fedora_spin(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        self._fake(monkeypatch, {"/43/Spins/x86_64/iso/": FEDORA_SPINS})
+        _login(client)
+        r = client.post("/images/netboot", data={
+            "distro": "fedora", "variant": "live", "flavour": "xfce", "live_release": "43",
+            "mirror": "", "source": "mirror"}, follow_redirects=False)
+        assert r.status_code == 303
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.name == "Fedora 43 Live Xfce"
+        assert (img.variant, img.release) == ("live", "xfce")
+        assert img.mirror == "https://dl.fedoraproject.org/pub/fedora/linux"
+        assert img.source_url.endswith("/43/Spins/x86_64/iso/Fedora-Xfce-Live-43-1.6.x86_64.iso")
+        db.close()
+
+    def test_route_refuses_installer_for_live_only_distro(self, client):
+        _login(client)
+        r = client.post("/images/netboot", data={"distro": "linuxmint", "release": "22.3"})
+        assert "Linux Mint has no installer entry" in r.text
+
+    def test_fedora_live_takes_kernel_from_the_iso(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path / "images")
+        (tmp_path / "images").mkdir()
+        (tmp_path / "images" / "f.iso").write_bytes(b"iso")
+        monkeypatch.setattr(image_svc, "_list_iso", lambda p: [
+            "boot/x86_64/loader/linux", "boot/x86_64/loader/initrd", "LiveOS/squashfs.img"])
+
+        def fake_extract(iso_path, member, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(member.encode())
+        monkeypatch.setattr(image_svc, "_extract_one", fake_extract)
+        monkeypatch.setattr(netboot, "download", lambda *a, **k: pytest.fail("no download"))
+        image_id = _netboot_image(catalog_id="fedora", variant="live", release="kde")
+        db = app_db.SessionLocal()
+        db.get(Image, image_id).filename = "f.iso"
+        db.commit()
+        db.close()
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready", img.message
+        d = config.BOOTROOT_DIR / "os" / str(image_id)
+        assert (d / "vmlinuz").read_bytes() == b"boot/x86_64/loader/linux"
+        assert (d / "filesystem.squashfs").read_bytes() == b"LiveOS/squashfs.img"
+        assert img.boot_args == (f"root=live:${{boot-url}}/os/{image_id}/filesystem.squashfs "
+                                 "rd.live.image ip=dhcp")
+
+    def test_casper_live_is_unpacked_for_nfs(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path / "images")
+        monkeypatch.setattr(config, "NFS_DIR", tmp_path / "nfs")
+        (tmp_path / "images").mkdir()
+        iso = tmp_path / "images" / "m.iso"
+        iso.write_bytes(b"iso")
+        monkeypatch.setattr(image_svc, "_list_iso", lambda p: [
+            "casper/vmlinuz", "casper/initrd.lz", "casper/filesystem.squashfs"])
+
+        def fake_extract(iso_path, member, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(member.encode())
+
+        def fake_tree(iso_path, dest):
+            (dest / "casper").mkdir(parents=True)
+            (dest / "casper" / "filesystem.squashfs").write_bytes(b"root")
+        monkeypatch.setattr(image_svc, "_extract_one", fake_extract)
+        monkeypatch.setattr(image_svc, "_extract_tree", fake_tree)
+        image_id = _netboot_image(catalog_id="linuxmint", variant="live", release="xfce")
+        db = app_db.SessionLocal()
+        db.get(Image, image_id).filename = "m.iso"
+        db.commit()
+        db.close()
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready", img.message
+        assert img.boot_args == (f"boot=casper netboot=nfs nfsroot=${{server-ip}}:/nfs/{image_id} "
+                                 "ip=dhcp")
+        assert (config.BOOTROOT_DIR / "os" / str(image_id) / "initrd").read_bytes() == (
+            b"casper/initrd.lz")
+        assert not (config.BOOTROOT_DIR / "os" / str(image_id) / "filesystem.squashfs").exists()
+        assert not iso.exists() and img.size_bytes == 4
+        assert "served over NFS" in img.message
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 0
+        db.close()
+
+
+def test_newest_centos_live_build_by_date():
+    """The x86_64 in CentOS Stream's live ISO names is not a version number."""
+    names = ["CentOS-Stream-Image-KDE-Live.x86_64-10-202608080808.iso",
+             "CentOS-Stream-Image-KDE-Live.x86_64-10-202604020202.iso"]
+    assert max(names, key=netboot._version_key) == names[0]
+    assert sorted(["ubuntu-26.04.1-x", "ubuntu-26.04-netboot-amd64"],
+                  key=netboot._version_key)[-1] == "ubuntu-26.04.1-x"
+
+
+class TestEndOfLifeSetting:
+    def _set(self, value):
+        from app.store import set_setting
+        db = app_db.SessionLocal()
+        set_setting(db, "netboot_show_eol", value)
+        db.close()
+
+    def _page_releases(self, client, distro_id):
+        page = client.get("/images").text
+        catalog = json.loads(re.search(r"var catalog = (\[.*?\]);\n", page, re.S).group(1))
+        d = next(x for x in catalog if x["id"] == distro_id)
+        return ([r["id"] for r in d["releases"]],
+                [r["id"] for r in (d.get("live") or {}).get("releases", [])])
+
+    def test_shown_by_default(self, client):
+        _login(client)
+        installer, live = self._page_releases(client, "debian")
+        assert "bullseye" in installer and "bullseye" in live
+
+    def test_hidden_when_off_and_cannot_be_added(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        _login(client)
+        self._set("0")
+        installer, live = self._page_releases(client, "debian")
+        assert "bullseye" not in installer and "bullseye" not in live
+        assert "trixie" in installer
+        r = client.post("/images/netboot", data={
+            "distro": "debian", "release": "bullseye", "source": "mirror"})
+        assert "Debian 11 (bullseye) has reached its end of life" in r.text
+        r = client.post("/images/netboot", data={
+            "distro": "opensuse-leap", "release": "15.6", "source": "mirror"})
+        assert "openSUSE Leap 15.6 has reached its end of life" in r.text
+        db = app_db.SessionLocal()
+        assert db.execute(select(Image)).first() is None
+        db.close()
+        r = client.post("/images/netboot", data={
+            "distro": "debian", "release": "trixie", "source": "mirror"},
+            follow_redirects=False)
+        assert r.status_code == 303
+
+    def test_existing_images_are_kept(self, client):
+        db = app_db.SessionLocal()
+        db.add(Image(name="Debian 11 bullseye (netboot)", filename="x", source="netboot",
+                     catalog_id="debian", release="bullseye", status="ready"))
+        db.commit()
+        db.close()
+        _login(client)
+        self._set("0")
+        assert "Debian 11 bullseye (netboot)" in client.get("/images").text
+
+    def test_settings_checkbox_saves(self, client):
+        _login(client)
+        assert 'id="netboot_show_eol" name="netboot_show_eol" checked' in client.get(
+            "/settings").text
+        client.post("/settings", data={"server_ip": "10.0.0.5"})
+        db = app_db.SessionLocal()
+        from app.store import get_setting
+        assert get_setting(db, "netboot_show_eol") == "0"
+        db.close()
+
+
+class TestArchLive:
+    def test_endeavouros_newest_dated_iso(self, monkeypatch):
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", lambda *a, **k: _Resp(_listing(
+            "EndeavourOS_Cassini_Nova-03-2023.iso", "EndeavourOS_Titan-Neo-2026.04.27.iso",
+            "EndeavourOS_Titan-Nova-2026.08.15.iso", "EndeavourOS_Titan-Nova-2026.08.15.iso.sig",
+            "EndeavourOS_Ganymede-2025.11.24.iso")))
+        live = _entry("arch")["live"]
+        assert netboot.resolve_flavour_iso_url(
+            live, "endeavouros", "https://mirror.alpix.eu/endeavouros", "latest") == (
+            "https://mirror.alpix.eu/endeavouros/iso/EndeavourOS_Titan-Nova-2026.08.15.iso")
+
+    def test_cachyos_newest_build_folder(self, monkeypatch):
+        pages = {"/ISO/desktop/": _listing("260426/", "260628/", "260809/"),
+                 "/ISO/desktop/260809/": _listing("cachyos-desktop-linux-260809.iso",
+                                                  "cachyos-desktop-linux-260809.iso.sig")}
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", lambda req, **k: _Resp(
+            next(v for key, v in sorted(pages.items(), key=lambda kv: -len(kv[0]))
+                 if req.full_url.endswith(key))))
+        live = _entry("arch")["live"]
+        assert netboot.resolve_flavour_iso_url(
+            live, "cachyos", "https://mirror.cachyos.org", "latest") == (
+            "https://mirror.cachyos.org/ISO/desktop/260809/cachyos-desktop-linux-260809.iso")
+
+    def test_route_names_the_derivative(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        monkeypatch.setattr(netboot, "resolve_flavour_iso_url",
+                            lambda live, flavour, mirror, version: f"{mirror}/iso/e.iso")
+        _login(client)
+        client.post("/images/netboot", data={
+            "distro": "arch", "variant": "live", "flavour": "endeavouros",
+            "live_release": "latest", "mirror": "", "source": "mirror"})
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.name == "EndeavourOS Live"
+        assert img.mirror == "https://mirror.alpix.eu/endeavouros"
+        db.close()
+
+    def test_cachyos_keeps_archiso_layout_with_lts_kernel(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path / "images")
+        (tmp_path / "images").mkdir()
+        (tmp_path / "images" / "c.iso").write_bytes(b"iso")
+        monkeypatch.setattr(image_svc, "_list_iso", lambda p: [
+            "arch/boot/x86_64/vmlinuz-linux-cachyos", "arch/boot/x86_64/vmlinuz-linux-cachyos-lts",
+            "arch/boot/x86_64/initramfs-linux-cachyos.img",
+            "arch/boot/x86_64/initramfs-linux-cachyos-lts.img",
+            "arch/x86_64/airootfs.sfs", "arch/x86_64/airootfs.sha512"])
+
+        def fake_extract(iso_path, member, dest):
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(member.encode())
+        monkeypatch.setattr(image_svc, "_extract_one", fake_extract)
+        image_id = _netboot_image(catalog_id="arch", variant="live", release="cachyos")
+        db = app_db.SessionLocal()
+        db.get(Image, image_id).filename = "c.iso"
+        db.commit()
+        db.close()
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready", img.message
+        d = config.BOOTROOT_DIR / "os" / str(image_id)
+        assert (d / "vmlinuz").read_bytes() == b"arch/boot/x86_64/vmlinuz-linux-cachyos-lts"
+        assert (d / "arch/x86_64/airootfs.sfs").exists()
+        assert (d / "arch/x86_64/airootfs.sha512").exists()
+        assert not (d / "filesystem.squashfs").exists()
+        assert img.boot_args.startswith(f"archiso_http_srv=${{boot-url}}/os/{image_id}/ ")
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 0
+        db.close()
+
+
+class _Stream(io.BytesIO):
+    """A response that serves data, then stalls (raises) after `cut` bytes."""
+    def __init__(self, data, status=200, headers=None, cut=None):
+        super().__init__(data)
+        self.status, self.headers, self.cut = status, headers or {}, cut
+
+    def read(self, n=-1):
+        if self.cut is not None and self.tell() >= self.cut:
+            raise TimeoutError("The read operation timed out")
+        if self.cut is not None:
+            n = min(n, self.cut - self.tell())
+        return super().read(n)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+class TestDownloadResume:
+    DATA = bytes(range(256)) * 40
+
+    def _server(self, monkeypatch, plan):
+        """plan: one function per request, given the Range offset, returning a _Stream."""
+        calls = []
+
+        def fake(req, timeout):
+            rng = req.get_header("Range")
+            offset = int(rng[6:-1]) if rng else 0
+            calls.append(offset)
+            return plan[len(calls) - 1](offset)
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fake)
+        monkeypatch.setattr(netboot, "_RETRY_PAUSE", 0)
+        return calls
+
+    def test_stall_resumes_where_it_stopped(self, tmp_path, monkeypatch):
+        d, n = self.DATA, len(self.DATA)
+        calls = self._server(monkeypatch, [
+            lambda o: _Stream(d, headers={"Content-Length": str(n)}, cut=3000),
+            lambda o: _Stream(d[o:], 206, {"Content-Range": f"bytes {o}-{n - 1}/{n}"})])
+        netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert calls == [0, 3000]
+        assert (tmp_path / "x.iso").read_bytes() == d
+        assert not (tmp_path / "x.iso.part").exists()
+
+    def test_server_ignoring_range_starts_over(self, tmp_path, monkeypatch):
+        d = self.DATA
+        self._server(monkeypatch, [lambda o: _Stream(d, cut=3000), lambda o: _Stream(d)])
+        netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert (tmp_path / "x.iso").read_bytes() == d
+
+    def test_connection_closed_early_is_resumed(self, tmp_path, monkeypatch):
+        d, n = self.DATA, len(self.DATA)
+        calls = self._server(monkeypatch, [
+            lambda o: _Stream(d[:4000], headers={"Content-Length": str(n)}),
+            lambda o: _Stream(d[o:], 206, {"Content-Range": f"bytes {o}-{n - 1}/{n}"})])
+        netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert calls == [0, 4000] and (tmp_path / "x.iso").read_bytes() == d
+
+    def test_gives_up_after_the_last_try(self, tmp_path, monkeypatch):
+        d = self.DATA
+        calls = self._server(monkeypatch, [lambda o: _Stream(d, cut=0)] * 4)
+        with pytest.raises(netboot.NetbootError, match=r"timed out \(4 tries\)"):
+            netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert len(calls) == netboot.DOWNLOAD_ATTEMPTS
+        assert not (tmp_path / "x.iso").exists() and not (tmp_path / "x.iso.part").exists()
+
+    def test_http_error_is_not_retried(self, tmp_path, monkeypatch):
+        calls = []
+
+        def fake(req, timeout):
+            calls.append(1)
+            raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, None)
+        monkeypatch.setattr(netboot.urllib.request, "urlopen", fake)
+        with pytest.raises(netboot.NetbootError, match="answered 404"):
+            netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert calls == [1]
+
+
+class TestXcpng:
+    def test_netinstall_files_laid_out_like_an_iso_image(self, client, monkeypatch):
+        import gzip as _gzip
+        files = {"vmlinuz": KERNEL, "install.img": b"INSTALL", "xen.gz": _gzip.compress(b"XEN")}
+        fetched = []
+
+        def fake_download(url, dest, max_bytes=netboot.ARCHIVE_MAX_BYTES):
+            fetched.append(url)
+            dest.write_bytes(files[url.rsplit("/", 1)[-1]])
+        monkeypatch.setattr(netboot, "download", fake_download)
+        built = []
+        monkeypatch.setattr(image_svc, "_build_xcpng_grub",
+                            lambda img, d, args, ip: built.append(args) or
+                            (d / "bootx64.efi").write_bytes(b"EFI"))
+        image_id = _netboot_image(catalog_id="xcp-ng", release="8.3",
+                                  mirror="https://updates.xcp-ng.org")
+        img = _processed(monkeypatch, image_id)
+        assert img.status == "ready", img.message
+        assert fetched == ["https://updates.xcp-ng.org/netinstall/8.3/boot/vmlinuz",
+                           "https://updates.xcp-ng.org/netinstall/8.3/install.img",
+                           "https://updates.xcp-ng.org/netinstall/8.3/boot/xen.gz"]
+        d = config.BOOTROOT_DIR / "os" / str(image_id)
+        assert sorted(p.name for p in d.iterdir()) == [
+            "bootx64.efi", "install.img", "vmlinuz", "xen"]
+        assert (d / "xen").read_bytes() == b"XEN"
+        assert (img.os_family, img.kernel_path, img.initrd_path) == (
+            "xcpng", f"os/{image_id}/xen", f"os/{image_id}/vmlinuz")
+        assert img.boot_args == image_svc.XCPNG_DOM0_ARGS == built[0]
+        assert img.name == "n"
+        db = app_db.SessionLocal()
+        assert image_svc.reconcile_statuses(db) == 0
+        db.close()
+
+    def test_default_name(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        _login(client)
+        client.post("/images/netboot", data={"distro": "xcp-ng", "release": "8.3",
+                                             "source": "mirror"})
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.name == "XCP-ng 8.3 (netboot)" and img.source_url == ""
         db.close()

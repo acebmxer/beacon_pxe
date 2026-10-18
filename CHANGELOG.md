@@ -12,6 +12,35 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Added
 
+- **The netboot catalog has the main distros beside Debian.** **Add from a netboot
+  catalog** now lists Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream,
+  openSUSE Leap, openSUSE Tumbleweed, Linux Mint, Kali Linux, Arch Linux, Alpine
+  Linux and XCP-ng, each with its installer and live desktops where the distro publishes
+  them. **Desktop** lists each distro's flavours: Ubuntu, Kubuntu, Xubuntu,
+  Lubuntu, Ubuntu MATE, Budgie, Cinnamon, Unity, Studio, Edubuntu and Kylin;
+  Fedora Workstation, KDE Plasma and the spins; the Rocky, Alma and CentOS Stream
+  live images; Tumbleweed's GNOME, KDE Plasma and Xfce; Linux Mint's Cinnamon, MATE
+  and Xfce; and, under Arch Linux, EndeavourOS and CachyOS. A desktop published only for some releases is listed for those.
+  Installers keep only their kernel and initrd where the distro's installer loads
+  the rest from the mirror (Fedora, Tumbleweed, Leap 15.6, Ubuntu Server, which
+  downloads its live-server ISO into the client's RAM, and Kali), and also keep
+  the installer's own system where the mirror's copy can change under it (Rocky,
+  Alma and CentOS Stream's runtime image, Leap 16's Agama system, Arch's root
+  filesystem, Alpine's modloop). XCP-ng's installer is Xen, its dom0 kernel and
+  `install.img` from XCP-ng's netinstall folder, booted through the same UEFI GRUB
+  chainloader as an uploaded XCP-ng ISO. Fedora, Rocky, Alma, CentOS Stream, Tumbleweed,
+  EndeavourOS and CachyOS live desktops stream their root filesystem over HTTP like
+  Debian's;
+  Ubuntu's and Linux Mint's boot with casper, which mounts its root over NFS only,
+  so their ISO is unpacked into the NFS share and then deleted. Release lists are
+  read from the mirrors for Ubuntu (default: the newest LTS), Fedora, Rocky, Alma,
+  CentOS Stream, Linux Mint, Alpine and XCP-ng, with end-of-life dates from Ubuntu's
+  distro-info-data, Fedora's Bodhi and Alpine's release list.
+
+  A catalog download that stalls or drops part-way is resumed where it stopped,
+  up to four tries, instead of failing with "Download timed out" and starting
+  the whole multi-GB ISO again on Retry.
+
 - **Custom netboot catalog entries add installers for other distros.** **Custom
   catalog entries** on the Images page takes a name, a default mirror, the boot
   files (a netboot archive and the kernel and initrd paths inside it, or a kernel
@@ -25,6 +54,11 @@ to do differently. Internal refactors that change nothing observable are omitted
   in **Add from a netboot catalog** marked "(custom)", and are kept in the
   database, so a backup carries them. A downloaded kernel that is not a Linux
   kernel (an error page, say) is refused.
+
+  An installer from a custom entry whose kernel arguments name `inst.repo=` or
+  `inst.stage2=` (Fedora's) was marked "needs reprocess" at every start, because
+  the startup check looked for an unpacked ISO tree that a netboot image never
+  has; it now stays ready.
 
 - **Debian installers and live desktops can be added without keeping an ISO.** **Add from a netboot
   catalog** on the Images page takes a release (`14`, `trixie`, `bookworm`, or any
@@ -46,7 +80,10 @@ to do differently. Internal refactors that change nothing observable are omitted
   shown when the mirror is out of reach. A release is marked "end of life" once
   Debian's long-term support for it has ended, using the dates Debian publishes
   (distro-info-data); it stays selectable, and a release the mirror has dropped
-  stays listed if the catalog names it. An installer image's default name carries the
+  stays listed if the catalog names it. **Offer end-of-life releases** under
+  **Settings → Netboot catalog** (on by default) hides them from every distro's
+  Release list and refuses adding one when turned off; images already added are
+  kept. An installer image's default name carries the
   version number as well as the codename ("Debian 11 bullseye (netboot)").
 
   A live desktop whose Mirror folder holds a different release than the one

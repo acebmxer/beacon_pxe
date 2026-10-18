@@ -1671,3 +1671,285 @@ class TestCurrentBuild:
         assert _REAL_CACHED_BUILD(entry, "trixie") == "13.7"
         assert _REAL_CACHED_BUILD(entry, "trixie") == "13.7"
         assert calls == ["trixie"]
+
+
+# Taken before conftest's fixture stubs it for every test.
+_REAL_CACHED_PRERELEASES = netboot._cached_prereleases
+
+
+class TestPreReleases:
+    """Betas, release candidates and development releases, read from fake
+    mirrors laid out as the real ones are (checked 2026-10-17)."""
+
+    def _serve(self, monkeypatch, pages):
+        TestListingDiscovery._serve(self, monkeypatch, pages)
+
+    def _set(self, value):
+        from app.store import set_setting
+        db = app_db.SessionLocal()
+        set_setting(db, "netboot_show_prerelease", value)
+        db.close()
+
+    def _page(self, client, distro_id):
+        page = client.get("/images").text
+        catalog = json.loads(re.search(r"var catalog = (\[.*?\]);\n", page, re.S).group(1))
+        return next(x for x in catalog if x["id"] == distro_id)
+
+    def test_fedora_beta_from_releases_test(self, monkeypatch):
+        self._serve(monkeypatch, {"/releases/test/": _listing("44_Beta/", "45_Beta/")})
+        found = netboot.discover_prereleases(_entry("fedora"))
+        assert [(p["id"], p["label"]) for p in found] == [
+            ("45_Beta", "Fedora 45 Beta — pre-release"), ("44_Beta", "Fedora 44 Beta "
+                                                                "— pre-release")]
+        entry = netboot.with_prereleases(_entry("fedora"), found)
+        # 44 is out, so its leftover beta is not offered; the release stays the default.
+        assert [r["id"] for r in entry["releases"]] == ["45_Beta", "44", "43"]
+        assert [r["id"] for r in entry["live"]["releases"]] == ["45_Beta", "44", "43"]
+        assert [r["id"] for r in entry["releases"] if r.get("default")] == ["44"]
+
+    def test_fedora_beta_boots_from_releases_test(self):
+        fedora, mirror = _entry("fedora"), "https://dl.fedoraproject.org/pub/fedora/linux"
+        urls = dict(netboot.boot_file_urls(fedora, mirror, "45_Beta"))
+        assert urls["Kernel"] == (f"{mirror}/releases/test/45_Beta/Everything/x86_64/os/"
+                                  "images/pxeboot/vmlinuz")
+        assert netboot.boot_args(fedora, mirror, "45_Beta") == (
+            f"inst.repo={mirror}/releases/test/45_Beta/Everything/x86_64/os ip=dhcp")
+        # A release is left as it was.
+        assert dict(netboot.boot_file_urls(fedora, mirror, "44"))["Kernel"].startswith(
+            f"{mirror}/releases/44/")
+
+    def test_fedora_beta_live_iso_from_releases_test(self, monkeypatch):
+        self._serve(monkeypatch, {"/releases/test/45_Beta/KDE/x86_64/iso": _listing(
+            "Fedora-KDE-Desktop-Live-45_Beta-1.3.x86_64.iso",
+            "Fedora-KDE-iso-45_Beta-1.3-x86_64-CHECKSUM")})
+        e = _entry("fedora")
+        assert netboot.resolve_release_iso_url(
+            e, e["live"], "kde", e["default_mirror"], "45_Beta") == (
+            "https://dl.fedoraproject.org/pub/fedora/linux/releases/test/45_Beta/KDE/x86_64/"
+            "iso/Fedora-KDE-Desktop-Live-45_Beta-1.3.x86_64.iso")
+
+    def test_rocky_betas_on_the_staging_mirror_newest_per_major(self, monkeypatch):
+        self._serve(monkeypatch, {"stg/rocky/": _listing(
+            "10/", "10-BETA/", "10.2-BETA/", "10.2-RC2/", "10.3-BETA/", "9.9-BETA/", "9.9/")})
+        found = netboot.discover_prereleases(_entry("rocky"))
+        assert [p["id"] for p in found] == ["10.3-BETA", "9.9-BETA"]
+        assert found[0]["mirror"] == "https://dl.rockylinux.org/stg/rocky"
+        rocky = netboot.for_release(_entry("rocky"), "10.3-BETA")
+        assert rocky["default_mirror"] == "https://dl.rockylinux.org/stg/rocky"
+        assert netboot.for_release(_entry("rocky"), "10")["default_mirror"] == (
+            "https://dl.rockylinux.org/pub/rocky")
+
+    def test_rocky_beta_live_iso_and_desktops_of_its_major(self, monkeypatch):
+        e = _entry("rocky")
+        self._serve(monkeypatch, {"stg/rocky/9.9-BETA/live/x86_64": _listing(
+            "Rocky-9-XFCE-x86_64-latest.iso", "Rocky-9.9-XFCE-x86_64-20261002.0.iso")})
+        lv = netboot.live_for_release(e, e["live"], "9.9-BETA")
+        assert lv["default_mirror"] == "https://dl.rockylinux.org/stg/rocky"
+        assert netboot.resolve_release_iso_url(
+            e, e["live"], "xfce", lv["default_mirror"], "9.9-BETA").endswith(
+            "/stg/rocky/9.9-BETA/live/x86_64/Rocky-9.9-XFCE-x86_64-20261002.0.iso")
+        # Xfce is published for 9 and 8, so for 9.9's beta too, not for 10.3's.
+        assert netboot.validate_flavour(e["live"], "xfce", "9.9-BETA") == "xfce"
+        with pytest.raises(netboot.NetbootError, match="only published"):
+            netboot.validate_flavour(e["live"], "xfce", "10.3-BETA")
+
+    def test_released_point_release_hides_its_beta(self, monkeypatch):
+        self._serve(monkeypatch, {"vault.almalinux.org/": _listing(
+            "8.10-beta/", "9.8-beta/", "9.9-beta/", "10.2-beta/")})
+        found = netboot.discover_prereleases(_entry("almalinux"))
+        assert [p["id"] for p in found] == ["10.2-beta", "9.9-beta", "8.10-beta"]
+        alma = netboot.with_builds(_entry("almalinux"), {"10": "10.2", "9": "9.8", "8": "8.10"})
+        entry = netboot.with_prereleases(alma, found)
+        assert [r["id"] for r in entry["releases"]][:2] == ["9.9-beta", "10"]
+        # Alma publishes no live desktops for its betas.
+        assert not any(r.get("prerelease") for r in entry["live"]["releases"])
+
+    def test_alpine_edge_and_kali_dev(self):
+        alpine, mirror = _entry("alpine"), "https://dl-cdn.alpinelinux.org/alpine"
+        assert [p["id"] for p in netboot.discover_prereleases(alpine)] == ["edge"]
+        urls = dict(netboot.boot_file_urls(alpine, mirror, "edge"))
+        assert urls["Initrd"] == f"{mirror}/edge/releases/x86_64/netboot/initramfs-lts"
+        assert netboot.for_release(alpine, "edge")["extra_files"][0]["url"] == (
+            "{mirror}/edge/releases/x86_64/netboot/modloop-lts")
+        assert f"alpine_repo={mirror}/edge/main " in netboot.boot_args(alpine, mirror, "edge", 3)
+        assert "/v3.24/" in dict(netboot.boot_file_urls(alpine, mirror, "3.24"))["Kernel"]
+        kali = netboot.discover_prereleases(_entry("kali"))
+        assert [(p["id"], p["label"]) for p in kali] == [
+            ("kali-dev", "Kali Linux kali-dev (development) — pre-release")]
+
+    def test_kali_dev_installer_naming_kali_rolling_is_accepted(self, tmp_path):
+        archive = tmp_path / "nb.tar.gz"
+        _archive(archive, {"./version.info": b"Debian version:  kali-rolling\n",
+                           "./debian-installer/amd64/linux": b"K",
+                           "./debian-installer/amd64/initrd.gz": b"I"})
+        netboot.extract_boot_files(archive, _entry("kali"), tmp_path / "a", "kali-dev")
+        assert (tmp_path / "a" / "vmlinuz").read_bytes() == b"K"
+
+    def test_leap_release_candidate_from_opensuse_states(self, monkeypatch):
+        states = json.dumps({"Leap": [
+            {"version": "16.1", "state": "RC"}, {"version": "16.0", "state": "Stable"},
+            {"version": "15.5", "state": "EOL"}, {"version": "x y", "state": "Beta"}]})
+        self._serve(monkeypatch, {"get.opensuse.org": states.encode()})
+        found = netboot.discover_prereleases(_entry("opensuse-leap"))
+        assert [(p["id"], p["label"]) for p in found] == [
+            ("16.1", "openSUSE Leap 16.1 RC — pre-release")]
+        entry = netboot.with_prereleases(_entry("opensuse-leap"), found)
+        assert [r["id"] for r in entry["releases"]] == ["16.1", "16.0", "15.6"]
+
+    def test_mint_beta_live_iso_from_testing(self, monkeypatch):
+        self._serve(monkeypatch, {"/linuxmint/testing": _listing(
+            "linuxmint-23-cinnamon-64bit-beta.iso", "linuxmint-23-xfce-64bit-beta.iso",
+            "lmde-7-cinnamon-64bit-beta.iso")})
+        e = _entry("linuxmint")
+        found = netboot.discover_prereleases(e)
+        assert [p["id"] for p in found] == ["23-beta"]
+        entry = netboot.with_prereleases(e, found)
+        assert entry["live"]["releases"][0]["label"] == "Linux Mint 23 Beta — pre-release"
+        assert netboot.resolve_release_iso_url(
+            e, e["live"], "xfce", e["default_mirror"], "23-beta") == (
+            "https://mirrors.kernel.org/linuxmint/testing/linuxmint-23-xfce-64bit-beta.iso")
+
+    def test_ubuntu_release_before_its_day_is_a_pre_release(self, monkeypatch):
+        csv_text = (b"version,codename,series,created,release,eol,eol-server\n"
+                    b"26.04 LTS,Resolute Raccoon,resolute,2025-10-09,2026-04-23,2031-05-29\n"
+                    b"28.04 LTS,Xyz,xyz,2027-10-16,2099-04-22,2099-05-29\n")
+        self._serve(monkeypatch, {"ubuntu.csv": csv_text, "releases.ubuntu.com/": _listing(
+            "24.04/", "26.04/", "28.04/")})
+        entry = netboot.with_discovered(_entry("ubuntu"),
+                                        netboot.discover_releases(_entry("ubuntu")))
+        rel = {r["id"]: r for r in entry["releases"]}
+        assert rel["28.04"]["prerelease"] and rel["28.04"]["label"] == (
+            "Ubuntu 28.04 — pre-release")
+        # The newest LTS is the default only once it is out.
+        assert [r["id"] for r in entry["releases"] if r.get("default")] == ["26.04"]
+        assert not rel["26.04"].get("prerelease")
+
+    def test_ubuntu_beta_files_used_only_when_there_are_no_final_ones(self, monkeypatch):
+        ubuntu = _entry("ubuntu")
+        both = _listing("ubuntu-26.10-beta-netboot-amd64.tar.gz",
+                        "ubuntu-26.10-netboot-amd64.tar.gz")
+        self._serve(monkeypatch, {"/26.10": both})
+        assert netboot.resolve_archive_url(ubuntu, "https://releases.ubuntu.com", "26.10") == (
+            "https://releases.ubuntu.com/26.10/ubuntu-26.10-netboot-amd64.tar.gz")
+        self._serve(monkeypatch, {"/27.04": _listing("ubuntu-27.04-beta-netboot-amd64.tar.gz")})
+        assert netboot.resolve_archive_url(ubuntu, "https://releases.ubuntu.com", "27.04") == (
+            "https://releases.ubuntu.com/27.04/ubuntu-27.04-beta-netboot-amd64.tar.gz")
+        # Kubuntu's beta is in releases/27.04/beta/; release/ does not exist yet.
+        self._serve(monkeypatch, {"/27.04/release": None, "/27.04/beta": _listing(
+            "kubuntu-27.04-beta-desktop-amd64.iso")})
+        assert netboot.resolve_release_iso_url(
+            ubuntu, ubuntu["live"], "kubuntu", "https://cdimage.ubuntu.com", "27.04") == (
+            "https://cdimage.ubuntu.com/kubuntu/releases/27.04/beta/"
+            "kubuntu-27.04-beta-desktop-amd64.iso")
+        # A release with neither still says what is missing where it looked first.
+        self._serve(monkeypatch, {"/26.04/release": _listing("x.iso"), "/26.04/beta": None})
+        with pytest.raises(netboot.NetbootError, match="26.04/release/"):
+            netboot.resolve_release_iso_url(
+                ubuntu, ubuntu["live"], "kubuntu", "https://cdimage.ubuntu.com", "26.04")
+
+    @pytest.mark.parametrize("distro_id", TestBuiltInDistros.IDS)
+    def test_every_pre_release_template_fills(self, distro_id):
+        e = _entry(distro_id)
+        spec = e.get("prerelease") or {}
+        for key, value in spec.get("overrides", {}).items():
+            if key == "extra_files":
+                for f in value:
+                    netboot.validate_source_url(_fill(f["url"]))
+            elif key == "boot_args":
+                args = _fill(value.replace("{number}", "1"))
+                assert "{" not in args.replace("${", "")
+            else:
+                netboot.validate_source_url(_fill(value.replace("{number}", "1")))
+        live = spec.get("live")
+        if isinstance(live, dict):
+            for f in e["live"]["flavours"]:
+                lv = netboot.live_for_flavour(netboot.live_for_release(
+                    e, e["live"], {"fedora": "45_Beta", "rocky": "10.3-BETA",
+                                   "linuxmint": "23-beta"}[distro_id]), f["id"])
+                fields = netboot._flavour_fields(e["live"], f["id"])
+                netboot.validate_source_url(_fill(lv["folder"], **fields))
+                re.compile(lv["iso_regex"].format(**fields, flavour="f", version="1"))
+        for p in spec.get("ids", []):
+            assert netboot._prerelease_match(e, p["id"])
+
+    def test_lookups_are_kept_for_a_while(self, monkeypatch):
+        calls = []
+        monkeypatch.setattr(netboot, "discover_prereleases",
+                            lambda entry: calls.append(entry["id"]) or [])
+        monkeypatch.setattr(netboot, "_prerelease_cache", {})
+        assert _REAL_CACHED_PRERELEASES(_entry("fedora")) == []
+        assert _REAL_CACHED_PRERELEASES(_entry("fedora")) == []
+        assert _REAL_CACHED_PRERELEASES(_entry("centos-stream")) is None
+        assert calls == ["fedora"]
+
+    def test_shown_by_default(self, client):
+        _login(client)
+        debian = self._page(client, "debian")
+        assert "forky" in [r["id"] for r in debian["releases"]]
+        assert "forky" in [r["id"] for r in debian["live"]["releases"]]
+
+    def test_hidden_when_off_and_cannot_be_added(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        # No mirror answers: the fixed ones (Alpine's edge) are listed all the same,
+        # and a typed name the distro marks as a pre-release is still known.
+        self._serve(monkeypatch, {})
+        monkeypatch.setattr(netboot, "_cached_prereleases", netboot.discover_prereleases)
+        _login(client)
+        self._set("0")
+        debian = self._page(client, "debian")
+        assert "forky" not in [r["id"] for r in debian["releases"]]
+        assert "forky" not in [r["id"] for r in debian["live"]["releases"]]
+        assert "trixie" in [r["id"] for r in debian["releases"]]
+        assert "edge" not in [r["id"] for r in self._page(client, "alpine")["releases"]]
+        for distro, release, name in [("debian", "forky", "Debian 14 (forky, testing"),
+                                      ("debian", "sid", "Debian sid"),
+                                      ("fedora", "45_Beta", "Fedora 45_Beta"),
+                                      ("alpine", "edge", "Alpine Linux edge (development)")]:
+            r = client.post("/images/netboot", data={
+                "distro": distro, "release": release, "source": "mirror"})
+            assert f"{name}" in r.text and "is a pre-release. Turn on Offer pre-releases" in r.text
+        db = app_db.SessionLocal()
+        assert db.execute(select(Image)).first() is None
+        db.close()
+        r = client.post("/images/netboot", data={
+            "distro": "fedora", "release": "44", "source": "mirror"}, follow_redirects=False)
+        assert r.status_code == 303
+
+    def test_beta_added_on_its_own_mirror_with_its_name(self, client, tmp_path, monkeypatch):
+        monkeypatch.setattr(config, "IMAGE_DIR", tmp_path)
+        monkeypatch.setattr(image_svc, "process_image", lambda i: None)
+        self._serve(monkeypatch, {"stg/rocky/": _listing("10.3-BETA/")})
+        monkeypatch.setattr(netboot, "_cached_prereleases", netboot.discover_prereleases)
+        _login(client)
+        rocky = self._page(client, "rocky")
+        assert rocky["releases"][0]["mirror"] == "https://dl.rockylinux.org/stg/rocky"
+        # The page sends the box as it stands; the usual mirror is swapped for the beta's.
+        client.post("/images/netboot", data={
+            "distro": "rocky", "release": "10.3-BETA", "source": "mirror",
+            "mirror": "https://dl.rockylinux.org/pub/rocky"})
+        db = app_db.SessionLocal()
+        img = db.execute(select(Image)).scalar_one()
+        assert img.mirror == "https://dl.rockylinux.org/stg/rocky"
+        assert img.name == "Rocky Linux 10.3 Beta (netboot)"
+        db.close()
+
+    def test_custom_entry_pre_release(self, db):
+        entry = netboot.validate_entry({
+            "name": "Thing", "default_mirror": "https://m.example/thing",
+            "kernel_url": "{mirror}/{version}/vmlinuz", "initrd_url": "{mirror}/{version}/initrd",
+            "releases": [{"id": "2"}, {"id": "3-rc1", "prerelease": True}]})
+        assert entry["releases"][1]["prerelease"] is True
+        assert netboot._without(entry, "prerelease")["releases"] == [entry["releases"][0]]
+        with pytest.raises(netboot.NetbootError, match="prerelease must be true or false"):
+            netboot.validate_entry(dict(entry, releases=[{"id": "2", "prerelease": "yes"}]))
+
+    def test_settings_checkbox_saves(self, client):
+        _login(client)
+        assert ('id="netboot_show_prerelease" name="netboot_show_prerelease" checked'
+                in client.get("/settings").text)
+        client.post("/settings", data={"server_ip": "10.0.0.5"})
+        db = app_db.SessionLocal()
+        from app.store import get_setting
+        assert get_setting(db, "netboot_show_prerelease") == "0"
+        db.close()

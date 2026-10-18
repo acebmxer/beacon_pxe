@@ -79,10 +79,53 @@ def has_installer(entry: dict) -> bool:
 def for_release(entry: dict, release: str) -> dict:
     """The entry with a release's own boot arguments and extra files, where the
     catalog gives that release different ones (openSUSE Leap 15.6 installs with
-    YaST, 16 with Agama)."""
+    YaST, 16 with Agama). A pre-release the distro keeps somewhere else (Fedora's
+    releases/test/, Rocky's staging mirror, Alpine's edge) gets its own boot file
+    URLs, arguments and mirror from the entry's "prerelease" part."""
     rel = next((r for r in entry.get("releases", []) if r["id"] == release), None)
     over = {k: rel[k] for k in ("boot_args", "extra_files") if rel and k in rel}
+    over.update(_prerelease_overrides(entry, release, entry.get("prerelease", {})))
     return dict(entry, **over) if over else entry
+
+
+def _prerelease_match(entry: dict, release: str) -> re.Match | None:
+    """The match if release names one of the distro's pre-releases (45_Beta,
+    10.3-BETA, edge); the "number" group is its version, where it has one."""
+    pattern = (entry.get("prerelease") or {}).get("match")
+    return re.fullmatch(pattern, release) if pattern else None
+
+
+def _prerelease_overrides(entry: dict, release: str, spec: dict) -> dict:
+    """The templates spec["overrides"] and spec["default_mirror"] give a
+    pre-release, with {number} filled in ({mirror} and {version} are left for
+    the usual formatting). {} if release is not one of the distro's pre-releases."""
+    m = _prerelease_match(entry, release)
+    if not m:
+        return {}
+    number = m.groupdict().get("number") or release
+    over = {}
+    for key, value in spec.get("overrides", {}).items():
+        if key == "iso_regex":
+            over[key] = value.replace("{number}", re.escape(number))
+        elif key == "extra_files":
+            over[key] = [dict(f, url=f["url"].replace("{number}", number)) for f in value]
+        else:
+            over[key] = value.replace("{number}", number)
+    if spec.get("default_mirror"):
+        over["default_mirror"] = spec["default_mirror"]
+    return over
+
+
+def live_for_release(entry: dict, live: dict, release: str) -> dict:
+    """The live settings for one release: a pre-release's ISOs can sit in another
+    folder or mirror, or carry another file name (Fedora's releases/test/,
+    Rocky's staging mirror, Linux Mint's testing/)."""
+    spec = (entry.get("prerelease") or {}).get("live")
+    if not isinstance(spec, dict):
+        return live
+    over = _prerelease_overrides(entry, release, {
+        "overrides": spec, "default_mirror": entry["prerelease"].get("default_mirror")})
+    return dict(live, **over) if over else live
 
 
 def _past(day: str | None) -> bool:
@@ -287,8 +330,30 @@ def _discover_listing(entry: dict) -> list[dict] | None:
     if not newest:
         return None
     dates = _eol_dates(entry)
-    return [{"number": i, "codename": i, "testing": False, "eol": dates.get(i.lower())}
-            for i in newest]
+    ahead = _unreleased(entry)
+    return [{"number": i, "codename": i, "testing": i.lower() in ahead,
+             "eol": dates.get(i.lower())} for i in newest]
+
+
+def _unreleased(entry: dict) -> set[str]:
+    """Series and version numbers whose release day is still ahead, from
+    distro-info-data's CSV: Ubuntu's folder for a release is there from its beta
+    on. Empty if the entry has no CSV or it cannot be read."""
+    url = entry.get("eol_dates_url")
+    text = _fetch_text(url) if url else None
+    if not text:
+        return set()
+    today = datetime.date.today().isoformat()
+    ahead = set()
+    for row in csv.DictReader(io.StringIO(text)):
+        day = (row.get("release") or "").strip()
+        if not _iso_day(day) or day <= today:
+            continue
+        ahead.add((row.get("series") or "").strip().lower())
+        number = (row.get("version") or "").split(" ")[0].strip()
+        if number:
+            ahead.add(number)
+    return ahead
 
 
 def discover_releases(entry: dict) -> list[dict] | None:
@@ -340,14 +405,18 @@ def with_discovered(entry: dict, found: list[dict]) -> dict:
     # Ubuntu's default is the newest long-term release, not the newest one.
     prefer = (entry.get("release_listing") or {}).get("prefer")
     if prefer:
-        stable = next((f["codename"] for f in found if re.search(prefer, f["codename"])),
-                      stable)
+        stable = next((f["codename"] for f in found
+                       if re.search(prefer, f["codename"]) and not f["testing"]), stable)
 
     def merged(listed: list[dict], make) -> list[dict]:
         by_id = {r["id"]: r for r in listed}
         out = []
         for f in found:
             rel = dict(by_id.get(f["codename"]) or make(f))
+            if f["testing"]:
+                rel["prerelease"] = True
+                if "pre-release" not in rel["label"]:
+                    rel["label"] += " — pre-release"
             if f.get("eol"):
                 rel["eol"] = f["eol"]
             rel.pop("default", None)
@@ -433,11 +502,13 @@ def _release_ids(entry: dict) -> list[str]:
 def page_catalog(db=None) -> list[dict]:
     """The catalog as the Images page shows it: each distro's release list as
     its mirror carries it now, each release with the newest build published for
-    it, or the catalog's own list if the mirror is out of reach. Custom entries
-    follow the built-in ones. The mirrors are asked at the same time, so an
-    unreachable one costs one timeout, not one per distro."""
+    it, or the catalog's own list if the mirror is out of reach, and the
+    distro's pre-releases at the top. Custom entries follow the built-in ones.
+    The mirrors are asked at the same time, so an unreachable one costs one
+    timeout, not one per distro."""
     distros = load_catalog()
     with ThreadPoolExecutor(max_workers=8) as pool:
+        pending = pool.map(_cached_prereleases, distros)
         founds = list(pool.map(_cached_discovery, distros))
         out = [with_discovered(d, found) if found else d for d, found in zip(distros, founds)]
         wanted = [(d, rid) for d in out if d.get("current_build") for rid in _release_ids(d)]
@@ -446,10 +517,14 @@ def page_catalog(db=None) -> list[dict]:
         for (d, rid), build in zip(wanted, found):
             if build:
                 builds.setdefault(d["id"], {})[rid] = build
+        pres = list(pending)
     out = [with_builds(d, builds[d["id"]]) if d["id"] in builds else d for d in out]
+    out = [with_prereleases(d, p) if p else d for d, p in zip(out, pres)]
     out += custom_entries(db) if db is not None else []
     if db is not None and not show_eol(db):
-        out = [_without_ended(d) for d in out]
+        out = [_without(d, "ended") for d in out]
+    if db is not None and not show_prerelease(db):
+        out = [_without(d, "prerelease") for d in out]
     return out
 
 
@@ -458,14 +533,159 @@ def show_eol(db) -> bool:
     return get_setting(db, "netboot_show_eol") == "1"
 
 
-def _without_ended(entry: dict) -> dict:
+def show_prerelease(db) -> bool:
+    """Settings → Netboot catalog → Offer pre-releases."""
+    return get_setting(db, "netboot_show_prerelease") == "1"
+
+
+def _without(entry: dict, flag: str) -> dict:
+    """The entry without its releases marked flag ("ended", "prerelease")."""
     entry = copy.deepcopy(entry)
     if "releases" in entry:
-        entry["releases"] = [r for r in entry["releases"] if not r.get("ended")]
+        entry["releases"] = [r for r in entry["releases"] if not r.get(flag)]
     if entry.get("live"):
         entry["live"]["releases"] = [r for r in entry["live"].get("releases", [])
-                                     if not r.get("ended")]
+                                     if not r.get(flag)]
     return entry
+
+
+# Pre-releases: betas, release candidates and development releases a distro
+# publishes beside its releases (Fedora's releases/test/45_Beta, Rocky's and
+# Alma's x.y-beta trees, openSUSE Leap's RC, Linux Mint's testing/ ISOs,
+# Alpine's edge, Kali's kali-dev). The entry's "prerelease" part says how to find
+# them: a folder listing, the distro's own release states (openSUSE), or a fixed
+# list. Debian's testing suite is found with its releases (number_lookup), and a
+# release whose day is still ahead by distro-info-data (Ubuntu's beta) is marked
+# with its releases.
+
+def discover_prereleases(entry: dict) -> list[dict] | None:
+    """The pre-releases the distro publishes now, newest first, each as a release
+    for the Release list. None if the mirror cannot be read."""
+    spec = entry.get("prerelease") or {}
+    mirror = spec.get("default_mirror") or entry["default_mirror"]
+    found = [dict(item) for item in spec.get("ids", [])]
+    listing = spec.get("listing")
+    if listing:
+        try:
+            text = _read_listing(listing["url"].format(mirror=mirror).rstrip("/"),
+                                 _DISCOVERY_TIMEOUT)
+        except NetbootError:
+            return None
+        named = {}
+        for m in re.finditer(r'href="(?:\./)?' + listing["regex"] + '"', text):
+            named[listing["id"].format(**m.groupdict())] = m.groupdict()
+        # Old betas stay in some folders (Alma's vault keeps every one since 8.4):
+        # only the newest of each major release can still be ahead of it.
+        majors = set()
+        for rid in sorted(named, key=_version_key, reverse=True):
+            major = _version_key(named[rid].get("number") or rid)[:1]
+            if major and tuple(major) in majors:
+                continue
+            majors.add(tuple(major))
+            found.append(dict(named[rid], id=rid, label=listing["label"]))
+    states = spec.get("state_json")
+    if states:
+        text = _fetch_text(states["url"])
+        try:
+            items = json.loads(text).get(states["list"], []) if text else None
+        except (ValueError, AttributeError):
+            items = None
+        if not isinstance(items, list):
+            return None
+        for item in items:
+            if not isinstance(item, dict) or item.get(states["state"]) in states["released"]:
+                continue
+            number, stage = str(item.get(states["id"], "")), str(item.get(states["state"], ""))
+            if re.fullmatch(r"[A-Za-z0-9 ._-]{1,20}", stage):
+                found.append({"id": number, "number": number, "stage": stage,
+                              "label": states["label"]})
+    out = []
+    for item in found:
+        if not _RELEASE_RE.fullmatch(item["id"]):
+            continue
+        name = item["label"].format(name=entry["name"], number=item.get("number", ""),
+                                    stage=item.get("stage", ""))
+        rel = {"id": item["id"], "name": name, "label": f"{name} — pre-release",
+               "prerelease": True}
+        if item.get("number"):
+            rel["number"] = item["number"]
+        if spec.get("default_mirror"):
+            rel["mirror"] = spec["default_mirror"]
+        out.append(rel)
+    return out
+
+
+_prerelease_cache: dict[str, tuple[float, list[dict] | None]] = {}
+
+
+def _cached_prereleases(entry: dict) -> list[dict] | None:
+    if not (entry.get("prerelease") or {}).keys() & {"ids", "listing", "state_json"}:
+        return None
+    now = time.monotonic()
+    hit = _prerelease_cache.get(entry["id"])
+    if hit and hit[0] > now:
+        return hit[1]
+    found = discover_prereleases(entry)
+    if found is None:
+        log.info("Pre-release lookup for %s failed; none are listed", entry["id"])
+    _prerelease_cache[entry["id"]] = (
+        now + (_DISCOVERY_TTL if found is not None else _DISCOVERY_RETRY), found)
+    return found
+
+
+def _superseded(number: str | None, released: list[str]) -> bool:
+    """True once the distro has released that version or a newer one of the
+    same major release (Mint's 22.3 beta once 22.3 is out, Alma's 9.8 beta
+    once 9.8 is out), so a leftover beta is not offered."""
+    want = _version_key(number or "")
+    if not want:
+        return False
+    for version in released:
+        have = _version_key(version)
+        if have and have[0] == want[0] and have[:len(want)] >= want:
+            return True
+    return False
+
+
+def with_prereleases(entry: dict, found: list[dict]) -> dict:
+    """The entry with the distro's pre-releases at the top of its Release lists
+    (the installer's, and the live desktop's unless the pre-release has none).
+    One the distro has since released is left out."""
+    entry = copy.deepcopy(entry)
+    spec = entry.get("prerelease") or {}
+    lists = []
+    if has_installer(entry):
+        lists.append(entry.setdefault("releases", []))
+    if entry.get("live") and spec.get("live") is not False:
+        lists.append(entry["live"].setdefault("releases", []))
+    for listed in lists:
+        released = [v for r in listed if not r.get("prerelease")
+                    for v in (r["id"], r.get("number"), r.get("build")) if v]
+        ids = {r["id"] for r in listed}
+        listed[:0] = [dict(p) for p in found
+                      if p["id"] not in ids and not _superseded(p.get("number"), released)]
+    return entry
+
+
+def prerelease_release(entry: dict, release: str, live: bool = False) -> dict | None:
+    """The release, if it is a pre-release, by the same lists the Images page
+    shows; a typed name the distro marks as a pre-release (45_Beta, edge,
+    Debian's sid) counts too."""
+    if not entry.get("custom"):
+        found = _cached_discovery(entry)
+        if found:
+            entry = with_discovered(entry, found)
+        pres = _cached_prereleases(entry)
+        if pres:
+            entry = with_prereleases(entry, pres)
+    listed = (entry.get("live") or {}).get("releases", []) if live else entry.get("releases", [])
+    rel = next((r for r in listed if r["id"] == release), None)
+    if rel is not None:
+        return rel if rel.get("prerelease") else None
+    if _prerelease_match(entry, release) or (
+            entry.get("number_lookup") and release.lower() in ("sid", "unstable", "testing")):
+        return {"id": release, "label": f"{entry['name']} {release}"}
+    return None
 
 
 def ended_release(entry: dict, release: str, live: bool = False) -> dict | None:
@@ -526,12 +746,21 @@ def resolve_archive_url(entry: dict, mirror: str, release: str) -> str:
         return archive_url(entry, mirror, release)
     folder = spec["folder"].format(mirror=mirror, version=release)
     listing = _read_listing(folder)
-    rx = re.compile(r"(?<![\w.-])" + spec["regex"].format(version=re.escape(release)))
-    names = sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
+    names = _listed_names(listing, spec["regex"], release)
+    beta = (entry.get("prerelease") or {}).get("archive_regex")
+    if not names and beta:
+        # Before its release day the folder holds only the beta's archive
+        # (ubuntu-26.10-beta-netboot-amd64.tar.gz).
+        names = _listed_names(listing, beta, release)
     if not names:
         raise NetbootError(f"No {entry['name']} {release} netboot archive was found at "
                            f"{folder}/. Check the release and the mirror.")
     return f"{folder}/{names[-1]}"
+
+
+def _listed_names(listing: str, regex: str, release: str) -> list[str]:
+    rx = re.compile(r"(?<![\w.-])" + regex.format(version=re.escape(release)))
+    return sorted({m.group(0) for m in rx.finditer(listing)}, key=_version_key)
 
 
 def boot_args(entry: dict, mirror: str, release: str, image_id: int = 0,
@@ -572,7 +801,10 @@ def validate_flavour(live: dict, flavour: str, release: str | None = None) -> st
     found = next((f for f in live.get("flavours", []) if f["id"] == flavour), None)
     if found is None:
         raise NetbootError("Choose one of the listed desktops.")
-    if release is not None and found.get("only") and release not in found["only"]:
+    # A pre-release counts as its major release (Rocky's 9.9-BETA as 9).
+    major = re.match(r"[0-9]+", release or "")
+    if (release is not None and found.get("only") and release not in found["only"]
+            and not (major and major.group(0) in found["only"])):
         raise NetbootError(f"{found['label']} is only published for release "
                            f"{', '.join(found['only'])}.")
     return flavour
@@ -599,10 +831,12 @@ def _flavour_fields(live: dict, flavour: str) -> dict:
             if isinstance(v, str) and k not in ("flavour", "version", "mirror", "dir_regex")}
 
 
-def resolve_flavour_iso_url(live: dict, flavour: str, mirror: str, version: str) -> str:
+def resolve_flavour_iso_url(live: dict, flavour: str, mirror: str, version: str,
+                            over: dict | None = None) -> str:
     """The newest live ISO of a flavour and release, for a distro whose ISO folder
-    follows a template ({mirror}/releases/{version}/Spins/x86_64/iso)."""
-    lv = live_for_flavour(live, flavour)
+    follows a template ({mirror}/releases/{version}/Spins/x86_64/iso). over
+    replaces the folder or file pattern, even a flavour's own."""
+    lv = dict(live_for_flavour(live, flavour), **(over or {}))
     folder = lv["folder"].format(mirror=mirror, version=version, flavour=flavour,
                                  **_flavour_fields(live, flavour))
     if lv.get("dir_regex"):
@@ -610,6 +844,29 @@ def resolve_flavour_iso_url(live: dict, flavour: str, mirror: str, version: str)
         folder = resolve_release_folder({"dir_regex": lv["dir_regex"], "label": flavour},
                                         folder)
     return resolve_live_iso_url(lv, folder, flavour, version)
+
+
+def resolve_release_iso_url(entry: dict, live: dict, flavour: str, mirror: str,
+                            release: str) -> str:
+    """The live ISO for a flavour and release of a distro whose ISO folder follows
+    a template. A pre-release is looked for where the distro keeps it. Before its
+    release day a release has only beta ISOs (Ubuntu's ubuntu-26.10-beta-...,
+    kubuntu's in releases/26.10/beta/), so they are looked for when no final ISO
+    is found: in the same folder, then in the beta folder."""
+    lv = live_for_release(entry, live, release)
+    beta = (entry.get("prerelease") or {}).get("live_fallback")
+    try:
+        return resolve_flavour_iso_url(lv, flavour, mirror, release)
+    except NetbootError as first:
+        if not beta:
+            raise
+        error = first
+    for over in ({"iso_regex": beta["iso_regex"]}, beta):
+        try:
+            return resolve_flavour_iso_url(lv, flavour, mirror, release, over)
+        except NetbootError:
+            continue
+    raise error
 
 
 def validate_live_release(live: dict, release: str) -> dict:
@@ -805,7 +1062,7 @@ def _expected_size(resp, offset: int) -> int | None:
 def _testing_or_unknown(entry: dict, release: str) -> bool:
     """True if release is the distro's testing or unstable release, or if that
     cannot be told (mirror out of reach)."""
-    if release.lower() in ("sid", "unstable", "testing"):
+    if release.lower() in ("sid", "unstable", "testing") or _prerelease_match(entry, release):
         return True
     lookup = entry.get("number_lookup")
     if not lookup or not lookup.get("testing"):
@@ -906,7 +1163,7 @@ _ENTRY_FIELDS = {
     "initrd_member": "Initrd in the archive", "kernel_url": "Kernel URL",
     "initrd_url": "Initrd URL", "boot_args": "Kernel arguments", "releases": "Releases",
 }
-_RELEASE_FIELDS = {"id", "label", "number", "default", "eol"}
+_RELEASE_FIELDS = {"id", "label", "number", "default", "eol", "prerelease"}
 _ID_RE = re.compile(r"[a-z0-9][a-z0-9-]{0,31}")
 _MEMBER_RE = re.compile(r"[A-Za-z0-9._+-]+(/[A-Za-z0-9._+-]+)*")
 _NUMBER_RE = re.compile(r"[0-9][0-9.]{0,15}")
@@ -1007,6 +1264,10 @@ def _entry_releases(value, name: str) -> list[dict]:
             raise NetbootError(f"Release '{rid}': default must be true or false.")
         if item.get("default"):
             rel["default"] = True
+        if item.get("prerelease") not in (None, False, True):
+            raise NetbootError(f"Release '{rid}': prerelease must be true or false.")
+        if item.get("prerelease"):
+            rel["prerelease"] = True
         out.append(rel)
     defaults = [r for r in out if r.get("default")]
     if len(defaults) > 1:
@@ -1208,6 +1469,7 @@ def parse_import(text: str) -> list[dict]:
 
 def boot_file_urls(entry: dict, mirror: str, release: str) -> list[tuple[str, str]]:
     """(label, URL) for each file the entry downloads for a release."""
+    entry = for_release(entry, release)
     if entry.get("kernel_url"):
         return [("Kernel", entry["kernel_url"].format(mirror=mirror, version=release)),
                 ("Initrd", entry["initrd_url"].format(mirror=mirror, version=release))]

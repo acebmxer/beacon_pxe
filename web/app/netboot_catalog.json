@@ -16,7 +16,8 @@
         {
           "id": "forky",
           "label": "Debian 14 (forky, testing \u2014 pre-release)",
-          "number": "14"
+          "number": "14",
+          "prerelease": true
         },
         {
           "id": "trixie",
@@ -55,7 +56,8 @@
             "name": "Debian 14",
             "label": "Debian 14 (forky, testing \u2014 pre-release)",
             "base_url": "https://cdimage.debian.org/cdimage/weekly-live-builds/amd64/iso-hybrid",
-            "number": "14"
+            "number": "14",
+            "prerelease": true
           },
           {
             "id": "trixie",
@@ -142,6 +144,13 @@
       "id": "ubuntu",
       "name": "Ubuntu",
       "default_mirror": "https://releases.ubuntu.com",
+      "prerelease": {
+        "archive_regex": "ubuntu-{version}-beta-netboot-amd64\\.tar\\.gz",
+        "live_fallback": {
+          "folder": "{mirror}/{flavour}/releases/{version}/beta",
+          "iso_regex": "{flavour}-{version}-beta-(?:desktop|dvd)-amd64\\.iso"
+        }
+      },
       "current_build": {"url": "{mirror}/{version}/", "regex": "ubuntu-({version}(?:\\.[0-9]+)?)-"},
       "archive_listing": {
         "folder": "{mirror}/{version}",
@@ -283,6 +292,23 @@
       "id": "fedora",
       "name": "Fedora",
       "default_mirror": "https://dl.fedoraproject.org/pub/fedora/linux",
+      "prerelease": {
+        "listing": {
+          "url": "{mirror}/releases/test/",
+          "regex": "(?P<number>[0-9]+)_(?P<stage>[A-Za-z]+[0-9.]*)/",
+          "id": "{number}_{stage}",
+          "label": "{name} {number} {stage}"
+        },
+        "match": "(?P<number>[0-9]+)_[A-Za-z]+[0-9.]*",
+        "overrides": {
+          "kernel_url": "{mirror}/releases/test/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz",
+          "initrd_url": "{mirror}/releases/test/{version}/Everything/x86_64/os/images/pxeboot/initrd.img",
+          "boot_args": "inst.repo={mirror}/releases/test/{version}/Everything/x86_64/os ip=dhcp"
+        },
+        "live": {
+          "folder": "{mirror}/releases/test/{version}/{dir}/x86_64/iso"
+        }
+      },
       "kernel_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz",
       "initrd_url": "{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img",
       "boot_args": "inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp",
@@ -431,6 +457,19 @@
       "id": "rocky",
       "name": "Rocky Linux",
       "default_mirror": "https://dl.rockylinux.org/pub/rocky",
+      "prerelease": {
+        "default_mirror": "https://dl.rockylinux.org/stg/rocky",
+        "listing": {
+          "url": "{mirror}/",
+          "regex": "(?P<number>[0-9]+\\.[0-9]+)-BETA/",
+          "id": "{number}-BETA",
+          "label": "{name} {number} Beta"
+        },
+        "match": "(?P<number>[0-9]+\\.[0-9]+)-BETA",
+        "live": {
+          "iso_regex": "Rocky-{number}-{file}-x86_64(?:-[0-9]+\\.[0-9]+)?\\.iso"
+        }
+      },
       "current_build": {"url": "{mirror}/", "regex": "href=\"({version}\\.[0-9]+)/\""},
       "releases": [
         {
@@ -532,6 +571,17 @@
       "id": "almalinux",
       "name": "AlmaLinux",
       "default_mirror": "https://repo.almalinux.org/almalinux",
+      "prerelease": {
+        "default_mirror": "https://vault.almalinux.org",
+        "listing": {
+          "url": "{mirror}/",
+          "regex": "(?P<number>[0-9]+\\.[0-9]+)-beta/",
+          "id": "{number}-beta",
+          "label": "{name} {number} Beta"
+        },
+        "match": "(?P<number>[0-9]+\\.[0-9]+)-beta",
+        "live": false
+      },
       "current_build": {"url": "{mirror}/", "regex": "href=\"({version}\\.[0-9]+)/\""},
       "releases": [
         {
@@ -714,6 +764,16 @@
       "id": "opensuse-leap",
       "name": "openSUSE Leap",
       "default_mirror": "https://download.opensuse.org",
+      "prerelease": {
+        "state_json": {
+          "url": "https://get.opensuse.org/api/v0/distributions.json",
+          "list": "Leap",
+          "id": "version",
+          "state": "state",
+          "released": ["Stable", "EOL"],
+          "label": "{name} {number} {stage}"
+        }
+      },
       "kernel_url": "{mirror}/distribution/leap/{version}/repo/oss/boot/x86_64/loader/linux",
       "initrd_url": "{mirror}/distribution/leap/{version}/repo/oss/boot/x86_64/loader/initrd",
       "extra_files": [
@@ -792,6 +852,19 @@
       "id": "linuxmint",
       "name": "Linux Mint",
       "default_mirror": "https://mirrors.kernel.org/linuxmint",
+      "prerelease": {
+        "listing": {
+          "url": "{mirror}/testing/",
+          "regex": "linuxmint-(?P<number>[0-9]+(?:\\.[0-9]+)?)-[a-z]+-64bit-beta\\.iso",
+          "id": "{number}-beta",
+          "label": "{name} {number} Beta"
+        },
+        "match": "(?P<number>[0-9]+(?:\\.[0-9]+)?)-beta",
+        "live": {
+          "folder": "{mirror}/testing",
+          "iso_regex": "linuxmint-{number}-{flavour}-64bit-beta\\.iso"
+        }
+      },
       "release_listing": {
         "url": "{mirror}/stable/",
         "regex": "([0-9]+(?:\\.[0-9]+)?)/",
@@ -870,6 +943,12 @@
       "id": "kali",
       "name": "Kali Linux",
       "default_mirror": "https://http.kali.org/kali",
+      "prerelease": {
+        "ids": [
+          {"id": "kali-dev", "label": "{name} kali-dev (development)"}
+        ],
+        "match": "kali-dev"
+      },
       "current_build": {"url": "{mirror}/dists/{version}/Release", "regex": "^Date: *\\w+, ([0-9]+ \\w+ [0-9]{4})", "show": "build {build}"},
       "archive_url": "{mirror}/dists/{version}/main/installer-amd64/current/images/netboot/netboot.tar.gz",
       "kernel_member": "debian-installer/amd64/linux",
@@ -966,6 +1045,23 @@
       "id": "alpine",
       "name": "Alpine Linux",
       "default_mirror": "https://dl-cdn.alpinelinux.org/alpine",
+      "prerelease": {
+        "ids": [
+          {"id": "edge", "label": "{name} edge (development)"}
+        ],
+        "match": "edge",
+        "overrides": {
+          "kernel_url": "{mirror}/edge/releases/x86_64/netboot/vmlinuz-lts",
+          "initrd_url": "{mirror}/edge/releases/x86_64/netboot/initramfs-lts",
+          "extra_files": [
+            {
+              "url": "{mirror}/edge/releases/x86_64/netboot/modloop-lts",
+              "dest": "modloop-lts"
+            }
+          ],
+          "boot_args": "ip=dhcp alpine_repo={mirror}/edge/main modloop=${{boot-url}}/os/{image_id}/modloop-lts modules=loop,squashfs"
+        }
+      },
       "current_build": {"url": "{mirror}/v{version}/releases/x86_64/", "regex": "alpine-netboot-({version}\\.[0-9]+)-x86_64"},
       "kernel_url": "{mirror}/v{version}/releases/x86_64/netboot/vmlinuz-lts",
       "initrd_url": "{mirror}/v{version}/releases/x86_64/netboot/initramfs-lts",

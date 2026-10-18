@@ -73,11 +73,12 @@ def _form_to_entry(form: dict, db: Session) -> dict:
         if old is None:
             raise netboot_svc.NetbootError("This entry no longer exists; add it again.")
         raw["id"] = old["id"]
-        # The form has no box for a release's number or end-of-life date, so an
-        # imported entry keeps them for the releases it still lists.
+        # The form has no box for a release's number, end-of-life date or
+        # pre-release mark, so an imported entry keeps them for the releases it
+        # still lists.
         kept = {r["id"]: r for r in old.get("releases", [])}
         for rel in raw["releases"]:
-            rel.update({k: kept[rel["id"]][k] for k in ("number", "eol")
+            rel.update({k: kept[rel["id"]][k] for k in ("number", "eol", "prerelease")
                         if k in kept.get(rel["id"], {})})
     return netboot_svc.validate_entry(raw)
 
@@ -206,13 +207,18 @@ async def add_netboot(request: Request, background: BackgroundTasks,
                     netboot_svc.resolve_release(entry, live_release))
                 live_rel = {"id": rid, "label": f"{entry['name']} {rid}"}
             release = netboot_svc.validate_flavour(live, flavour, live_rel["id"])
+            # A pre-release's ISOs can be on another mirror (Rocky's staging one);
+            # the page fills it in, and a blank or untouched box gets it too.
+            usual = netboot_svc.live_mirror(entry, live, release)
+            pre_mirror = netboot_svc.live_mirror(
+                entry, netboot_svc.live_for_release(entry, live, live_rel["id"]), release)
             mirror = netboot_svc.validate_mirror(
-                mirror or netboot_svc.live_mirror(entry, live, release))
+                pre_mirror if mirror in ("", usual) else mirror)
             if source == "url":
                 source_url = netboot_svc.validate_source_url(url)
             else:
                 source_url = await run_in_threadpool(
-                    netboot_svc.resolve_flavour_iso_url, live, release, mirror,
+                    netboot_svc.resolve_release_iso_url, entry, live, release, mirror,
                     live_rel["id"])
             picked = next(f for f in live["flavours"] if f["id"] == release)
             version = live_rel.get("name") or (
@@ -261,6 +267,9 @@ async def add_netboot(request: Request, background: BackgroundTasks,
                         f"No release numbered {release} was found on {mirror}. "
                         "Type its name instead.")
             release = netboot_svc.validate_release(release)
+            if mirror == entry["default_mirror"]:
+                # A pre-release on another mirror (Rocky's staging, Alma's vault).
+                mirror = netboot_svc.for_release(entry, release)["default_mirror"]
             source_url = ""
             if entry.get("kernel_url"):
                 # Its kernel and initrd are fetched separately when it is processed.
@@ -291,6 +300,16 @@ async def add_netboot(request: Request, background: BackgroundTasks,
             raise netboot_svc.NetbootError(
                 f"{ended['label']} has reached its end of life. Turn on Offer end-of-life "
                 "releases under Settings → Netboot catalog to add it.")
+        picked = live_rel["id"] if live else release
+        pre = await run_in_threadpool(
+            netboot_svc.prerelease_release, entry, picked, bool(live))
+        if pre and not netboot_svc.show_prerelease(db):
+            raise netboot_svc.NetbootError(
+                f"{pre.get('name') or pre['label']} is a pre-release. Turn on Offer "
+                "pre-releases under Settings → Netboot catalog to add it.")
+        if pre and pre.get("name"):
+            # "Fedora 45 Beta (netboot)", not "Fedora 45_Beta (netboot)".
+            default_name = default_name.replace(f"{entry['name']} {picked}", pre["name"])
     except netboot_svc.NetbootError as e:
         return _page(request, db, error=str(e))
 

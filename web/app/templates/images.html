@@ -158,7 +158,7 @@
       <tr>
         <td><b>{{ e.name }}</b><br><span class="muted mono">{{ e.default_mirror }}</span></td>
         <td>{{ 'Kernel and initrd URLs' if e.kernel_url else 'Netboot archive' }}</td>
-        <td>{% for r in e.releases %}{{ r.id }}{% if r.ended %} <span class="muted">(end of life)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>{% for r in e.releases %}{{ r.id }}{% if r.ended %} <span class="muted">(end of life)</span>{% endif %}{% if r.prerelease %} <span class="muted">(pre-release)</span>{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}</td>
         <td>{{ entry_uses.get(e.id, 0) }}</td>
         <td>
           <div class="toolbar">
@@ -455,8 +455,11 @@
       var d = currentDistro();
       var keep = flavourSel.value;
       flavourSel.innerHTML = "";
+      // A pre-release counts as its major release (Rocky's 9.9-BETA as 9).
+      var major = (liveReleaseSel.value.match(/^[0-9]+/) || [""])[0];
       ((d && d.live && d.live.flavours) || []).forEach(function (f) {
-        if (f.only && liveReleaseSel.value && f.only.indexOf(liveReleaseSel.value) < 0) return;
+        if (f.only && liveReleaseSel.value && f.only.indexOf(liveReleaseSel.value) < 0
+            && f.only.indexOf(major) < 0) return;
         var o = document.createElement("option");
         o.value = f.id; o.textContent = f.label;
         flavourSel.appendChild(o);
@@ -465,7 +468,8 @@
     };
     // A live release has its own ISO folder, shown in the Mirror box; a distro
     // whose folder follows a template shows its mirror (Ubuntu's desktops have
-    // one per desktop).
+    // one per desktop). A pre-release can be on a mirror of its own (Rocky's
+    // staging one, Alma's vault).
     var liveOtherIn = document.getElementById("nb-live-other");
     var syncLiveRelease = function () {
       var other = liveReleaseSel.value === "";
@@ -477,14 +481,21 @@
     };
     var syncLiveMirror = function () {
       var d = currentDistro();
-      if (!isLive()) { if (d) mirrorIn.value = d.default_mirror; return; }
-      if (d && d.live && d.live.folder) {
-        var f = (d.live.flavours || []).filter(function (x) { return x.id === flavourSel.value; })[0];
-        mirrorIn.value = (f && f.default_mirror) || d.live.default_mirror || d.default_mirror;
+      var picked = function (list, value) {
+        return (list || []).filter(function (x) { return x.id === value; })[0];
+      };
+      if (!isLive()) {
+        var ir = d && picked(d.releases, releaseSel.value);
+        if (d) mirrorIn.value = (ir && ir.mirror) || d.default_mirror;
         return;
       }
-      var r = ((d && d.live && d.live.releases) || []).filter(function (x) {
-        return x.id === liveReleaseSel.value; })[0];
+      var r = d && d.live && picked(d.live.releases, liveReleaseSel.value);
+      if (d && d.live && d.live.folder) {
+        var f = picked(d.live.flavours, flavourSel.value);
+        mirrorIn.value = (r && r.mirror) || (f && f.default_mirror) || d.live.default_mirror
+                         || d.default_mirror;
+        return;
+      }
       if (r) mirrorIn.value = r.base_url;
     };
     // The dropdown fills the release field that is submitted; "Other" shows it
@@ -506,7 +517,7 @@
     distroSel.addEventListener("change", fillDistro);
     variantSel.addEventListener("change", fillDistro);
     sourceSel.addEventListener("change", showSource);
-    releaseSel.addEventListener("change", syncRelease);
+    releaseSel.addEventListener("change", function () { syncRelease(); syncLiveMirror(); });
     fillDistro();
     liveReleaseSel.addEventListener("change", function () {
       syncLiveRelease(); fillFlavours(); syncLiveMirror(); });

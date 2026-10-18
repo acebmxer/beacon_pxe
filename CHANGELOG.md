@@ -51,6 +51,16 @@ to do differently. Internal refactors that change nothing observable are omitted
   CentOS Stream, Linux Mint, Alpine and XCP-ng, with end-of-life dates from Ubuntu's
   distro-info-data, Fedora's Bodhi and Alpine's release list.
 
+  Pre-releases are listed for every distro that publishes them, marked
+  "pre-release" at the top of the **Release** list, not only Debian's testing
+  release: Ubuntu's beta before its release day, Fedora's Beta, Rocky Linux's and
+  AlmaLinux's betas (from Rocky's staging mirror and Alma's vault, filled in when
+  picked), openSUSE Leap's release candidate, Linux Mint's beta, Kali's
+  `kali-dev` and Alpine's `edge`. A beta the distro has since released is left
+  out. **Offer pre-releases** under **Settings → Netboot catalog** (on by
+  default) hides them and refuses adding one when turned off; images already
+  added are kept. A custom entry's release can be marked `"prerelease": true`.
+
   A catalog download that stalls or drops part-way is resumed where it stopped,
   up to four tries, instead of failing with "Download timed out" and starting
   the whole multi-GB ISO again on Retry.

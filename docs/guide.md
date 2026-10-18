@@ -155,6 +155,20 @@ desktop not in the list is still added by uploading its ISO. A download that
 stalls or drops part-way is resumed where it stopped, up to four tries, before
 the image is marked as failed.
 
+Pre-releases are listed at the top of the **Release** list, marked
+"pre-release", where the distro publishes them, read from its mirror like its
+releases: Debian's testing release, Ubuntu's beta before its release day (its
+beta archive and ISOs are used until the final ones are out), Fedora's Beta from
+`releases/test/`, Rocky Linux's betas from its staging mirror and AlmaLinux's
+from its vault (installers only; Rocky's live desktops too), openSUSE Leap's
+beta or release candidate, Linux Mint's beta ISOs from `testing/`, Kali's
+`kali-dev` and Alpine's `edge`. Picking one fills in the mirror it is on. A
+beta the distro has since released (Mint's 22.3 beta once 22.3 is out) is not
+listed. CentOS Stream, Tumbleweed, Arch and XCP-ng publish none. **Offer
+pre-releases** under **Server Settings → Netboot catalog** (on by default) hides
+them all and refuses adding one when turned off, typed under **Other** too;
+images already added stay as they are.
+
 **Custom catalog entries** add an installer for a distro the catalog does not
 have. Under **Custom catalog entries** on the Images page, give a name, a default
 mirror, the boot files and the kernel arguments, and list the releases one per
@@ -189,7 +203,8 @@ release not in the list can be typed under **Other**.
 (`{"distros": [ ... ]}`), a list of entries, or one entry, with the fields `name`,
 `default_mirror`, `archive_url` + `kernel_member` + `initrd_member` or
 `kernel_url` + `initrd_url`, `boot_args`, `releases` (each a name, or an object
-with `id` and optionally `label`, `number`, `default`, `eol`), and an optional
+with `id` and optionally `label`, `number`, `default`, `eol`, and `prerelease`:
+`true` marks a beta, hidden with the built-in pre-releases), and an optional
 `id`. Every entry is previewed, and nothing is imported if any entry is wrong; an
 entry with the ID of an existing custom entry replaces it. Custom entries are kept
 in the database, so a backup carries them. Deleting one leaves its images

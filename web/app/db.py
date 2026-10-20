@@ -60,3 +60,8 @@ def _migrate():
         if "is_default" not in img_cols:
             conn.execute(text(
                 "ALTER TABLE images ADD COLUMN is_default INTEGER NOT NULL DEFAULT 0"))
+        for col in ("source", "variant", "catalog_id", "release", "mirror", "source_url"):
+            if col not in img_cols:
+                default = {"source": "'iso'", "variant": "'installer'"}.get(col, "''")
+                conn.execute(text(
+                    f"ALTER TABLE images ADD COLUMN {col} TEXT NOT NULL DEFAULT {default}"))

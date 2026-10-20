@@ -1,4 +1,5 @@
-"""Database models: User, Setting, Image, BootEvent, SeenClient, LoginLockout."""
+"""Database models: User, Setting, Image, CatalogEntry, BootEvent, SeenClient,
+LoginLockout."""
 from datetime import datetime, timezone
 
 from sqlalchemy import String, Integer, DateTime, Text, Float
@@ -40,9 +41,10 @@ class User(Base):
 
 
 class LoginLockout(Base):
-    """Persistent per-IP failed-login state (survives container restarts).
+    """Persistent failed-login state (survives container restarts).
 
-    Keyed by the proxy-aware client IP string. fail_count and last_fail are
+    Keyed by the proxy-aware client IP string for the password step, and by
+    "totp:<user id>" for the two-factor step. fail_count and last_fail are
     only used when there is no active lockout (locked_until in the future);
     once the lockout expires both are reset on the next successful login.
     All times are Unix epoch floats (wall clock, not monotonic).
@@ -110,7 +112,8 @@ class Image(Base):
     os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows|xcpng
     # Extraction lifecycle: pending|processing|ready|error|needs_reprocess
     # (needs_reprocess is set at startup when a ready image's extracted files
-    # are gone -- see services.images.reconcile_statuses)
+    # are gone -- see services.images.reconcile_statuses), plus deleting for an
+    # image deleted while its run was going (services.images.delete_image)
     status: Mapped[str] = mapped_column(String(16), default="pending")
     message: Mapped[str] = mapped_column(Text, default="")      # error/info detail
     kernel_path: Mapped[str] = mapped_column(String(255), default="")   # rel to bootroot
@@ -124,3 +127,29 @@ class Image(Base):
     # the first-run render and ipxe.render() both treat it as the default choice.
     display_order: Mapped[int | None] = mapped_column(Integer, nullable=True, default=None)
     is_default: Mapped[int] = mapped_column(Integer, default=0)
+    # How the image was made: "iso" (uploaded ISO) or "netboot" (a catalog
+    # distro's netboot archive; `filename` is then the small archive, and the
+    # fields below say where it came from so Reprocess can rebuild it).
+    source: Mapped[str] = mapped_column(String(16), default="iso")
+    # "installer" (netboot archive) or "live" (live desktop: kernel, initrd and
+    # root filesystem pulled from the distro's live ISO, which is then deleted).
+    variant: Mapped[str] = mapped_column(String(16), default="installer")
+    catalog_id: Mapped[str] = mapped_column(String(32), default="")
+    release: Mapped[str] = mapped_column(String(64), default="")
+    mirror: Mapped[str] = mapped_column(String(255), default="")
+    # Archive download URL; empty when the admin uploaded the archive instead.
+    source_url: Mapped[str] = mapped_column(String(512), default="")
+
+
+class CatalogEntry(Base):
+    """A netboot catalog entry added by an admin, beside the built-in ones.
+
+    `data` is the entry as JSON, in the same format as netboot_catalog.json
+    (validated by services.netboot.validate_entry). Kept in the database so a
+    backup carries it.
+    """
+    __tablename__ = "catalog_entries"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    data: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

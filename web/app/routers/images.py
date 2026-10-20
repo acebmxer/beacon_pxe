@@ -1,11 +1,13 @@
-"""OS image management: list, upload (ISO), edit, enable/disable, delete."""
+"""OS image management: list, upload (ISO), edit, enable/disable, delete, and
+the custom netboot catalog entries."""
 import asyncio
 import json
 import re
 
-from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Request,
+from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Query, Request,
                      UploadFile, File)
-from fastapi.responses import RedirectResponse, StreamingResponse
+from starlette.concurrency import run_in_threadpool
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -14,6 +16,7 @@ from ..deps import require_admin, require_user, render
 from ..models import Image, User
 from ..services import images as image_svc
 from ..services import ipxe
+from ..services import netboot as netboot_svc
 from ..store import strip_control_chars
 
 router = APIRouter()
@@ -25,6 +28,21 @@ def _safe_filename(name: str) -> str:
     return _SAFE.sub("_", name).strip("_") or "image.iso"
 
 
+def _unused_filename(db: Session, filename: str) -> str:
+    """filename, or filename-2.iso, -3, ... if another image already owns it.
+
+    Two images sharing one ISO file means the second upload overwrites the
+    first one's ISO and deleting either removes the other's.
+    """
+    stem, dot, ext = filename.rpartition(".")
+    candidate, n = filename, 1
+    while (image_svc.iso_path(candidate).exists()
+           or db.scalar(select(Image.id).where(Image.filename == candidate))):
+        n += 1
+        candidate = f"{stem}-{n}{dot}{ext}"
+    return candidate
+
+
 def _ordered_images(db: Session) -> list[Image]:
     """All images sorted by display_order (NULLs last), then name."""
     return db.execute(
@@ -33,11 +51,58 @@ def _ordered_images(db: Session) -> list[Image]:
     ).scalars().all()
 
 
+_ENTRY_FORM_FIELDS = ("name", "default_mirror", "kind", "archive_url", "kernel_member",
+                      "initrd_member", "kernel_url", "initrd_url", "boot_args",
+                      "releases")
+
+
+def _page(request: Request, db: Session, **ctx):
+    images = _ordered_images(db)
+    custom = netboot_svc.custom_entries(db)
+    used = {e["id"]: sum(1 for i in images if i.source == "netboot"
+                         and i.catalog_id == e["id"]) for e in custom}
+    ctx.setdefault("entry_form", {"kind": "archive"})
+    return render(request, db, "images.html", active="images", images=images,
+                  catalog=netboot_svc.page_catalog(db), custom_entries=custom,
+                  entry_uses=used,
+                  notice=request.session.pop("image_notice", None), **ctx)
+
+
+def _entry_to_form(entry: dict) -> dict:
+    form = {k: entry.get(k, "") for k in _ENTRY_FORM_FIELDS}
+    form.update(original_id=entry["id"],
+                kind="files" if entry.get("kernel_url") else "archive",
+                releases=netboot_svc.release_lines(entry))
+    return form
+
+
+def _form_to_entry(form: dict, db: Session) -> dict:
+    """The entry the custom-entry form describes, validated."""
+    raw = {k: form[k] for k in ("name", "default_mirror", "boot_args")}
+    keys = (("kernel_url", "initrd_url") if form["kind"] == "files"
+            else ("archive_url", "kernel_member", "initrd_member"))
+    raw.update({k: form[k] for k in keys})
+    raw["releases"] = netboot_svc.parse_releases(form["releases"])
+    if form["original_id"]:
+        old = netboot_svc.custom_entry(db, form["original_id"])
+        if old is None:
+            raise netboot_svc.NetbootError("This entry no longer exists; add it again.")
+        raw["id"] = old["id"]
+        # The form has no box for a release's number, end-of-life date or
+        # pre-release mark, so an imported entry keeps them for the releases it
+        # still lists.
+        kept = {r["id"]: r for r in old.get("releases", [])}
+        for rel in raw["releases"]:
+            rel.update({k: kept[rel["id"]][k] for k in ("number", "eol", "prerelease")
+                        if k in kept.get(rel["id"], {})})
+    return netboot_svc.validate_entry(raw)
+
+
 @router.get("/images")
 def images_page(request: Request, user: User = Depends(require_user),
-                db: Session = Depends(get_db)):
-    return render(request, db, "images.html", active="images",
-                  images=_ordered_images(db))
+                edit: str = Query(""), db: Session = Depends(get_db)):
+    entry = netboot_svc.custom_entry(db, edit) if edit and user.is_admin else None
+    return _page(request, db, **({"entry_form": _entry_to_form(entry)} if entry else {}))
 
 
 @router.get("/images/status")
@@ -47,8 +112,24 @@ def images_status(user: User = Depends(require_user), db: Session = Depends(get_
     return [{"id": i.id, "status": i.status, "message": i.message} for i in items]
 
 
+#: Open /images/events streams per user. The page opens one per tab; a browser
+#: keeps at most six connections per host anyway, so this only stops scripts.
+SSE_MAX_PER_USER = 6
+_sse_open: dict[int, int] = {}
+
+
+def _status_snapshot() -> list[tuple[int, str, str | None]]:
+    db = SessionLocal()
+    try:
+        return [(i.id, i.status, i.message)
+                for i in db.execute(select(Image)).scalars().all()]
+    finally:
+        db.close()
+
+
 @router.get("/images/events")
-async def images_sse(request: Request, user: User = Depends(require_user)):
+async def images_sse(request: Request, user: User = Depends(require_user),
+                     db: Session = Depends(get_db)):
     """SSE stream that pushes status updates while images are processing.
 
     The client connects when it lands on the images page with pending/processing
@@ -56,30 +137,51 @@ async def images_sse(request: Request, user: User = Depends(require_user)):
     image status changes. The connection is automatically closed (and the
     generator exits) when the client disconnects.
     """
+    # The sign-in check's session would otherwise stay checked out of the
+    # connection pool for as long as the stream is open; a handful of open
+    # streams then starved every other request.
+    uid = user.id
+    db.close()
+    if _sse_open.get(uid, 0) >= SSE_MAX_PER_USER:
+        return Response("Too many open status streams.", status_code=429)
+
     async def generate():
+        # Counted here, not in the route: only a generator that has started is
+        # sure to reach its finally, so the count can't leak.
+        if _sse_open.get(uid, 0) >= SSE_MAX_PER_USER:
+            return
+        _sse_open[uid] = _sse_open.get(uid, 0) + 1
         seen: dict[int, str] = {}
-        while True:
-            if await request.is_disconnected():
-                break
-            db = SessionLocal()
-            try:
-                items = db.execute(select(Image)).scalars().all()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                # In a worker thread: a blocking query here would stall every
+                # other request on the event loop.
+                items = await run_in_threadpool(_status_snapshot)
                 updates = []
-                for img in items:
-                    if img.id in seen and seen[img.id] != img.status:
+                for img_id, img_status, message in items:
+                    if img_id in seen and seen[img_id] != img_status:
                         updates.append({
-                            "id": img.id,
-                            "status": img.status,
-                            "message": img.message,
+                            "id": img_id,
+                            "status": img_status,
+                            "message": message,
                         })
-                    seen[img.id] = img.status
+                    seen[img_id] = img_status
+                # A deleted image's row is gone rather than changed.
+                present = {img_id for img_id, _, _ in items}
+                for img_id in [i for i in seen if i not in present]:
+                    updates.append({"id": img_id, "status": "deleted", "message": ""})
+                    del seen[img_id]
                 if updates:
                     yield f"data: {json.dumps(updates)}\n\n"
                 else:
                     yield ": heartbeat\n\n"
-            finally:
-                db.close()
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            _sse_open[uid] -= 1
+            if not _sse_open[uid]:
+                del _sse_open[uid]
 
     return StreamingResponse(
         generate(),
@@ -95,10 +197,10 @@ async def upload(request: Request, background: BackgroundTasks,
                  db: Session = Depends(get_db)):
     filename = _safe_filename(file.filename or "image.iso")
     if not filename.lower().endswith(".iso"):
-        return render(request, db, "images.html", active="images",
-                      images=_ordered_images(db),
-                      error="Only .iso files are supported. See the README for why.")
+        return _page(request, db,
+                     error="Only .iso files are supported. See the README for why.")
 
+    filename = _unused_filename(db, filename)
     dest = image_svc.iso_path(filename)
     # Stream to disk in chunks so large ISOs don't load into memory.
     size = 0
@@ -119,6 +221,167 @@ async def upload(request: Request, background: BackgroundTasks,
     db.commit()
 
     # Extraction can be slow; run it after the response is sent.
+    background.add_task(image_svc.process_image, img.id)
+    return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/netboot")
+async def add_netboot(request: Request, background: BackgroundTasks,
+                      user: User = Depends(require_admin),
+                      distro: str = Form(...), variant: str = Form("installer"),
+                      release: str = Form(""), live_release: str = Form(""),
+                      flavour: str = Form(""),
+                      mirror: str = Form(""), name: str = Form(""),
+                      source: str = Form("mirror"), url: str = Form(""),
+                      file: UploadFile | None = File(None),
+                      db: Session = Depends(get_db)):
+    """Add an image from a catalog distro without keeping an ISO.
+
+    variant "installer": the distro's netboot archive (kernel + initrd).
+    variant "live": a live desktop; Beacon fetches the live ISO, keeps its
+    kernel, initrd and root filesystem, and deletes the ISO.
+    """
+    entry = netboot_svc.catalog_entry(distro, db)
+    if entry is None:
+        return _page(request, db, error="Unknown distro.")
+    live = netboot_svc.live_entry(entry) if variant == "live" else None
+    if variant == "live" and live is None:
+        return _page(request, db, error=f"{entry['name']} has no live desktop entry.")
+    if variant != "live" and not netboot_svc.has_installer(entry):
+        return _page(request, db, error=f"{entry['name']} has no installer entry; "
+                                        "choose Live desktop.")
+    try:
+        if live and live.get("folder"):
+            # The ISO folder follows a template per release and desktop.
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                rid = netboot_svc.validate_release(
+                    netboot_svc.resolve_release(entry, live_release))
+                live_rel = {"id": rid, "label": f"{entry['name']} {rid}"}
+            release = netboot_svc.validate_flavour(live, flavour, live_rel["id"])
+            # A pre-release's ISOs can be on another mirror (Rocky's staging one);
+            # the page fills it in, and a blank or untouched box gets it too.
+            usual = netboot_svc.live_mirror(entry, live, release)
+            pre_mirror = netboot_svc.live_mirror(
+                entry, netboot_svc.live_for_release(entry, live, live_rel["id"]), release)
+            mirror = netboot_svc.validate_mirror(
+                pre_mirror if mirror in ("", usual) else mirror)
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_release_iso_url, entry, live, release, mirror,
+                    live_rel["id"])
+            picked = next(f for f in live["flavours"] if f["id"] == release)
+            version = live_rel.get("name") or (
+                f"{entry['name']} {live_rel.get('number') or live_rel['id']}")
+            default_name = picked.get("title") or f"{version} Live {picked['label']}"
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        elif live:
+            release = netboot_svc.validate_flavour(live, flavour)
+            try:
+                live_rel = netboot_svc.validate_live_release(live, live_release)
+            except netboot_svc.NetbootError:
+                live_rel = await run_in_threadpool(
+                    netboot_svc.live_release_from_mirror, entry, live, live_release)
+            mirror = netboot_svc.validate_mirror(mirror or live_rel["base_url"])
+            if source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                if live_rel.get("unlisted"):
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_unlisted_live_url, live,
+                        live_rel["unlisted"], release)
+                else:
+                    folder = await run_in_threadpool(
+                        netboot_svc.resolve_release_folder, live_rel, mirror)
+                    source_url = await run_in_threadpool(
+                        netboot_svc.resolve_live_iso_url, live, folder, release)
+                    netboot_svc.check_live_iso_matches(live, live_rel, source_url)
+            label = next(f["label"] for f in live["flavours"] if f["id"] == release)
+            version = f"{live_rel['name']} " if live_release.strip() else ""
+            default_name = (f"{version or entry['name'] + ' '}Live {label}")
+            filename = netboot_svc.new_archive_name(entry["id"], "live-" + release, ".iso")
+        else:
+            variant = "installer"
+            release = netboot_svc.resolve_release(entry, release)
+            mirror = netboot_svc.validate_mirror(mirror or entry["default_mirror"])
+            number = next((r.get("number") for r in entry.get("releases", [])
+                           if r["id"] == release), None)
+            if release not in {r["id"] for r in entry.get("releases", [])}:
+                found = await run_in_threadpool(
+                    netboot_svc.lookup_release, entry, mirror, release)
+                if found:
+                    release, number = found["codename"], found["number"]
+                elif entry.get("number_lookup") and re.fullmatch(
+                        r"(?i)(%s\s+)?[0-9]{1,3}" % re.escape(entry["name"]), release):
+                    raise netboot_svc.NetbootError(
+                        f"No release numbered {release} was found on {mirror}. "
+                        "Type its name instead.")
+            release = netboot_svc.validate_release(release)
+            if mirror == entry["default_mirror"]:
+                # A pre-release on another mirror (Rocky's staging, Alma's vault).
+                mirror = netboot_svc.for_release(entry, release)["default_mirror"]
+            source_url = ""
+            if entry.get("kernel_url"):
+                # Its kernel and initrd are fetched separately when it is processed.
+                if source != "mirror":
+                    raise netboot_svc.NetbootError(
+                        f"{entry['name']} downloads its kernel and initrd separately, "
+                        "so it can only use Download from the mirror.")
+            elif source == "upload":
+                if file is None or not file.filename:
+                    raise netboot_svc.NetbootError("Choose an archive file to upload.")
+            elif source == "url":
+                source_url = netboot_svc.validate_source_url(url)
+            else:
+                source_url = await run_in_threadpool(
+                    netboot_svc.resolve_archive_url, entry, mirror, release)
+            named = next((r.get("name") for r in entry.get("releases", [])
+                          if r["id"] == release), None)
+            if named:
+                default_name = f"{named} (netboot)"
+            elif number and number != release:
+                default_name = f"{entry['name']} {number} {release} (netboot)"
+            else:
+                default_name = f"{entry['name']} {release} (netboot)"
+            filename = netboot_svc.new_archive_name(entry["id"], release)
+        ended = (None if netboot_svc.show_eol(db) else netboot_svc.ended_release(
+            entry, live_rel["id"] if live else release, live=bool(live)))
+        if ended:
+            raise netboot_svc.NetbootError(
+                f"{ended['label']} has reached its end of life. Turn on Offer end-of-life "
+                "releases under Settings → Netboot catalog to add it.")
+        picked = live_rel["id"] if live else release
+        pre = await run_in_threadpool(
+            netboot_svc.prerelease_release, entry, picked, bool(live))
+        if pre and not netboot_svc.show_prerelease(db):
+            raise netboot_svc.NetbootError(
+                f"{pre.get('name') or pre['label']} is a pre-release. Turn on Offer "
+                "pre-releases under Settings → Netboot catalog to add it.")
+        if pre and pre.get("name"):
+            # "Fedora 45 Beta (netboot)", not "Fedora 45_Beta (netboot)".
+            default_name = default_name.replace(f"{entry['name']} {picked}", pre["name"])
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, error=str(e))
+
+    size = 0
+    if not live and source == "upload":
+        with open(image_svc.iso_path(filename), "wb") as out:
+            while chunk := await file.read(1024 * 1024):
+                out.write(chunk)
+                size += len(chunk)
+
+    img = Image(
+        # name is written verbatim into boot.ipxe; see upload().
+        name=strip_control_chars(name.strip()) or default_name,
+        filename=filename, status="pending", size_bytes=size,
+        source="netboot", variant=variant, catalog_id=entry["id"],
+        release=release, mirror=mirror, source_url=source_url,
+    )
+    db.add(img)
+    db.commit()
     background.add_task(image_svc.process_image, img.id)
     return RedirectResponse("/images", status_code=303)
 
@@ -184,10 +447,18 @@ def update_args(image_id: int, boot_args: str = Form(""),
 
 
 @router.post("/images/{image_id}/retry")
-def retry(image_id: int, background: BackgroundTasks,
+def retry(request: Request, image_id: int, background: BackgroundTasks,
           user: User = Depends(require_admin), db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
-    if img:
+    # Same rule as bulk Reprocess: a second run would wipe the files the
+    # running one is still writing. "pending" counts too: the run is queued
+    # but not started yet, as when Reprocess is clicked twice in a row.
+    if img and img.status == image_svc.DELETING:
+        request.session["image_notice"] = f"{img.name} is being deleted."
+    elif img and img.status in image_svc.BUSY:
+        request.session["image_notice"] = (
+            f"{img.name} is still processing, so it was left alone.")
+    elif img:
         img.status = "pending"
         db.commit()
         background.add_task(image_svc.process_image, img.id)
@@ -195,9 +466,149 @@ def retry(image_id: int, background: BackgroundTasks,
 
 
 @router.post("/images/{image_id}/delete")
-def delete(image_id: int, user: User = Depends(require_admin),
+def delete(request: Request, image_id: int, user: User = Depends(require_admin),
            db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
-    if img:
-        image_svc.delete_image(db, img)
+    if img and not image_svc.delete_image(db, img):
+        request.session["image_notice"] = (
+            f"{img.name} is still processing; it is deleted as soon as the "
+            "current step stops. Press Delete again if it doesn't go away.")
     return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/bulk")
+def bulk(request: Request, background: BackgroundTasks,
+         action: str = Form(...), ids: list[int] = Form([]),
+         user: User = Depends(require_admin), db: Session = Depends(get_db)):
+    """Reprocess or delete the images ticked on the Images page.
+
+    Reprocess queues each one as the row's own Reprocess does; the background
+    tasks run one after another, so several downloads do not compete. An image
+    still processing or queued is left alone, as a second run would wipe its
+    files mid-way. Delete stops a running image at its next step, as the row's
+    own Delete does.
+    """
+    images = [img for img in (db.get(Image, i) for i in dict.fromkeys(ids)) if img]
+    if action == "reprocess":
+        queued = [img for img in images if img.status not in image_svc.BUSY]
+        for img in queued:
+            img.status = "pending"
+        db.commit()
+        for img in queued:
+            background.add_task(image_svc.process_image, img.id)
+        skipped = len(images) - len(queued)
+        notice = (f"Reprocessing {len(queued)} image{'s' if len(queued) != 1 else ''}"
+                  + (f"; {skipped} still processing {'was' if skipped == 1 else 'were'} "
+                     "left alone." if skipped else "."))
+    elif action == "delete":
+        waiting = sum(not image_svc.delete_image(db, img) for img in images)
+        done = len(images) - waiting
+        notice = f"Deleted {done} image{'s' if done != 1 else ''}" + (
+            f"; {waiting} still processing {'is' if waiting == 1 else 'are'} deleted "
+            "as soon as the current step stops." if waiting else ".")
+    else:
+        return RedirectResponse("/images", status_code=303)
+    if images:
+        request.session["image_notice"] = notice
+    return RedirectResponse("/images", status_code=303)
+
+
+@router.post("/images/catalog/entry")
+async def save_entry(request: Request, user: User = Depends(require_admin),
+                     action: str = Form("preview"), original_id: str = Form(""),
+                     name: str = Form(""), default_mirror: str = Form(""),
+                     kind: str = Form("archive"), archive_url: str = Form(""),
+                     kernel_member: str = Form(""), initrd_member: str = Form(""),
+                     kernel_url: str = Form(""), initrd_url: str = Form(""),
+                     boot_args: str = Form(""), releases: str = Form(""),
+                     db: Session = Depends(get_db)):
+    """Preview, then save, a custom catalog entry from the form.
+
+    Preview fills the templates for every release and checks the files on the
+    mirror; the page offers Save only after a preview, so the admin has seen
+    the kernel command line the entry produces.
+    """
+    form = dict(original_id=original_id, name=name, default_mirror=default_mirror,
+                kind="files" if kind == "files" else "archive", archive_url=archive_url,
+                kernel_member=kernel_member, initrd_member=initrd_member,
+                kernel_url=kernel_url, initrd_url=initrd_url, boot_args=boot_args,
+                releases=releases)
+    try:
+        entry = _form_to_entry(form, db)
+        if action == "save" and not original_id:
+            if len(netboot_svc.custom_entries(db)) >= netboot_svc.MAX_CUSTOM_ENTRIES:
+                raise netboot_svc.NetbootError(
+                    f"There are already {netboot_svc.MAX_CUSTOM_ENTRIES} custom entries.")
+            entry["id"] = netboot_svc.free_entry_id(db, entry["id"])
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, entry_form=form, entry_error=str(e))
+    if action != "save":
+        preview = await run_in_threadpool(netboot_svc.preview_entry, entry)
+        return _page(request, db, entry_form=form, entry_preview=preview)
+    netboot_svc.store_entry(db, entry)
+    request.session["image_notice"] = (
+        f"Saved the custom entry {entry['name']}. It is in the Distro list of "
+        "Add from a netboot catalog.")
+    return RedirectResponse("/images#custom-entries", status_code=303)
+
+
+@router.post("/images/catalog/import")
+async def import_entries(request: Request, user: User = Depends(require_admin),
+                         action: str = Form("preview"), content: str = Form(""),
+                         file: UploadFile | None = File(None),
+                         db: Session = Depends(get_db)):
+    """Import custom entries from a JSON file: preview every entry, then save
+    them all on confirm. The file's text rides along in the preview page, so
+    nothing is kept on the server in between."""
+    try:
+        if file is not None and file.filename:
+            raw = await file.read(netboot_svc.IMPORT_MAX_BYTES + 1)
+            if len(raw) > netboot_svc.IMPORT_MAX_BYTES:
+                raise netboot_svc.NetbootError("The file is larger than 256 KB.")
+            content = raw.decode("utf-8", "replace")
+        elif len(content.encode("utf-8")) > netboot_svc.IMPORT_MAX_BYTES:
+            # The text posted back by the preview's Save gets the file's limit.
+            raise netboot_svc.NetbootError("The text is larger than 256 KB.")
+        if not content.strip():
+            raise netboot_svc.NetbootError("Choose a JSON file to import.")
+        entries = netboot_svc.parse_import(content)
+        builtin = netboot_svc.builtin_ids()
+        clash = [e["id"] for e in entries if e["id"] in builtin]
+        if clash:
+            raise netboot_svc.NetbootError(
+                f"Nothing was imported. The ID {', '.join(clash)} belongs to a built-in "
+                "entry; give the entry another \"id\".")
+        existing = {e["id"] for e in netboot_svc.custom_entries(db)}
+        added = [e for e in entries if e["id"] not in existing]
+        if len(existing) + len(added) > netboot_svc.MAX_CUSTOM_ENTRIES:
+            raise netboot_svc.NetbootError(
+                f"Nothing was imported: it would make more than "
+                f"{netboot_svc.MAX_CUSTOM_ENTRIES} custom entries.")
+    except netboot_svc.NetbootError as e:
+        return _page(request, db, import_error=str(e))
+    if action != "save":
+        previews = await run_in_threadpool(
+            lambda: [netboot_svc.preview_entry(e) for e in entries])
+        return _page(request, db, import_preview={
+            "content": content,
+            "entries": [{"entry": e, "rows": p, "replaces": e["id"] in existing}
+                        for e, p in zip(entries, previews)]})
+    for e in entries:
+        netboot_svc.store_entry(db, e)
+    replaced = len(entries) - len(added)
+    request.session["image_notice"] = (
+        f"Imported {len(entries)} custom entr{'y' if len(entries) == 1 else 'ies'}: "
+        + ", ".join(e["name"] for e in entries)
+        + (f" ({replaced} replaced an entry with the same ID)." if replaced else "."))
+    return RedirectResponse("/images#custom-entries", status_code=303)
+
+
+@router.post("/images/catalog/{entry_id}/delete")
+def delete_entry(request: Request, entry_id: str, user: User = Depends(require_admin),
+                 db: Session = Depends(get_db)):
+    entry = netboot_svc.custom_entry(db, entry_id)
+    if entry and netboot_svc.delete_entry(db, entry_id):
+        request.session["image_notice"] = (
+            f"Deleted the custom entry {entry['name']}. Images made from it keep "
+            "booting; Reprocess needs the entry back.")
+    return RedirectResponse("/images#custom-entries", status_code=303)

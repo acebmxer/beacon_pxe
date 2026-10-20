@@ -17,5 +17,3 @@ services:
     build: ./nfs
   smb:
     build: ./smb
-  reload:
-    build: ./reload

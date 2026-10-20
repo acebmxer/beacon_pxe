@@ -11,12 +11,11 @@ failure cases.
 | `web`     | Management UI + API (FastAPI); renders boot configs | port 8080 |
 | `nginx`   | Serves boot files to iPXE (`/boot.ipxe`, kernels, initrds, ISOs) | port 80 |
 | `dnsmasq` | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
-| `nfs`     | Exports each Linux image's live filesystem so clients mount it instead of copying the whole ISO to RAM | **host**, privileged |
+| `nfs`     | Exports each Linux image's live filesystem or Fedora/RHEL installer tree so clients mount it instead of copying it to RAM | **host**, privileged |
 | `smb`     | Exports each Windows image's unpacked install media so WinPE can run `setup.exe` | **host** |
-| `reload`  | Restarts dnsmasq when its config is regenerated | host |
 
 Images publish to `ghcr.io/acebmxer/beacon-<service>`. iPXE binaries, the nginx
-and samba configs, and the reload script are baked into the images — nothing is
+and samba configs, and the service scripts are baked into the images — nothing is
 bind-mounted — which is why the stack runs from just `docker-compose.yml` +
 `.env`. A consequence: **some fixes ship inside a service image, not `web`** (the
 iPXE chain script in `dnsmasq`, the samba tuning in `smb`), so the supported
@@ -26,6 +25,14 @@ update is a whole-stack `docker compose pull && docker compose up -d`.
 that don't cross Docker's bridge. `nfs` is **host + privileged** because it runs
 the in-kernel NFS server (`nfsd` — `modprobe nfsd` if the host hasn't loaded it).
 `smb` is **host** so WinPE reaches the share at the server's LAN address.
+
+`dnsmasq` restarts itself when the web app rewrites its config (older versions
+used a separate `reload` container with the Docker socket for this). `nfs` and
+`smb` read the **Boot interface** from that same config: NFS exports only to
+that interface's subnet(s) and Samba listens only on it, so a client on another
+network can't mount them. Both follow a changed boot interface within seconds.
+A `docker-compose.yml` from before this doesn't give them the config; they then
+serve every address as before, and their logs say so.
 
 ## DHCP modes
 
@@ -77,16 +84,153 @@ host still uses `BEACON_TAG` from `.env`.
 
 Upload format is `.iso` only. On upload the kernel + initrd are extracted (via
 `bsdtar`; `7z` for the UDF ISOs modern Windows uses) and served over HTTP; the
-raw ISO is kept at `/images/<file>.iso`. A best-effort kernel command line is
+raw ISO is kept at `/images/<file>.iso`; uploading a second ISO with a name
+already in use saves it as `<file>-2.iso`, `<file>-3.iso`, and so on. A
+best-effort kernel command line is
 filled in per distro — edit **boot args** on the Images page if a live ISO needs
 a tweak (a **Reprocess** re-derives them and overwrites your edit).
+
+To reprocess or delete several images at once, tick them in the Images table (the
+box in the header ticks every image) and press **Reprocess selected** or **Delete
+selected**; both ask first. The images are reprocessed one after another, and an
+image still processing, or waiting for its turn, is left alone, by a row's own
+**Reprocess** too.
+
+**Delete** works on any image. One still processing shows **deleting** until
+its current step stops (a download stops within a second, an unpack when it
+finishes), then it goes with all its files. If it stays on **deleting**, press
+**Delete** again to remove it at once.
+
+### Netboot installers (no ISO)
+
+**Add from a netboot catalog** on the Images page creates an image without an
+ISO. Pick a distro (the built-in ones are listed in the table after this
+paragraph; others are added as custom entries, below), a release (pick from the list, which is read from the mirror and marks
+releases past their long-term support "end of life"; type `12` or `bookworm`; or enter any
+other release name the mirror carries, or a newer version number, which is read
+from the mirror) and a mirror (pre-filled, editable).
+Beacon downloads the distro's netboot archive (about 55 MB for Debian), keeps the
+kernel and initrd for the boot menu, and sets the kernel arguments so the
+client's installer fetches its packages from that mirror. The archive itself
+stays in `/images` so **Reprocess** can rebuild the boot files; the client needs
+internet (or a reachable local mirror) during the install. The archive can also
+come from another URL, or be uploaded when the Beacon host is offline. 
+Choose **Live desktop** instead to boot Debian's live desktops (KDE Plasma, GNOME,
+Xfce, Cinnamon, MATE, LXQt, LXDE or Standard). Debian publishes live boot files
+only inside its live ISO, so Beacon downloads that ISO once (about 3–4 GB), keeps
+the kernel, initrd and `filesystem.squashfs`, and deletes the ISO. Clients fetch
+the squashfs over HTTP into RAM, so they need about 6 GB. **Reprocess** downloads
+the ISO again. Pick the **Release**: the list is read from Debian's
+mirror, so it shows the releases Debian carries now (today 14 testing, a
+pre-release built weekly, then 13, 12 and 11) and a new release appears on its
+own. A release whose long-term support has ended, by Debian's published dates,
+stays listed, marked "end of life", unless **Offer end-of-life releases** under
+**Server Settings → Netboot catalog** is turned off: then such releases are not
+listed for any distro and cannot be added, while images already added stay as
+they are. The live ISO's folder is the **Mirror**
+field, and the file name is read from it, so new point releases are picked up.
+For Debian 12 the newest point release is found in Debian's archive. **Other**
+accepts a version number or codename that is not in the list (`15` or its
+codename): Beacon finds it on Debian's mirror, then looks for the live ISO in
+Debian's current, archive or weekly testing folder.
+
+The other built-in distros work the same way, each in the way the distro
+publishes its boot files:
+
+| Distro | Installer | Live desktops |
+|--------|-----------|---------------|
+| Debian | netboot archive (kernel and initrd) | KDE Plasma, GNOME, Xfce, Cinnamon, MATE, LXQt, LXDE, Standard |
+| Ubuntu | Ubuntu Server: netboot archive; the client downloads the live-server ISO from the mirror into RAM | Ubuntu, Kubuntu, Xubuntu, Lubuntu, Ubuntu MATE, Ubuntu Budgie, Ubuntu Cinnamon, Ubuntu Unity, Ubuntu Studio, Edubuntu, Ubuntu Kylin (unpacked ISO over NFS) |
+| Fedora | kernel and initrd; the installer is loaded from the mirror | Workstation, KDE Plasma and the spins (Xfce, Cinnamon, LXQt, MATE, Budgie, COSMIC, Sway, i3, LXDE, MiracleWM, KDE Plasma Mobile, Sugar on a Stick) |
+| Rocky Linux, AlmaLinux, CentOS Stream | kernel, initrd and the installer's own system (about 1 GB, kept so a point release on the mirror cannot leave them out of step) | Rocky: Workstation, Workstation Lite, KDE Plasma, Xfce, MATE, Cinnamon. Alma: GNOME, GNOME Mini, KDE Plasma, Xfce, MATE. CentOS Stream (Alternative Images SIG): GNOME, KDE Plasma, Cinnamon, MATE, Xfce, MAX, MIN. Some only for some releases |
+| openSUSE Leap | 16.0: kernel, initrd and the Agama installer system (about 420 MB). 15.6: kernel and initrd, YaST loaded from the mirror | none |
+| openSUSE Tumbleweed | kernel and initrd, YaST loaded from the mirror | GNOME, KDE Plasma, Xfce |
+| Linux Mint | none (it installs from the live desktop) | Cinnamon, MATE, Xfce (unpacked ISO over NFS) |
+| Kali Linux | netboot archive, as Debian | none |
+| Arch Linux | kernel, initrd and the live root filesystem (about 1 GB) | EndeavourOS, CachyOS (Arch-based; kernel, initrd and `airootfs.sfs` taken from their ISO, booted like Arch's own) |
+| Alpine Linux | kernel, initramfs and modloop; packages from the mirror | none |
+| XCP-ng | Xen, dom0 kernel and `install.img` from XCP-ng's netinstall folder, booted like an uploaded XCP-ng ISO (UEFI GRUB chainloader); packages from the mirror | none |
+
+Ubuntu, Fedora, Rocky, Alma, CentOS Stream, Linux Mint, Alpine and XCP-ng read
+their release list from the mirror like Debian, so a new release appears on its own
+(Ubuntu's default is the newest LTS); end-of-life dates come from Ubuntu's
+distro-info-data, Fedora's Bodhi and Alpine's `releases.json`, or the catalog's
+own dates for the others. Each release in the list also names the newest build
+the distro publishes now, read from its mirror and refreshed every six hours, so
+a point release shows up on its own ("Ubuntu 26.04 LTS — 26.04.1", "Debian 13
+(trixie) — 13.7", Rocky's and Alma's 10.2, Alpine's 3.24.2, XCP-ng's 8.3.0,
+Arch's monthly release, and the current Tumbleweed snapshot, CentOS Stream
+compose and Kali build); adding the image downloads that build. Live desktops whose root is a single squashfs (Fedora,
+Rocky, Alma, CentOS Stream, Tumbleweed, EndeavourOS, CachyOS) are kept and streamed
+over HTTP like Debian's, so clients need RAM for it. Ubuntu's and Linux Mint's desktops boot
+with casper, which mounts its root over NFS only, so Beacon unpacks their ISO
+into the NFS share (about the ISO's size) and deletes the ISO; clients need
+ports 111, 2049 and 20048 to Beacon, as for an uploaded Ubuntu ISO. A distro or
+desktop not in the list is still added by uploading its ISO. A download that
+stalls or drops part-way is resumed where it stopped, up to four tries, before
+the image is marked as failed.
+
+Pre-releases are listed at the top of the **Release** list, marked
+"pre-release", where the distro publishes them, read from its mirror like its
+releases: Debian's testing release, Ubuntu's beta before its release day (its
+beta archive and ISOs are used until the final ones are out), Fedora's Beta from
+`releases/test/`, Rocky Linux's betas from its staging mirror and AlmaLinux's
+from its vault (installers only; Rocky's live desktops too), openSUSE Leap's
+beta or release candidate, Linux Mint's beta ISOs from `testing/`, Kali's
+`kali-dev` and Alpine's `edge`. Picking one fills in the mirror it is on. A
+beta the distro has since released (Mint's 22.3 beta once 22.3 is out) is not
+listed. CentOS Stream, Tumbleweed, Arch and XCP-ng publish none. **Offer
+pre-releases** under **Server Settings → Netboot catalog** (on by default) hides
+them all and refuses adding one when turned off, typed under **Other** too;
+images already added stay as they are.
+
+**Custom catalog entries** add an installer for a distro the catalog does not
+have. Under **Custom catalog entries** on the Images page, give a name, a default
+mirror, the boot files and the kernel arguments, and list the releases one per
+line (the first is the default; `43 | Fedora 43` sets a label). The boot files are
+either a netboot archive with the paths of the kernel and initrd inside it
+(Debian's `netboot.tar.gz`), or a kernel URL and an initrd URL, downloaded as they
+are (Fedora's `images/pxeboot/`, Alpine's `netboot/`); those are fetched again on
+**Reprocess**, and only **Download from the mirror** applies to them. In the URLs,
+`{mirror}` is the image's mirror and `{version}` the release; the kernel arguments
+also take `{mirror_proto}`, `{mirror_host}` and `{mirror_path}`. A literal brace
+is written twice, so the iPXE variable `${boot-url}` is `${{boot-url}}`. For
+example, Fedora's installer (also built in) as a custom entry:
+
+| Field | Value |
+|-------|-------|
+| Default mirror | `https://dl.fedoraproject.org/pub/fedora/linux` |
+| Kernel URL | `{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/vmlinuz` |
+| Initrd URL | `{mirror}/releases/{version}/Everything/x86_64/os/images/pxeboot/initrd.img` |
+| Kernel arguments | `inst.repo={mirror}/releases/{version}/Everything/x86_64/os ip=dhcp` |
+| Releases | `44` |
+
+**Preview** fills the templates in for every release, checks each file on the
+mirror (found with its size, not found, or not checked when the Beacon host is
+offline) and shows the kernel command line the boot menu will carry; **Save**
+appears after a preview, and editing a field after it asks for a new one. An
+unknown placeholder, a URL that does not come out as http(s), or several releases
+with no `{version}` in a URL is refused with a message. The entry then appears in
+the **Distro** list of **Add from a netboot catalog**, marked "(custom)". A
+release not in the list can be typed under **Other**.
+
+**Import from a file** takes JSON in the built-in catalog's own format
+(`{"distros": [ ... ]}`), a list of entries, or one entry, with the fields `name`,
+`default_mirror`, `archive_url` + `kernel_member` + `initrd_member` or
+`kernel_url` + `initrd_url`, `boot_args`, `releases` (each a name, or an object
+with `id` and optionally `label`, `number`, `default`, `eol`, and `prerelease`:
+`true` marks a beta, hidden with the built-in pre-releases), and an optional
+`id`. Every entry is previewed, and nothing is imported if any entry is wrong; an
+entry with the ID of an existing custom entry replaces it. Custom entries are kept
+in the database, so a backup carries them. Deleting one leaves its images
+booting, but they cannot be reprocessed until an entry with the same ID is back.
 
 | Distro | Boot args |
 |--------|-----------|
 | Ubuntu live | `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
 | Debian live | `boot=live netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
-| Fedora/RHEL netinstall | `inst.stage2=${boot-url}/os/<id>/tree ip=dhcp` (packages come from the online mirrors; the client needs internet) |
-| Fedora/RHEL full DVD | `inst.repo=${boot-url}/os/<id>/tree ip=dhcp` |
+| Fedora/RHEL netinstall | `inst.stage2=nfs:${server-ip}:/nfs/<id> ip=dhcp` (packages come from the online mirrors; the client needs internet) |
+| Fedora/RHEL full DVD | `inst.repo=nfs:${server-ip}:/nfs/<id> ip=dhcp` |
 | Fedora 42+ live | `root=live:${boot-url}/os/<id>/squashfs.img rd.live.image ip=dhcp` |
 | Archiso (Arch/EndeavourOS/CachyOS) | `archiso_http_srv=${boot-url}/os/<id>/ archisobasedir=arch BOOTIF=01-${net0/mac:hexhyp} ip=dhcp` |
 
@@ -94,6 +238,10 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 volume and mounted over NFS on demand, so client RAM use stays low regardless of
 image size (the old `url=`/`fetch=` methods copied the whole ISO into a RAM disk
 and failed on large images — hit **Reprocess** to switch an old image to NFS).
+Fedora/RHEL installer ISOs are unpacked there too: over HTTP the installer copies
+`images/install.img` into RAM, which needs about twice its size (a 3.8 GB one
+needed a 10 GB client); over NFS it reads it from the share. Installer images
+added before this still boot over HTTP; **Reprocess** moves them to NFS.
 Fedora 42+ live and Archiso instead stream just their root filesystem over HTTP;
 Archiso pulls the whole `airootfs.sfs` into RAM, so its live desktop needs
 **~8 GB** of client RAM.
@@ -167,7 +315,9 @@ Add it to `/etc/fstab` so it survives reboots. Database and settings live in
 generates a TOTP secret (RFC 6238, 30-second steps), shows it as a QR code and as
 text for manual entry, and only activates it once you enter a valid code — a
 mistyped secret can't lock you out. A code from the previous or next window is
-accepted, so reading one just as it rolls over still works. Losing the
+accepted, so reading one just as it rolls over still works. Five wrong codes
+in a row lock that account's 2FA step for 15 minutes, so the code can't be
+guessed by trying them all. Losing the
 authenticator means losing the account: another admin can delete and recreate the
 user, or clear `totp_enabled` in `data/pxe.db` directly.
 
@@ -198,7 +348,8 @@ Note that a missing or invalid token gets the browser behaviour — `303` to
 
 **Server Settings → Backup & restore** downloads `beacon-backup.db`: the SQLite
 database itself, holding users (password hashes, 2FA secrets, API tokens),
-every server setting, image metadata and boot history.
+every server setting, image metadata, custom netboot catalog entries and boot
+history.
 
 It is a **configuration** snapshot, not a media backup. ISOs (`./data/images`),
 drop-in drivers (`./data/drivers`), your `.env`, and the extracted boot files on

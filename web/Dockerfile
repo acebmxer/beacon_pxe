@@ -24,9 +24,14 @@ RUN apt-get update \
 # from an in-memory ramdisk. Windows ISOs can't be netbooted as a plain
 # kernel+initrd; wimboot is the standard chain. Copied into the bootroot at
 # startup (services.bootstrap) so nginx serves it at /wimboot.
+# Every Windows PXE client runs this file, so its SHA-256 is pinned: a different
+# download stops the build. Moving to another version means updating both
+# values (sha256sum of the new release's wimboot).
 ARG WIMBOOT_VERSION=2.8.0
+ARG WIMBOOT_SHA256=74d4bf3d09386ccbbe907d9db59030f8cd8c88f7b4ccb799d386f31def11b3fe
 RUN curl -fsSL -o /usr/local/share/wimboot \
-        "https://github.com/ipxe/wimboot/releases/download/v${WIMBOOT_VERSION}/wimboot"
+        "https://github.com/ipxe/wimboot/releases/download/v${WIMBOOT_VERSION}/wimboot" \
+    && echo "${WIMBOOT_SHA256}  /usr/local/share/wimboot" | sha256sum -c -
 
 WORKDIR /app
 
@@ -34,7 +39,6 @@ COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY tests ./tests
 
 # Build provenance, surfaced in the UI's Updates panel so an admin can tell what
 # is actually deployed. Set by the publish workflow from the docker metadata

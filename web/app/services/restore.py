@@ -169,6 +169,19 @@ def inspect_backup(path: Path) -> dict:
                 "This does not look like a Beacon backup: it has no "
                 + ", ".join(sorted(missing)) + " table.")
 
+        # Beacon's schema has no triggers or views. One in an uploaded file
+        # would become part of the live database and run on later writes (say,
+        # putting an account back to admin whenever users change).
+        extra = conn.execute(
+            "SELECT type, name FROM sqlite_master WHERE type IN ('trigger', 'view')"
+        ).fetchall()
+        if extra:
+            raise RestoreError(
+                "This file contains database " + ", ".join(
+                    f"{kind} {name}" for kind, name in extra)
+                + ", which Beacon never creates. It was not made by Beacon's "
+                  "backup and was not restored.")
+
         user_cols = _columns(conn, "users")
         if "username" not in user_cols or "role" not in user_cols:
             raise RestoreError(

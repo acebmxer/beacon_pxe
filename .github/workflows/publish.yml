@@ -90,6 +90,8 @@ jobs:
             context: ./nfs
           - name: smb
             context: ./smb
+          # No longer in docker-compose.yml (dnsmasq restarts itself), but still
+          # published so compose files that list it keep pulling.
           - name: reload
             context: ./reload
     steps:

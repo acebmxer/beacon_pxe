@@ -21,7 +21,7 @@ from ..services import restore as restore_svc
 router = APIRouter()
 
 # Settings the form is allowed to write, with simple coercion.
-BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http"}
+BOOL_KEYS = {"svc_dhcp", "svc_tftp", "svc_http", "netboot_show_eol", "netboot_show_prerelease"}
 TEXT_KEYS = {
     "server_ip", "boot_interface", "dhcp_mode", "dhcp_range_start",
     "dhcp_range_end", "dhcp_subnet_mask", "dhcp_gateway", "dhcp_dns",
@@ -55,7 +55,8 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     for key in BOOL_KEYS:
         set_setting(db, key, "1" if key in form else "0")
 
-    # Regenerate boot configs; the reload sidecar restarts dnsmasq.
+    # Regenerate boot configs; the dnsmasq container restarts dnsmasq when its
+    # config changes, and nfs/smb follow a changed boot interface.
     dnsmasq.render(db)
     ipxe.render(db)
     # XCP-NG GRUB chainloaders bake in the server IP, so rebuild them in case it

@@ -3,18 +3,21 @@
 Extraction uses bsdtar (libarchive) to read files straight out of the ISO9660
 image — no privileged loop mount, so it works in an unprivileged container.
 """
+import gzip
 import logging
+import os
 import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from ..db import SessionLocal
 from ..models import Image
 from .. import config
 from ..store import all_settings
-from . import ipxe
+from . import ipxe, netboot
 
 log = logging.getLogger("beacon.images")
 
@@ -25,6 +28,25 @@ EXTRACT_SUBDIR = "os"
 # on disk (see reconcile_statuses). Distinct from "error": nothing went wrong
 # with the ISO, the derived data just has to be rebuilt.
 NEEDS_REPROCESS = "needs_reprocess"
+
+# Statuses of an image whose run is queued ("pending") or under way. Reprocess
+# leaves these alone, and startup clears them, as no background task survives a
+# restart.
+IN_FLIGHT = ("pending", "processing")
+
+# Status of an image deleted while its run was still going. The run stops at
+# its next step and removes the image then; until it does, the row keeps its id
+# so a new image can't be given the same folders. A second Delete removes it
+# straight away (a run that hangs), and startup removes any left behind.
+DELETING = "deleting"
+
+# Statuses Reprocess leaves alone.
+BUSY = IN_FLIGHT + (DELETING,)
+
+# The stop flag of each image whose run is under way, by image id. Runs are
+# background tasks in this one process, so this is the whole picture.
+_runs: dict[int, threading.Event] = {}
+_runs_lock = threading.Lock()
 
 # Candidate (kernel, initrd) path patterns by distro family, checked in order.
 # Patterns are matched case-insensitively against the ISO's file listing.
@@ -58,7 +80,13 @@ INITRD_PATTERNS = [
 
 
 def iso_path(filename: str) -> Path:
-    return config.IMAGE_DIR / filename
+    # Only the last path component: filename comes from the database, which a
+    # restored backup can fill with "/elsewhere" or "../x", and the result is
+    # read, overwritten and deleted.
+    name = Path(filename).name
+    if name in ("", ".", ".."):
+        name = "invalid-name"
+    return config.IMAGE_DIR / name
 
 
 def _list_7z(path: Path) -> list[str]:
@@ -134,7 +162,10 @@ def _extract_one(iso: Path, member: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as fh:
         subprocess.run(
-            ["bsdtar", "-xOf", str(iso), member],
+            # "--" ends option parsing: member names come from the ISO, and one
+            # starting with "-" would otherwise be read as a bsdtar option
+            # (--use-compress-program runs a command).
+            ["bsdtar", "-xOf", str(iso), "--", member],
             stdout=fh, check=True,
         )
 
@@ -144,7 +175,7 @@ def _extract_one_7z(iso: Path, member: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as fh:
         subprocess.run(
-            ["7z", "e", "-so", str(iso), member],
+            ["7z", "e", "-so", str(iso), "--", member],
             stdout=fh, stderr=subprocess.DEVNULL, check=True,
         )
 
@@ -153,7 +184,7 @@ def _extract_gunzip(iso: Path, member: str, dest: Path) -> None:
     """Extract a gzip member and write it decompressed (for xen.gz -> xen)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     extract = subprocess.Popen(
-        ["bsdtar", "-xOf", str(iso), member], stdout=subprocess.PIPE)
+        ["bsdtar", "-xOf", str(iso), "--", member], stdout=subprocess.PIPE)
     with open(dest, "wb") as fh:
         gunzip = subprocess.Popen(
             ["gzip", "-dc"], stdin=extract.stdout, stdout=fh)
@@ -165,14 +196,37 @@ def _extract_gunzip(iso: Path, member: str, dest: Path) -> None:
             extract.returncode or gunzip.returncode, "bsdtar|gzip")
 
 
+def _drop_escaping_links(dest: Path) -> None:
+    """Delete symlinks in an unpacked tree that point outside it.
+
+    nginx follows symlinks, so a link in an ISO such as `x -> /etc/passwd`
+    would otherwise be served from the boot server's own file system. Links
+    that stay inside the tree (Debian and Ubuntu ISOs carry `debian -> .`)
+    are kept.
+    """
+    root = os.path.realpath(dest)
+    for top, dirs, files in os.walk(dest):
+        for name in dirs + files:
+            path = os.path.join(top, name)
+            if not os.path.islink(path):
+                continue
+            target = os.path.realpath(path)
+            if target != root and not target.startswith(root + os.sep):
+                link = os.readlink(path)
+                os.unlink(path)
+                log.warning("Removed symlink %s -> %s: it points outside the "
+                            "unpacked ISO", path, link)
+
+
 def _extract_tree(iso: Path, dest: Path) -> None:
-    """Unpack the whole ISO into dest (NFS export or HTTP installer repo).
+    """Unpack the whole ISO into dest (an NFS export).
 
     Re-extracts cleanly each time so a Retry can't leave a half-written tree.
     """
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bsdtar", "-xf", str(iso), "-C", str(dest)], check=True)
+    _drop_escaping_links(dest)
 
 
 def _extract_tree_7z(iso: Path, dest: Path) -> None:
@@ -735,49 +789,52 @@ def _process_windows(db, img: Image, iso: Path, entries: list[str]) -> None:
 
 def _netboot_plan(
     entries: list[str], filename: str, image_id: int
-) -> tuple[bool, list[tuple[str, str]], str, bool]:
+) -> tuple[bool, list[tuple[str, str]], str]:
     """Decide how a live ISO should netboot.
 
-    Returns (needs_nfs, http_files, kernel cmdline, needs_repo_tree):
+    Returns (needs_nfs, http_files, kernel cmdline):
       - needs_nfs: unpack the whole ISO and export it over NFS.
       - http_files: (iso_member, dest_relpath) pairs to extract into the image's
         bootroot dir (os/<id>/) and stream over HTTP. dest_relpath keeps the
         on-disc subpath where the bootloader expects it. Empty unless a single-
         file HTTP root is used (Fedora 42+ live, Archiso); mutually exclusive
         with needs_nfs.
-      - needs_repo_tree: unpack the whole ISO into os/<id>/tree/ and serve it
-        over HTTP (Fedora/RHEL). Anaconda treats inst.repo/inst.stage2 as a
-        directory holding .treeinfo and images/install.img, so pointing it at
-        the .iso file itself 404s. A netinstall ISO has no packages, so it is
-        passed as inst.stage2 only and installs from the online mirrors.
 
     casper (Ubuntu) and live (Debian) images mount their squashfs over NFS so the
     whole ISO never has to fit in client RAM — the old `url=`/`fetch=` methods
     copied the full image into a tmpfs and fell over on anything but huge clients.
     nfsroot points at this image's exported tree; ${server-ip} is set in boot.ipxe.
-    Fedora/RHEL stream their repo over HTTP from the unpacked tree.
+
+    Fedora/RHEL installers get their unpacked ISO over NFS too. Anaconda treats
+    inst.repo/inst.stage2 as a directory holding .treeinfo and
+    images/install.img. Given an http: one, its initramfs downloads install.img
+    into /tmp, which is RAM and can use only about half of it, so a 3.8 GB
+    install.img (Fedora Kinoite) needed 10 GB of client RAM. Given an nfs: one,
+    it mounts the share and reads install.img from it, as booting the disc does.
+    A netinstall ISO has no packages, so it is passed as inst.stage2 only and
+    installs from the online mirrors.
     """
     nfsroot = f"${{server-ip}}:/nfs/{image_id}"
     base = f"${{boot-url}}/{EXTRACT_SUBDIR}/{image_id}"
     joined = " ".join(e.lower() for e in entries)
     if "casper/" in joined:  # Ubuntu / casper live
-        return True, [], f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp", False
+        return True, [], f"boot=casper netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "live/" in joined:    # Debian live
-        return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp", False
+        return True, [], f"boot=live netboot=nfs nfsroot={nfsroot} ip=dhcp"
     if "images/pxeboot/" in joined:  # Fedora/RHEL family
         # A full DVD carries the packages (repodata/), so it is its own repo. A
         # netinstall/boot ISO carries only the installer: it is the stage2, and
         # the packages come from the distro's online mirrors.
         if "repodata/" in joined:
-            return False, [], f"inst.repo={base}/tree ip=dhcp", True
-        return False, [], f"inst.stage2={base}/tree ip=dhcp", True
+            return True, [], f"inst.repo=nfs:{nfsroot} ip=dhcp"
+        return True, [], f"inst.stage2=nfs:{nfsroot} ip=dhcp"
     # Fedora 42+ live: dracut dmsquash-live root filesystem under LiveOS/. The
     # squashfs is extracted to the bootroot and streamed over HTTP — no NFS or
     # whole-ISO copy needed.
     squashfs = _match(entries, [r"liveos/squashfs.img"])
     if squashfs:
         return False, [(squashfs, "squashfs.img")], (
-            f"root=live:{base}/squashfs.img rd.live.image ip=dhcp", False)
+            f"root=live:{base}/squashfs.img rd.live.image ip=dhcp")
     # Archiso (Arch / EndeavourOS / CachyOS): the airootfs squashfs lives under
     # arch/<arch>/. archiso's initramfs fetches it (and verifies the .sha512)
     # from archiso_http_srv, keeping the same arch/<arch>/ layout, so extract
@@ -803,8 +860,8 @@ def _netboot_plan(
             files.append((sha, sha.lstrip("./")))
         return False, files, (
             f"archiso_http_srv={base}/ archisobasedir={basedir} "
-            "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp", False)
-    return False, [], "ip=dhcp", False
+            "BOOTIF=01-${net0/mac:hexhyp} ip=dhcp")
+    return False, [], "ip=dhcp"
 
 
 def _clean_derived_data(image_id: int) -> None:
@@ -821,19 +878,195 @@ def _clean_derived_data(image_id: int) -> None:
     shutil.rmtree(config.SMB_DIR / sid, ignore_errors=True)
 
 
+def _process_netboot(db, img: Image) -> None:
+    """Build a catalog image without keeping an ISO.
+
+    Installer: fetch the netboot archive if needed and keep its kernel and
+    initrd; an entry that names a kernel URL and an initrd URL instead has both
+    (and any extra files it lists) downloaded on every run. Live: fetch the
+    distro's live ISO, keep the kernel, initrd and root filesystem (served over
+    HTTP) and delete the ISO. A casper live desktop (Ubuntu, Linux Mint) can only
+    mount its root over NFS, so its ISO is unpacked for the nfs service instead.
+    """
+    entry = netboot.catalog_entry(img.catalog_id, db)
+    live = netboot.live_entry(entry) if entry else None
+    if entry is None or (img.variant == "live" and live is None):
+        img.status = "error"
+        img.message = f"Catalog entry '{img.catalog_id}' no longer exists."
+        db.commit()
+        return
+    if live and img.variant == "live":
+        # A live image's release field holds its desktop (flavour).
+        live = netboot.live_for_flavour(live, img.release)
+    archive = iso_path(img.filename)
+    dest_dir = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
+    values = {}
+    try:
+        if img.variant != "live" and entry.get("kernel_url"):
+            img.size_bytes = netboot.fetch_boot_files(entry, img.mirror, img.release,
+                                                      dest_dir)
+        else:
+            if img.source_url and not archive.exists():
+                netboot.download(
+                    img.source_url, archive,
+                    netboot.LIVE_ISO_MAX_BYTES if img.variant == "live"
+                    else netboot.ARCHIVE_MAX_BYTES)
+            if not archive.exists():
+                raise netboot.NetbootError(
+                    "The uploaded archive is gone; add the image again.")
+            netboot.check_stop()
+            if img.variant == "live":
+                _extract_live_files(archive, live, dest_dir)
+                if live.get("root") == "nfs":
+                    netboot.check_stop()
+                    try:
+                        _extract_tree(archive, config.NFS_DIR / str(img.id))
+                    except subprocess.CalledProcessError as e:
+                        raise netboot.NetbootError(
+                            f"Live filesystem extraction failed: {e.stderr or e}")
+                # Everything needed is extracted; the ISO is only kept by ISO images.
+                archive.unlink(missing_ok=True)
+            else:
+                values = netboot.archive_values(entry, img.mirror, netboot.extract_boot_files(
+                    archive, entry, dest_dir, img.release))
+    except netboot.NetbootError as e:
+        img.status = "error"
+        img.message = str(e)
+        db.commit()
+        return
+    if entry.get("family") == "xcpng":
+        _finish_xcpng_netboot(db, img, entry, dest_dir)
+        return
+    img.os_family = "linux"
+    img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
+    img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/initrd"
+    if img.variant == "live":
+        img.boot_args = netboot.live_boot_args(live, img.id)
+        if live.get("root") == "nfs":
+            img.size_bytes = _tree_size(config.NFS_DIR / str(img.id))
+            img.message = (f"{entry['name']} live desktop ({img.release}); unpacked ISO "
+                           "served over NFS")
+        else:
+            img.size_bytes = (dest_dir / live.get("root_dest", "filesystem.squashfs")
+                              ).stat().st_size
+            img.message = f"{entry['name']} live desktop ({img.release}); root filesystem served over HTTP"
+    else:
+        img.boot_args = netboot.boot_args(entry, img.mirror, img.release, img.id, values)
+        if not entry.get("kernel_url"):
+            img.size_bytes = archive.stat().st_size
+        img.message = (f"{entry['name']} {img.release} installer; packages come "
+                       f"from {img.mirror}")
+    img.status = "ready"
+    db.commit()
+
+
+def _finish_xcpng_netboot(db, img: Image, entry: dict, dest_dir: Path) -> None:
+    """Lay out XCP-ng's downloaded netinstall files the way an XCP-ng ISO image
+    has them (xen, vmlinuz, install.img) and build its UEFI GRUB chainloader.
+    The dom0 arguments are kept across Reprocess, as for an uploaded ISO."""
+    dom0_args = img.boot_args or XCPNG_DOM0_ARGS
+    try:
+        (dest_dir / "initrd").replace(dest_dir / "install.img")
+        with gzip.open(dest_dir / "xen.gz") as src, open(dest_dir / "xen", "wb") as out:
+            shutil.copyfileobj(src, out, 1024 * 1024)
+        (dest_dir / "xen.gz").unlink()
+        _build_xcpng_grub(img, dest_dir, dom0_args, all_settings(db).get("server_ip", ""))
+    except (OSError, EOFError, subprocess.CalledProcessError) as e:
+        img.status = "error"
+        img.message = f"XCP-NG boot files could not be prepared: {getattr(e, 'stderr', '') or e}"
+        db.commit()
+        return
+    img.os_family = "xcpng"
+    img.kernel_path = f"{EXTRACT_SUBDIR}/{img.id}/xen"
+    img.initrd_path = f"{EXTRACT_SUBDIR}/{img.id}/vmlinuz"
+    img.boot_args = dom0_args
+    img.status = "ready"
+    img.message = (f"{entry['name']} {img.release} installer; Xen multiboot via UEFI GRUB "
+                   f"chainloader; packages come from {img.mirror}")
+    db.commit()
+
+
+def _tree_size(path: Path) -> int:
+    return sum(f.stat().st_size for f in path.rglob("*") if f.is_file() and not f.is_symlink())
+
+
+def _extract_live_files(iso: Path, live: dict, dest_dir: Path) -> None:
+    """Pull the kernel, initrd and root filesystem out of a live ISO.
+
+    A member can be a list of paths, tried in order, where a distro's releases
+    lay out their ISOs differently (images/pxeboot/ or boot/x86_64/loader/). An
+    NFS live desktop needs only the kernel and initrd here; its root is the
+    unpacked ISO.
+    """
+    try:
+        entries = _list_iso(iso)
+        wanted = {"kernel_member": "vmlinuz", "initrd_member": "initrd"}
+        if live.get("root") != "nfs":
+            wanted["root_member"] = live.get("root_dest", "filesystem.squashfs")
+        for key, name in wanted.items():
+            options = live[key] if isinstance(live[key], list) else [live[key]]
+            member = options[0]
+            # The ISO lists vmlinuz and vmlinuz-<version> as hard links to each
+            # other and which one holds the data depends on the order, so reading
+            # the plain name can give an empty file. Try the plain name, then the
+            # versioned ones, and keep the first that has content.
+            candidates = []
+            for option in options:
+                rx = re.compile(re.escape(option) + r"(-.+)?", re.IGNORECASE)
+                candidates += sorted(
+                    (e for e in entries if rx.fullmatch(e.lstrip("./"))),
+                    key=lambda e, o=option: e.lstrip("./") != o)
+            if not candidates:
+                raise netboot.NetbootError(
+                    f"The live ISO does not contain {' or '.join(options)}.")
+            for found in candidates:
+                _extract_one(iso, found, dest_dir / name)
+                if (dest_dir / name).stat().st_size:
+                    break
+            else:
+                raise netboot.NetbootError(
+                    f"{member} is empty in the live ISO.")
+        # Files the live system checks beside its root (archiso's .sha512).
+        listed = {e.lstrip("./"): e for e in entries}
+        for extra in live.get("extra_members", []):
+            if extra["member"] in listed:
+                _extract_one(iso, listed[extra["member"]], dest_dir / extra["dest"])
+    except subprocess.CalledProcessError as e:
+        raise netboot.NetbootError(f"Could not read the live ISO: {e.stderr or e}")
+
+
 def process_image(image_id: int) -> None:
     """Run extraction for one image. Intended to run as a background task."""
+    stop = threading.Event()
+    with _runs_lock:
+        if image_id in _runs:
+            return  # this image's run is already under way
+        _runs[image_id] = stop
+    netboot.watch_for_stop(stop)
     db = SessionLocal()
+    filename = None
     try:
         img = db.get(Image, image_id)
-        if img is None:
+        # Only a queued image is run: one deleted while it waited, or already
+        # built by an earlier run of the same queue, is left alone.
+        if img is None or img.status != "pending":
             return
+        filename = img.filename
         # Mark active extraction so the UI can distinguish "queued" from "working".
         img.status = "processing"
         db.commit()
         # Wipe any artifacts from a previous run before re-extracting, so a
         # changed family/netboot method can't leave stale (possibly huge) data.
         _clean_derived_data(image_id)
+        netboot.check_stop()
+        if img.source == "netboot":
+            _process_netboot(db, img)
+            ipxe.render(db)
+            if img.status == "ready":
+                log.info("Image %s ready (netboot)", img.name)
+            else:
+                log.warning("Image %s failed: %s", img.name, img.message)
+            return
         iso = iso_path(img.filename)
         try:
             entries = _list_iso(iso)
@@ -843,6 +1076,7 @@ def process_image(image_id: int) -> None:
             db.commit()
             return
 
+        netboot.check_stop()
         family = _detect_family(entries)
         img.os_family = family
         if family == "windows":
@@ -879,25 +1113,20 @@ def process_image(image_id: int) -> None:
             db.commit()
             return
 
-        needs_nfs, http_files, guessed_args, needs_repo_tree = _netboot_plan(
+        needs_nfs, http_files, guessed_args = _netboot_plan(
             entries, img.filename, img.id)
 
-        if needs_repo_tree:
-            try:
-                _extract_tree(iso, dest_dir / "tree")
-            except subprocess.CalledProcessError as e:
-                img.status = "error"
-                img.message = f"Installer repo extraction failed: {e.stderr or e}"
-                db.commit()
-                return
-
+        netboot.check_stop()
         if needs_nfs:
-            # Unpack the live filesystem so the nfs service can export it.
+            # Unpack the ISO (live filesystem or installer repo) so the nfs
+            # service can export it.
             try:
                 _extract_tree(iso, config.NFS_DIR / str(img.id))
             except subprocess.CalledProcessError as e:
                 img.status = "error"
-                img.message = f"Live filesystem extraction failed: {e.stderr or e}"
+                what = ("Installer repo" if "inst." in guessed_args
+                        else "Live filesystem")
+                img.message = f"{what} extraction failed: {e.stderr or e}"
                 db.commit()
                 return
         elif http_files:
@@ -925,8 +1154,55 @@ def process_image(image_id: int) -> None:
 
         ipxe.render(db)
         log.info("Image %s ready (%s)", img.name, family)
+    except netboot.Cancelled:
+        # Deleted part-way: the finally below removes the image.
+        db.rollback()
+        log.info("Processing image %s stopped: the image was deleted", image_id)
+    except Exception as exc:
+        # Anything the steps above don't turn into an error message (a full
+        # disk, a truncated archive, a missing tool) would otherwise leave the
+        # image on "processing" until a restart, and Reprocess skips it.
+        log.exception("Processing image %s failed", image_id)
+        db.rollback()
+        # Read the row afresh: a second Delete may have removed it meanwhile.
+        img = None if stop.is_set() else db.get(Image, image_id,
+                                                 populate_existing=True)
+        if img is not None:
+            img.status = "error"
+            img.message = f"Processing failed: {exc}"
+            db.commit()
+            ipxe.render(db)
     finally:
-        db.close()
+        netboot.watch_for_stop(None)
+        with _runs_lock:
+            _runs.pop(image_id, None)
+            deleted = stop.is_set()
+        try:
+            if deleted:
+                _finish_delete(db, image_id, filename)
+        finally:
+            db.close()
+
+
+def _finish_delete(db, image_id: int, filename: str | None) -> None:
+    """Remove an image that was deleted while its run was going, now the run
+    has stopped, together with anything the run wrote after the Delete."""
+    try:
+        db.rollback()
+        # Read the row afresh: the session may still hold it after a second
+        # Delete removed it.
+        img = db.get(Image, image_id, populate_existing=True)
+        if img is not None and img.filename == filename:
+            _remove_image(db, img)
+        elif img is None:
+            # Already removed by a second Delete: clear what the run wrote
+            # since. No image has this id now, so these folders were its own.
+            _clean_derived_data(image_id)
+            if filename and not db.query(Image).filter(
+                    Image.filename == filename).first():
+                iso_path(filename).unlink(missing_ok=True)
+    except Exception:
+        log.exception("Removing deleted image %s failed", image_id)
 
 
 def _exists_nonempty(path: Path) -> bool:
@@ -968,21 +1244,47 @@ def _required_paths(img: Image) -> list[Path]:
         args = img.boot_args or ""
         if "netboot=nfs" in args:
             paths.append(config.NFS_DIR / str(img.id))
-        if "inst.repo=" in args or "inst.stage2=" in args:  # unpacked HTTP tree
-            paths.append(dest_dir / "tree" / ".treeinfo")
-        if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
-            paths.append(dest_dir / "squashfs.img")
+        if img.source == "netboot":
+            # A catalog image keeps its own file names; its installer arguments
+            # point at the mirror, not at an unpacked tree.
+            entry = netboot.catalog_entry(img.catalog_id)
+            if img.variant == "live" and "netboot=nfs" not in args:
+                live = (entry or {}).get("live") or {}
+                paths.append(dest_dir / live.get("root_dest", "filesystem.squashfs"))
+            elif entry and img.variant != "live":
+                for extra in netboot.for_release(entry, img.release).get("extra_files", []):
+                    paths.append(dest_dir / extra["dest"])
+        else:
+            # The installer loads images/install.img from the unpacked tree.
+            # Not .treeinfo: Fedora 44 netinstall and Kinoite ISOs have none.
+            repo = re.search(r"inst\.(?:repo|stage2)=(\S+)", args)
+            if repo and repo.group(1).startswith("nfs:"):  # unpacked NFS tree
+                paths.append(config.NFS_DIR / str(img.id) / "images" / "install.img")
+            elif repo:  # unpacked HTTP tree (made before installers moved to NFS)
+                paths.append(dest_dir / "tree" / "images" / "install.img")
+            if "rd.live.image" in args:  # Fedora 42+ live: HTTP squashfs root
+                paths.append(dest_dir / "squashfs.img")
         basedir = re.search(r"archisobasedir=(\S+)", args)
         if basedir:
             paths.append(dest_dir / basedir.group(1))
     return paths
 
 
-def _missing_message(img: Image, missing: list[Path]) -> str:
+def _missing_message(db, img: Image, missing: list[Path]) -> str:
     """Explain what vanished and which action recovers it."""
     shown = ", ".join(str(p) for p in missing[:3])
     if len(missing) > 3:
         shown += f", and {len(missing) - 3} more"
+    if img.source == "netboot":
+        entry = netboot.catalog_entry(img.catalog_id, db) or {}
+        if img.variant == "live":
+            return (f"Boot files are missing ({shown}). Reprocess downloads "
+                    "the live ISO again and rebuilds them.")
+        if entry.get("kernel_url"):
+            return (f"Boot files are missing ({shown}). Reprocess downloads "
+                    "them again.")
+        return (f"Boot files are missing ({shown}). Reprocess rebuilds them "
+                "from the saved archive.")
     if not iso_path(img.filename).exists():
         return (f"Boot files are missing ({shown}) and so is the ISO "
                 f"{img.filename} — upload the ISO again to restore this image.")
@@ -991,7 +1293,8 @@ def _missing_message(img: Image, missing: list[Path]) -> str:
 
 
 def reconcile_statuses(db) -> int:
-    """Flag images whose extracted files are gone. Returns the number changed.
+    """Flag images whose extracted files are gone, and finish deletes a restart
+    interrupted. Returns the number of images changed or removed.
 
     `status` records how the last extraction went; it says nothing about whether
     what that extraction produced still exists. `docker compose down -v` destroys
@@ -1003,11 +1306,20 @@ def reconcile_statuses(db) -> int:
     Runs at startup, which is the only moment the volumes can have changed
     without Beacon doing it, and is when the boot menu is regenerated anyway.
     """
-    changed = 0
+    changed = removed = 0
     for img in db.query(Image).all():
-        # No background task survives a restart, so a row still marked in-flight
-        # was interrupted and will never finish on its own.
-        if img.status == "processing":
+        # Deleted while its run was going, and the restart ended the run
+        # before it could remove the image.
+        if img.status == DELETING:
+            _remove_files(img)
+            db.delete(img)
+            log.info("Removed image %s (id=%s), deleted before the restart",
+                     img.name, img.id)
+            removed += 1
+            continue
+        # No background task survives a restart, so a row still queued or
+        # in-flight was interrupted and will never finish on its own.
+        if img.status in IN_FLIGHT:
             img.status = NEEDS_REPROCESS
             img.message = ("Extraction was interrupted by a restart and never "
                            "finished. Reprocess to run it again.")
@@ -1019,27 +1331,48 @@ def reconcile_statuses(db) -> int:
         if not missing:
             continue
         img.status = NEEDS_REPROCESS
-        img.message = _missing_message(img, missing)
+        img.message = _missing_message(db, img, missing)
         log.warning("Image %s (id=%s) is missing %s; marked %s",
                     img.name, img.id, ", ".join(str(p) for p in missing),
                     NEEDS_REPROCESS)
         changed += 1
 
-    if changed:
+    if changed or removed:
         db.commit()
+    if changed:
         log.warning("%d image(s) need reprocessing; they are held out of the "
                     "boot menu until their files are rebuilt", changed)
-    return changed
+    return changed + removed
 
 
-def delete_image(db, img: Image) -> None:
-    """Remove the ISO, extracted files, DB row, and regenerate the menu."""
-    iso = iso_path(img.filename)
-    iso.unlink(missing_ok=True)
-    extracted = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
-    shutil.rmtree(extracted, ignore_errors=True)
-    shutil.rmtree(config.NFS_DIR / str(img.id), ignore_errors=True)
-    shutil.rmtree(config.SMB_DIR / str(img.id), ignore_errors=True)
+def delete_image(db, img: Image) -> bool:
+    """Remove the ISO, extracted files, DB row, and regenerate the menu.
+
+    An image whose run is still going is only marked "deleting" and told to
+    stop: removing its files under it would leave the run writing new ones
+    (and a re-downloaded ISO) that nothing owns. The run removes the image at
+    its next step. Pressing Delete again removes it at once, for a run that
+    hangs. Returns False when the removal was left to the run.
+    """
+    with _runs_lock:
+        stop = _runs.get(img.id)
+        if stop is not None and not stop.is_set():
+            stop.set()
+            img.status = DELETING
+            img.message = "Deleting: waiting for the current step to stop."
+            db.commit()
+            return False
+    _remove_image(db, img)
+    return True
+
+
+def _remove_files(img: Image) -> None:
+    iso_path(img.filename).unlink(missing_ok=True)
+    _clean_derived_data(img.id)
+
+
+def _remove_image(db, img: Image) -> None:
+    _remove_files(img)
     db.delete(img)
     db.commit()
     ipxe.render(db)

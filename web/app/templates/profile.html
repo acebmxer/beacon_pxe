@@ -62,7 +62,7 @@
       <p class="muted">On a phone? <a href="{{ totp_uri }}" rel="noopener">Open in your authenticator app</a>.</p>
       <label>Secret key (manual entry)</label>
       <input class="mono" type="text" value="{{ new_totp_secret }}" readonly
-             style="letter-spacing:0.1em;" onclick="this.select()">
+             style="letter-spacing:0.1em;" data-select-on-click>
       <p class="muted" style="margin-top:8px;">Once you've added the account, enter the current 6-digit code below to activate 2FA.</p>
       <form method="post" action="/profile/totp/confirm">
         <label for="totp_code">Authenticator code</label>
@@ -85,7 +85,7 @@
     {% if user.api_token %}
       <label>Current token</label>
       <input class="mono" type="text" value="{{ user.api_token }}" readonly
-             style="font-size:0.78rem;" onclick="this.select()">
+             style="font-size:0.78rem;" data-select-on-click>
       <p class="muted" style="margin-top:6px;">Include in requests as:
         <span class="mono">Authorization: Bearer &lt;token&gt;</span></p>
       <div class="toolbar" style="margin-top:14px;">

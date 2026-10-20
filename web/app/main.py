@@ -4,15 +4,16 @@ import logging
 import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlparse
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, RedirectResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from . import config
+from . import config, net
 from .db import init_db, SessionLocal
-from .deps import RedirectException
+from .deps import RedirectException, _user_by_token
 from .store import get_setting
 from .services import bootstrap
 from .routers import (auth, dashboard, settings, images, drivers, users, setup,
@@ -122,6 +123,50 @@ async def security_headers(request: Request, call_next):
     return response
 
 
+# Cross-origin and anonymous state-changing requests.
+#
+# SameSite=Lax (below) stops other *sites* from sending the session cookie, but
+# a page on another port of the same host -- nginx's boot files on :80, any
+# other service on this box -- is the same site and its form posts carry the
+# cookie. So a browser POST must come from this origin: browsers send Origin on
+# every POST (Referer as the fallback). Scripts using a Bearer token send
+# neither and are unaffected.
+#
+# Anonymous POSTs (other than signing in/out) are turned away here, before the
+# route reads the body: FastAPI parses an upload form, spooling files to disk,
+# before require_admin runs, so without this anyone could stream an endless
+# upload at the console.
+_UNSAFE_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+_ANONYMOUS_POSTS = ("/login", "/logout")
+
+
+def _request_hosts(request: Request) -> set[str]:
+    hosts = {request.url.netloc}
+    peer = request.client.host if request.client else ""
+    forwarded = request.headers.get("x-forwarded-host", "")
+    if forwarded and peer and net.peer_is_trusted(peer):
+        hosts.add(forwarded.split(",")[-1].strip())
+    return hosts
+
+
+@app.middleware("http")
+async def csrf_and_anonymous_post_guard(request: Request, call_next):
+    if request.method in _UNSAFE_METHODS:
+        source = request.headers.get("origin") or request.headers.get("referer")
+        if source is not None and urlparse(source).netloc not in _request_hosts(request):
+            return PlainTextResponse("Cross-origin request refused.", status_code=403)
+        if (not request.url.path.startswith(_ANONYMOUS_POSTS)
+                and not request.session.get("uid")):
+            db = SessionLocal()
+            try:
+                token_user = _user_by_token(db, request.headers.get("authorization"))
+            finally:
+                db.close()
+            if token_user is None:
+                return RedirectResponse("/login", status_code=303)
+    return await call_next(request)
+
+
 # Force the first-run wizard until it's completed.
 _EXEMPT_PREFIXES = ("/login", "/logout", "/setup", "/static", "/theme", "/track",
                     "/healthz")
@@ -144,9 +189,10 @@ async def first_run_redirect(request: Request, call_next):
 # SessionMiddleware is added LAST so it sits OUTERMOST in the stack and has
 # populated request.session before first_run_redirect (above) runs.
 #
-# same_site="lax" is also the CSRF defense: browsers won't send the session
-# cookie on cross-site POSTs, so a third-party page can't drive a state-changing
-# request as the logged-in admin. "strict" would harden this slightly further
+# same_site="lax" is one half of the CSRF defense: browsers won't send the
+# session cookie on cross-site POSTs. It does nothing for other ports of the
+# same host, which is what the Origin check in csrf_and_anonymous_post_guard
+# (above) covers. "strict" would harden this slightly further
 # but drops the cookie on ordinary top-level navigations into the app (e.g. a
 # bookmarked deep link would appear logged out), which isn't worth it here.
 # https_only adds the Secure flag so the browser only returns the cookie over

@@ -21,7 +21,6 @@ Installed from PyPI per [`web/requirements.txt`](web/requirements.txt):
 | uvicorn          | BSD-3-Clause   |
 | jinja2           | BSD-3-Clause   |
 | sqlalchemy       | MIT            |
-| passlib          | BSD-2-Clause   |
 | bcrypt           | Apache-2.0     |
 | python-multipart | Apache-2.0     |
 | itsdangerous     | BSD-3-Clause   |
@@ -59,7 +58,8 @@ image-build time from their official sources:
 - **iPXE** — built from <https://github.com/ipxe/ipxe> (ref pinned via the
   `IPXE_REF` build arg). License: <https://github.com/ipxe/ipxe/blob/master/COPYING>
 - **wimboot** — official release binary from
-  <https://github.com/ipxe/wimboot/releases>
+  <https://github.com/ipxe/wimboot/releases> (version and SHA-256 pinned via
+  the `WIMBOOT_VERSION` / `WIMBOOT_SHA256` build args)
 - **dnsmasq, nfs-utils, samba, p7zip, grub, wimtools, busybox** — installed from
   the Debian and Alpine package repositories; corresponding source is available
   from those distributions:

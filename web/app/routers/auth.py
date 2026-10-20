@@ -91,9 +91,23 @@ def totp_submit(
         request.session.clear()
         return RedirectResponse("/login", status_code=303)
 
+    # Throttled per account, not per IP: the password is already proven here,
+    # so this guards the six-digit code against guessing from many addresses.
+    key = f"totp:{user.id}"
+    wait = ratelimit.retry_after(key, db)
+    if wait:
+        # Refuse without checking the code, so a lockout can't be probed.
+        mins = (wait + 59) // 60
+        return render(request, db, "login_totp.html",
+                      error=f"Too many failed attempts. Try again in {mins} "
+                            f"minute{'s' if mins != 1 else ''}.",
+                      hide_chrome=True)
+
     if not totp_svc.verify(user.totp_secret or "", code):
+        ratelimit.record_failure(key, db)
         return render(request, db, "login_totp.html",
                       error="Invalid code. Please try again.", hide_chrome=True)
+    ratelimit.reset(key, db)
 
     # Second factor confirmed — promote to a full session.
     request.session.pop("totp_uid", None)

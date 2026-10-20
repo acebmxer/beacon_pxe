@@ -20,20 +20,28 @@
 #   web     - FastAPI management UI + API (auth, settings, images, users)
 #   nginx   - HTTP boot root served to iPXE clients (menu, kernels, initrds, ISOs)
 #   dnsmasq - proxyDHCP / DHCP + TFTP; iPXE binaries baked in; HOST networking
-#   nfs     - exports each image's live filesystem to clients; HOST net, privileged
-#   reload  - restarts dnsmasq when the web app regenerates its config
+#   nfs     - exports live filesystems and installer trees; HOST net, privileged
+#   smb     - serves unpacked Windows install media to WinPE; HOST net
+#
+# Older versions also ran a "reload" container (Docker socket mounted) to
+# restart dnsmasq on config changes; dnsmasq now does that itself. A copy of
+# this file that still lists reload keeps working.
 #
 # Persistent state: ./data (sqlite + uploaded images), plus the named volumes
-# below (bootroot = generated boot files, nfsroot = unpacked live filesystems,
-# dnsmasqconf = generated dnsmasq.conf shared between web/dnsmasq/reload).
+# below (bootroot = generated boot files, nfsroot = unpacked live/installer ISOs,
+# dnsmasqconf = generated dnsmasq.conf, written by web and read by dnsmasq,
+# nfs and smb).
 
 services:
   web:
     image: ghcr.io/acebmxer/beacon-web:${BEACON_TAG:-latest}
     container_name: beacon_web
     restart: unless-stopped
-    # SECURITY: this container mounts the Docker socket (for self-update), so a
-    # compromise here is effectively host root -- keep it on a trusted network.
+    # SECURITY: this container mounts the Docker socket (for self-update and
+    # the restart after a restore), so a compromise here is effectively host
+    # root -- keep it on a trusted network. A socket proxy would not change
+    # that: self-update has to create containers with host mounts (it runs
+    # `docker compose up -d`), and anything that can do that controls the host.
     # It runs as root and writes the SQLite DB and uploaded images to the
     # host-owned ./data bind mount, which relies on root's DAC override, so its
     # capabilities can't be dropped wholesale (doing so makes the DB read-only).
@@ -61,7 +69,8 @@ services:
       - bootroot:/bootroot
       - ${IMAGE_PATH:-./data/images}:/images
       - dnsmasqconf:/dnsmasq
-      # Live filesystems extracted from ISOs, served to clients by the nfs service.
+      # Live filesystems and Fedora/RHEL installer trees unpacked from ISOs,
+      # served to clients by the nfs service.
       - nfsroot:/nfs
       # Unpacked Windows install media, served to WinPE by the smb service.
       - smbroot:/smb
@@ -106,8 +115,9 @@ services:
       # dashboard's recent-clients view; it still only reads dnsmasq.conf.
       - dnsmasqconf:/dnsmasq
 
-  # Serves each image's live filesystem (extracted from its ISO) over NFS so
-  # clients mount it on demand instead of downloading the whole ISO into RAM.
+  # Serves each image's live filesystem or installer tree (unpacked from its
+  # ISO) over NFS so clients mount it on demand instead of downloading it into
+  # RAM.
   # Needs host networking + privileged for the in-kernel NFS server; the host
   # must provide the nfsd kernel module (standard on Linux).
   nfs:
@@ -119,6 +129,9 @@ services:
     volumes:
       - nfsroot:/nfs:ro
       - /lib/modules:/lib/modules:ro
+      # Read for the boot interface (Server Settings): /nfs is exported only to
+      # that interface's subnet(s).
+      - dnsmasqconf:/dnsmasq:ro
 
   # Serves each Windows image's unpacked install media over SMB. WinPE (booted
   # via wimboot) mounts this share and runs setup.exe — iPXE can't present the
@@ -142,23 +155,8 @@ services:
       # Diagnostics capture target (Windows Setup logs). Shared only when
       # ENABLE_DIAG_CAPTURE=true; under ./data so the web container sees it too.
       - ./data/capture:/srv/capture
-
-  # Restarts dnsmasq when web regenerates its config. Avoids mounting the Docker
-  # socket into the web app: this sidecar owns the privileged restart instead.
-  reload:
-    image: ghcr.io/acebmxer/beacon-reload:${BEACON_TAG:-latest}
-    container_name: beacon_reload
-    restart: unless-stopped
-    # Also mounts the Docker socket (to restart dnsmasq). Needs no capabilities.
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
+      # Read for the boot interface (Server Settings): smbd listens only there.
       - dnsmasqconf:/dnsmasq:ro
-    depends_on:
-      - dnsmasq
 
 volumes:
   bootroot:

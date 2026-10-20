@@ -9,13 +9,22 @@ cd "$(dirname "$0")"
 
 GREEN='\033[0;32m'; YELLOW='\033[1;33m'; BOLD='\033[1m'; NC='\033[0m'
 
-rand() { LC_ALL=C tr -dc 'A-Za-z0-9' < /dev/urandom | head -c "${1:-32}"; }
+# Read a fixed amount of randomness first: piping an endless tr into head ends
+# with tr killed by SIGPIPE, which pipefail + set -e turn into an exit of the
+# whole script right after .env is copied.
+rand() {
+  local s
+  s="$(head -c 4096 /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"
+  printf '%s' "${s:0:${1:-32}}"
+}
 
 if [[ -f .env ]]; then
   echo -e "${YELLOW}.env already exists — leaving it untouched.${NC}"
 else
   echo "Creating .env from .env.example ..."
   cp .env.example .env
+  # It will hold the admin password and the session secret.
+  chmod 600 .env
 
   # Auto-generate admin password if left blank.
   GEN_PW=""

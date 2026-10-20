@@ -13,7 +13,7 @@ only opens published ports.
 Ports: **69/udp** (TFTP), **67 + 4011/udp** (DHCP/proxyDHCP), **80/tcp** (boot
 menu, kernels, `boot.wim`), **139 + 445/tcp** (SMB, Windows only), and
 **111 tcp+udp / 2049 tcp / 20048 tcp+udp** (NFS + rpcbind + mountd, live Linux
-only).
+and Fedora/RHEL installers only).
 
 ```bash
 # firewalld — use the zone your boot interface is in
@@ -66,7 +66,9 @@ The image is still using the old copy-the-whole-ISO-to-RAM boot method. Hit
 
 ## NFS mount fails / live filesystem not found
 
-`docker compose logs nfs` should show `current exports: /nfs`. The host needs the
+`docker compose logs nfs` should show `exporting /nfs to <subnet>` and the
+client must have an address in that subnet (the **Boot interface**'s network in
+Server Settings; clients on other routed networks are refused). The host needs the
 NFS kernel module (`sudo modprobe nfsd`), the `nfs` container runs privileged with
 host networking, and the client uses NFSv3 (ports 111 + 2049 must be open on the
 LAN).

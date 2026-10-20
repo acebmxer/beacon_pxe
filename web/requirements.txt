@@ -2,16 +2,13 @@
 # unauthenticated multipart / FileResponse-Range DoS advisories (and the
 # request.url host-header issues). Bumping fastapi is the only way to reach a
 # patched starlette, since fastapi pins the starlette range.
-fastapi==0.143.0
+fastapi==0.143.1
 uvicorn[standard]==0.54.0
 # 3.1.6 fixes the sandbox |attr RCE advisory (PYSEC-2026-1471).
 jinja2==3.1.6
 sqlalchemy==2.1.1
-passlib[bcrypt]==1.7.4
-# Pinned to 4.0.x: passlib 1.7.4 can't read the version of bcrypt >=4.1 (noisy
-# but harmless warning), and bcrypt >=5 is fatal — its hashpw() raises on
-# secrets over 72 bytes, which passlib's load-time self-test triggers, so the
-# app dies on startup. Dependabot is told to ignore bcrypt >=4.1 accordingly.
+# Password hashing, called directly (app/auth.py). It replaced passlib, which is
+# unmaintained and held bcrypt at 4.0.x; hashes passlib made still verify.
 bcrypt==4.0.1
 # 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
 python-multipart==0.0.32

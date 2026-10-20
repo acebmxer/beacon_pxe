@@ -10,6 +10,279 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-20
+
+**A netboot catalog adds installers and live desktops for the main distros
+without uploading an ISO, plus a round of security and reliability fixes.**
+Replace `docker-compose.yml` with the current one so NFS and SMB answer only
+the boot network (an older file keeps working as before, and the `reload`
+service it lists can be removed). Behind a reverse proxy, the proxy must pass
+on the original Host header, or saving a form returns 403. **Reprocess**
+Fedora/RHEL installer images to move them to NFS.
+
+### Security
+
+- **NFS and SMB only answer the boot network.** The NFS server exported the
+  unpacked images to every address and Samba listened on every interface. NFS
+  now exports only to the subnet of the **Boot interface** in Server Settings,
+  and Samba listens only on that interface; both follow a change to it within
+  seconds. This needs the current `docker-compose.yml`, which shares the
+  dnsmasq config with `nfs` and `smb`; with an older one both work as before
+  and say so in their logs.
+
+- **One fewer container holds the Docker socket.** The `reload` container had
+  full Docker access only to restart dnsmasq after a settings change; dnsmasq
+  now restarts itself, and `reload` is gone from `docker-compose.yml`. A
+  compose file that still lists it keeps working. `web` keeps the socket for
+  self-update and restore, and the compose file now says why a socket proxy
+  wouldn't make that safer.
+
+- **The Windows boot helper is checked before it goes into the image.** Every
+  Windows PXE client runs wimboot, which the web image downloads when it is
+  built, and nothing checked that the file was the real release. Its SHA-256 is
+  now pinned, so a different file stops the build. The web image also no longer
+  carries the test suite.
+
+- **The two-factor code can no longer be guessed by trying them all.** After
+  the password, the 6-digit code could be entered wrong any number of times, so
+  anyone with a password could keep trying until a code was accepted. Five wrong
+  codes in a row now lock that account's two-factor step for 15 minutes. Someone
+  who already has the password can use this to keep the account's owner out for
+  those 15 minutes.
+
+- **A few open Images pages can no longer freeze the console.** Each live status
+  stream on the Images page kept a database connection for as long as it was
+  open, so about 14 of them, from any signed-in user, stopped every page from
+  loading until they were closed. A stream now holds no connection, and each
+  user can have six open at once; past that the page falls back to checking
+  every few seconds.
+
+- **Links inside an unpacked ISO can't point the boot server elsewhere.** An
+  installer ISO unpacked for HTTP could carry a link such as `x -> /etc/passwd`,
+  and nginx served the file it pointed to. Links that lead outside the unpacked
+  ISO are now removed; links inside it (Debian and Ubuntu ISOs have one) stay.
+
+- **An uploaded ISO can no longer run commands on the Beacon host.** A file
+  inside the ISO whose name began with `-` was read by bsdtar as an option, and
+  one option runs a program. With the web container's Docker access that meant
+  control of the host. File names from an ISO are now always treated as names.
+
+- **Pages on other ports of the same machine can no longer act as you.** The
+  session cookie stops other websites, but not another service on the same host
+  (nginx on port 80, or anything else on the box). A form there could create an
+  admin account in Beacon while you were signed in. Beacon now refuses form
+  posts that don't come from its own page; scripts using an API token are
+  unaffected. Behind a reverse proxy, the proxy must pass on the original Host
+  header (or send X-Forwarded-Host from an address in `TRUSTED_PROXIES`), or
+  saving a form returns 403; see `.env.example`.
+
+- **Anonymous uploads are refused before they are read.** An upload sent without
+  signing in was saved to disk before the sign-in check ran, so anyone who could
+  reach the console could fill its disk.
+
+- **A doctored backup can no longer slip settings past Beacon's checks.**
+  Restoring a backup took its settings and image records as they were: a line
+  break could add directives to dnsmasq's config or commands to the boot menu,
+  an image's file name could point Delete at any file, and database triggers in
+  the file stayed in the live database. Values written to dnsmasq.conf and
+  boot.ipxe are cleaned every time, image files are only ever looked for in the
+  images folder, and a backup containing triggers or views is refused.
+
+- **Image names and boot arguments can't add boot menu commands.** iPXE treats
+  the words `;`, `&&` and `||` as the start of a new command, so a name such as
+  `Foo ; chain http://…` (typed, or from an imported catalog entry) ran when
+  the menu loaded. Those words are left out of the menu now, `${…}` in a name
+  or the menu title is shown as text, and a word starting with `#` loses the `#`.
+
+### Added
+
+- **The netboot catalog shows each release's newest build.** The **Release** list
+  of **Add from a netboot catalog** names the build each distro publishes now,
+  read from its mirror, so a point release shows up without a Beacon update:
+  "Ubuntu 26.04 LTS — 26.04.1", "Debian 13 (trixie) — 13.7", "Rocky Linux 10 —
+  10.2", Alpine's and AlmaLinux's point releases, XCP-ng's, Arch's monthly
+  release, and the current Tumbleweed snapshot, CentOS Stream compose and Kali
+  build. Adding the image downloads that build. The list is read again every
+  six hours; if a mirror is out of reach the release is listed without it.
+
+- **Several images can be reprocessed or deleted at once.** The Images table has
+  a tick box on each row, and one in the header for every image; **Reprocess
+  selected** and **Delete selected** act on the ticked images after asking. They
+  are reprocessed one after another, and an image still processing is left alone.
+
+- **The netboot catalog has the main distros beside Debian.** **Add from a netboot
+  catalog** now lists Ubuntu, Fedora, Rocky Linux, AlmaLinux, CentOS Stream,
+  openSUSE Leap, openSUSE Tumbleweed, Linux Mint, Kali Linux, Arch Linux, Alpine
+  Linux and XCP-ng, each with its installer and live desktops where the distro publishes
+  them. **Desktop** lists each distro's flavours: Ubuntu, Kubuntu, Xubuntu,
+  Lubuntu, Ubuntu MATE, Budgie, Cinnamon, Unity, Studio, Edubuntu and Kylin;
+  Fedora Workstation, KDE Plasma and the spins; the Rocky, Alma and CentOS Stream
+  live images; Tumbleweed's GNOME, KDE Plasma and Xfce; Linux Mint's Cinnamon, MATE
+  and Xfce; and, under Arch Linux, EndeavourOS and CachyOS. A desktop published only for some releases is listed for those.
+  Installers keep only their kernel and initrd where the distro's installer loads
+  the rest from the mirror (Fedora, Tumbleweed, Leap 15.6, Ubuntu Server, which
+  downloads its live-server ISO into the client's RAM, and Kali), and also keep
+  the installer's own system where the mirror's copy can change under it (Rocky,
+  Alma and CentOS Stream's runtime image, Leap 16's Agama system, Arch's root
+  filesystem, Alpine's modloop). XCP-ng's installer is Xen, its dom0 kernel and
+  `install.img` from XCP-ng's netinstall folder, booted through the same UEFI GRUB
+  chainloader as an uploaded XCP-ng ISO. Fedora, Rocky, Alma, CentOS Stream, Tumbleweed,
+  EndeavourOS and CachyOS live desktops stream their root filesystem over HTTP like
+  Debian's;
+  Ubuntu's and Linux Mint's boot with casper, which mounts its root over NFS only,
+  so their ISO is unpacked into the NFS share and then deleted. Release lists are
+  read from the mirrors for Ubuntu (default: the newest LTS), Fedora, Rocky, Alma,
+  CentOS Stream, Linux Mint, Alpine and XCP-ng, with end-of-life dates from Ubuntu's
+  distro-info-data, Fedora's Bodhi and Alpine's release list.
+
+  Pre-releases are listed for every distro that publishes them, marked
+  "pre-release" at the top of the **Release** list, not only Debian's testing
+  release: Ubuntu's beta before its release day, Fedora's Beta, Rocky Linux's and
+  AlmaLinux's betas (from Rocky's staging mirror and Alma's vault, filled in when
+  picked), openSUSE Leap's release candidate, Linux Mint's beta, Kali's
+  `kali-dev` and Alpine's `edge`. A beta the distro has since released is left
+  out. **Offer pre-releases** under **Settings → Netboot catalog** (on by
+  default) hides them and refuses adding one when turned off; images already
+  added are kept. A custom entry's release can be marked `"prerelease": true`.
+
+  A catalog download that stalls or drops part-way is resumed where it stopped,
+  up to four tries, instead of failing with "Download timed out" and starting
+  the whole multi-GB ISO again on Retry. A mirror that answers the resume from
+  the wrong place in the file is asked for the whole file again, instead of the
+  two pieces being joined into a broken ISO.
+
+- **Custom netboot catalog entries add installers for other distros.** **Custom
+  catalog entries** on the Images page takes a name, a default mirror, the boot
+  files (a netboot archive and the kernel and initrd paths inside it, or a kernel
+  URL and an initrd URL such as Fedora's `images/pxeboot/`), kernel arguments and
+  a list of releases, using `{mirror}` and `{version}` placeholders. **Preview**
+  shows every release's download URLs, checked on the mirror, and the kernel
+  command line the boot menu will carry, and Save is offered only after it; an
+  unknown placeholder or a URL that is not http(s) is refused. **Import from a
+  file** takes entries in the built-in catalog's JSON format, previews them all,
+  and imports nothing if one is wrong. Entries can be edited and deleted, appear
+  in **Add from a netboot catalog** marked "(custom)", and are kept in the
+  database, so a backup carries them. A downloaded kernel that is not a Linux
+  kernel (an error page, say) is refused.
+
+  An installer from a custom entry whose kernel arguments name `inst.repo=` or
+  `inst.stage2=` (Fedora's) was marked "needs reprocess" at every start, because
+  the startup check looked for an unpacked ISO tree that a netboot image never
+  has; it now stays ready.
+
+- **Debian installers and live desktops can be added without keeping an ISO.** **Add from a netboot
+  catalog** on the Images page takes a release (`14`, `trixie`, `bookworm`, or any
+  other name the mirror carries) and a mirror (default `deb.debian.org`), then
+  downloads Debian's netboot archive and keeps only its kernel and initrd. The
+  client's installer fetches its packages from the mirror, so nothing is stored
+  per image beyond the roughly 55 MB archive, which stays so **Reprocess** can
+  rebuild the boot files. The archive can also be fetched from another URL or
+  uploaded, for a Beacon host with no internet.
+
+  **Live desktop** does the same for Debian's live desktops (KDE Plasma, GNOME,
+  Xfce, Cinnamon, MATE, LXQt, LXDE, Standard): Beacon downloads the live ISO once,
+  keeps the kernel, initrd and root filesystem, and deletes the ISO. Reprocess
+  downloads it again. **Release** is a list on both Installer and Live desktop,
+  read from Debian's mirror (its stable, oldstable, oldoldstable and testing
+  suites), so a new Debian release appears without a Beacon update; today that is
+  Debian 14 (forky, testing, a pre-release), 13 (trixie), 12 (bookworm) and 11
+  (bullseye). The list is refreshed every 6 hours, and the catalog's own list is
+  shown when the mirror is out of reach. A release is marked "end of life" once
+  Debian's long-term support for it has ended, using the dates Debian publishes
+  (distro-info-data); it stays selectable, and a release the mirror has dropped
+  stays listed if the catalog names it. **Offer end-of-life releases** under
+  **Settings → Netboot catalog** (on by default) hides them from every distro's
+  Release list and refuses adding one when turned off; images already added are
+  kept. An installer image's default name carries the
+  version number as well as the codename ("Debian 11 bullseye (netboot)").
+
+  A live desktop whose Mirror folder holds a different release than the one
+  picked (for example Debian 13's folder with Debian 14 chosen) is refused with a
+  message, instead of being added under the wrong name. An ISO uploaded as an installer's
+  archive file is refused with a message saying so, instead of an unpacking error. An
+  installer archive whose own version file names a different release than the
+  one picked (bookworm's archive added as trixie) is refused, since its kernel
+  would not match the packages the installer fetches. Testing and unstable
+  archives are exempt, as Debian's own version file in them names the previous
+  release. **Other** takes a number (`12`, `15`) or a codename
+  (`bookworm`, `duke`) on both. A release that is not in the list is found on
+  Debian's own mirror (its stable, oldstable and testing files give each
+  version and codename), so a new release works before it is added to the list;
+  Live desktop then fetches its ISO from Debian's current, archive or weekly
+  testing folder. Installer also takes any other release name the mirror carries.
+  A live image is named after its release, e.g. "Debian 12 Live KDE Plasma".
+
+### Changed
+
+- **Passwords are checked with bcrypt directly.** passlib, which did this
+  before, is no longer maintained and held back bcrypt and Python updates.
+  Existing passwords keep working; nothing to do.
+
+### Fixed
+
+- **Fedora and RHEL installer ISOs no longer need a lot of client RAM.** Over
+  HTTP the installer copied `images/install.img` into memory, which needs about
+  twice its size: Fedora Kinoite's 3.8 GB one powered off a 6 GB client part-way.
+  These ISOs are now unpacked into the NFS share and the installer reads the file
+  from it, as from a disc. Clients need the NFS ports (111, 2049, 20048) open, as
+  for the live desktops. Installer images added before this keep booting over
+  HTTP; **Reprocess** moves them to NFS.
+
+  A restart no longer takes Fedora 44 installer images out of the boot menu
+  as "Boot files are missing". The startup check looked for a `.treeinfo`
+  file, which the Fedora 44 netinstall and Kinoite ISOs don't have; it now
+  checks for `images/install.img`, the file the installer loads.
+
+- **Deleting an image that is still processing no longer leaves files
+  behind.** The run carried on after the Delete, writing boot files (and
+  downloading the live ISO again) that no image owned. The image now shows
+  "deleting" until the run stops at its next step, then it goes with all its
+  files. Pressing Delete again removes an image that stays on "deleting".
+
+- **A double click on a button that asks first no longer asks twice.** Delete,
+  Delete selected, Reprocess selected and the other buttons with an "Are you
+  sure?" question asked again on the second click, and sent the request
+  twice.
+
+- **Importing a badly nested catalog file shows an error instead of crashing.**
+  A JSON file nested thousands of levels deep made **Import from a file** fail
+  with a server error; it now says the file is not valid JSON. The import's
+  Save step also keeps the 256 KB limit the file upload has.
+
+- **Click-to-select works on the Profile page.** Clicking the two-factor secret
+  key or the API token was meant to select it for copying, but the browser
+  blocked it, so nothing happened.
+
+- **Images no longer get stuck on "processing" until a restart.** An
+  unexpected failure while unpacking, such as a truncated download, a full disk
+  or a missing tool, left the image on "processing", where Reprocess skips it.
+  The image is now marked failed with the reason, so it can be retried.
+
+- **Reprocess on an image that is still processing leaves it alone.** It started
+  a second run that wiped the files the first one was writing; the image's own
+  Reprocess now follows the same rule as Reprocess selected and says so.
+
+  The same goes for an image waiting for its run to start, so pressing
+  Reprocess twice in a row queues one run, not two. An image left waiting by a
+  restart is marked "needs reprocess" at startup, as one left processing is.
+
+- **Uploading an ISO with a name already in use keeps both.** The second upload
+  replaced the first image's ISO, and deleting either image removed the other's.
+  The new one is now saved as `name-2.iso`, `name-3.iso`, and so on.
+
+- **`setup.sh` finishes a fresh install again.** It stopped straight after
+  creating `.env`, leaving the admin password and session secret blank and the
+  stack not started; running it again kept the blank values. It now fills both
+  in and starts the stack, and `.env` is readable only by its owner, since it
+  holds those secrets.
+
+- **Top deployed images keeps the newest images when counts tie.** The list
+  shows five, and images booted the same number of times were cut in no fixed
+  order, so a just-booted image could be missing while an older one stayed.
+
+- **The Server Settings icon in the sidebar is the same size as the others.** It
+  was drawn as a small text symbol instead of an emoji.
+
 ## [0.7.2] - 2026-10-17
 
 **Beta updates can be switched on from Settings, and betas are now numbered.**
@@ -604,7 +877,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0

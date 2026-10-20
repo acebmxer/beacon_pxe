@@ -8,12 +8,12 @@
 [![Issues](https://img.shields.io/github/issues/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/issues)
 [![Stars](https://img.shields.io/github/stars/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/stargazers)
 [![Forks](https://img.shields.io/github/forks/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/forks)
-[![Unique cloners](https://img.shields.io/badge/unique%20cloners-122-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
+[![Unique cloners](https://img.shields.io/badge/unique%20cloners-125-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](web/Dockerfile)
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-75%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-366%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -63,7 +63,12 @@ Chosen in the wizard, changeable under **Server Settings**:
 Upload an `.iso` in the web UI and it becomes a boot-menu entry — the kernel and
 initrd are extracted automatically. Linux, **Windows** (installer via WinPE),
 and **XCP-NG** are supported. Entries can be enabled/disabled and have their boot
-args edited.
+args edited, and several can be ticked to reprocess or delete together. For an installer or live desktop without keeping an ISO, **Add from a
+netboot catalog** keeps just the boot files (and, for a live desktop, its root
+filesystem) for Debian, Ubuntu and its flavours, Fedora and its spins, Rocky Linux,
+AlmaLinux, CentOS Stream, openSUSE Leap and Tumbleweed, Linux Mint, Kali, Arch (with
+EndeavourOS and CachyOS), Alpine and XCP-ng; custom entries add other distros' installers — see the
+[guide](docs/guide.md#netboot-installers-no-iso).
 
 **Windows** needs SMB ports **139 + 445** reachable, and on Intel VMD / AMD RAID
 machines needs a storage driver or Setup shows an empty disk list. Stage storage
@@ -110,7 +115,7 @@ unauthenticated liveness probe for monitoring.
   the host firewall is dropping it. Beacon's services listen below port 1025,
   which firewalld/ufw block by default. Open **69/udp** (TFTP), **67 + 4011/udp**
   (DHCP), **80/tcp** (HTTP), **139 + 445/tcp** (SMB, Windows), and
-  **111 / 2049 / 20048** (NFS, live Linux).
+  **111 / 2049 / 20048** (NFS, live Linux and Fedora/RHEL installers).
 - **Windows Setup fails partway (`0x80070035`) on a disk with old partitions** —
   delete them at Setup's disk screen. Standard dirty-disk behaviour, not a Beacon
   bug.
@@ -138,9 +143,10 @@ time. See **[docs/guide.md](docs/guide.md)** for the API endpoints.
 ## Security
 
 The UI is HTTP on port 8080 — put it behind a TLS reverse proxy for anything past
-a trusted LAN. The `web` and `reload` containers mount the Docker socket (for
-self-update and the dnsmasq reload), which is **root-equivalent on the host** —
-an accepted trade-off; remove the mounts to opt out. Passwords must be ≥ 12
+a trusted LAN. The `web` container mounts the Docker socket (for self-update and
+the restart after a restore), which is **root-equivalent on the host** — an
+accepted trade-off; remove the mount to opt out. NFS exports only to the boot
+interface's subnet, and Samba listens only on the boot interface. Passwords must be ≥ 12
 characters, login is rate-limited per client IP (the lockout is persisted, so
 restarting the stack doesn't clear it), and accounts can require a TOTP second
 factor.
@@ -149,5 +155,7 @@ factor.
 
 Beacon's code is [MIT](LICENSE). Bundled components (dnsmasq, samba, iPXE,
 wimboot, …) keep their own licenses — see
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Contributions welcome; add
-user-facing changes to the **Unreleased** section of [CHANGELOG.md](CHANGELOG.md).
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Contributions welcome: open
+pull requests against the `dev` branch, not `main`, and add user-facing changes
+to the **Unreleased** section of [CHANGELOG.md](CHANGELOG.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md).

@@ -692,6 +692,11 @@ class TestCustomEntryImport:
         with pytest.raises(netboot.NetbootError, match="ID mageia is used by more"):
             netboot.parse_import(json.dumps([MAGEIA, MAGEIA]))
 
+    def test_deeply_nested_file_is_an_error_message(self):
+        # The parser runs out of recursion depth instead of raising ValueError.
+        with pytest.raises(netboot.NetbootError, match="nested too deeply"):
+            netboot.parse_import("[" * 100_000)
+
 
 class TestCustomEntryStore:
     def test_stored_entry_is_found_with_the_built_ins(self, db):
@@ -813,6 +818,24 @@ class TestCustomEntryRoutes:
         assert [r["id"] for r in netboot.custom_entry(db, "mageia")["releases"]] == ["45"]
         db.close()
         assert "1 replaced an entry with the same ID" in client.get("/images").text
+
+    def test_import_of_deeply_nested_file_shows_the_error(self, client):
+        _login(client)
+        r = client.post("/images/catalog/import", data={"action": "preview"},
+                        files={"file": ("deep.json", b"[" * 100_000, "application/json")})
+        assert r.status_code == 200
+        assert "nested too deeply" in r.text
+
+    def test_import_text_gets_the_file_size_limit(self, client):
+        _login(client)
+        text = json.dumps(MAGEIA) + " " * netboot.IMPORT_MAX_BYTES
+        r = client.post("/images/catalog/import", data={"action": "save", "content": text},
+                        follow_redirects=False)
+        assert r.status_code == 200
+        assert "larger than 256 KB" in r.text
+        db = app_db.SessionLocal()
+        assert netboot.custom_entries(db) == []
+        db.close()
 
     def test_import_refuses_built_in_id(self, client):
         _login(client)

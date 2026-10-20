@@ -1451,7 +1451,11 @@ def parse_import(text: str) -> list[dict]:
     """
     try:
         data = json.loads(text)
-    except ValueError as e:
+    except (ValueError, RecursionError) as e:
+        # Very deeply nested JSON ([[[[...) exhausts the parser's recursion
+        # limit instead of raising ValueError.
+        if isinstance(e, RecursionError):
+            raise NetbootError("The file is not valid JSON (it is nested too deeply).")
         raise NetbootError(f"The file is not valid JSON ({e}).")
     if isinstance(data, dict) and "distros" in data:
         items = data["distros"]

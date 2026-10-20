@@ -183,6 +183,15 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **Importing a badly nested catalog file shows an error instead of crashing.**
+  A JSON file nested thousands of levels deep made **Import from a file** fail
+  with a server error; it now says the file is not valid JSON. The import's
+  Save step also keeps the 256 KB limit the file upload has.
+
+- **Click-to-select works on the Profile page.** Clicking the two-factor secret
+  key or the API token was meant to select it for copying, but the browser
+  blocked it, so nothing happened.
+
 - **Images no longer get stuck on "processing" until a restart.** An
   unexpected failure while unpacking, such as a truncated download, a full disk
   or a missing tool, left the image on "processing", where Reprocess skips it.

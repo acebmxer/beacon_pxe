@@ -552,6 +552,9 @@ async def import_entries(request: Request, user: User = Depends(require_admin),
             if len(raw) > netboot_svc.IMPORT_MAX_BYTES:
                 raise netboot_svc.NetbootError("The file is larger than 256 KB.")
             content = raw.decode("utf-8", "replace")
+        elif len(content.encode("utf-8")) > netboot_svc.IMPORT_MAX_BYTES:
+            # The text posted back by the preview's Save gets the file's limit.
+            raise netboot_svc.NetbootError("The text is larger than 256 KB.")
         if not content.strip():
             raise netboot_svc.NetbootError("Choose a JSON file to import.")
         entries = netboot_svc.parse_import(content)

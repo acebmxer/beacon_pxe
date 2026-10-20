@@ -41,9 +41,10 @@ class User(Base):
 
 
 class LoginLockout(Base):
-    """Persistent per-IP failed-login state (survives container restarts).
+    """Persistent failed-login state (survives container restarts).
 
-    Keyed by the proxy-aware client IP string. fail_count and last_fail are
+    Keyed by the proxy-aware client IP string for the password step, and by
+    "totp:<user id>" for the two-factor step. fail_count and last_fail are
     only used when there is no active lockout (locked_until in the future);
     once the lockout expires both are reset on the next successful login.
     All times are Unix epoch floats (wall clock, not monotonic).

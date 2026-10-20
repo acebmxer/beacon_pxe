@@ -7,7 +7,7 @@ import re
 from fastapi import (APIRouter, BackgroundTasks, Depends, Form, Query, Request,
                      UploadFile, File)
 from starlette.concurrency import run_in_threadpool
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, Response, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -97,8 +97,24 @@ def images_status(user: User = Depends(require_user), db: Session = Depends(get_
     return [{"id": i.id, "status": i.status, "message": i.message} for i in items]
 
 
+#: Open /images/events streams per user. The page opens one per tab; a browser
+#: keeps at most six connections per host anyway, so this only stops scripts.
+SSE_MAX_PER_USER = 6
+_sse_open: dict[int, int] = {}
+
+
+def _status_snapshot() -> list[tuple[int, str, str | None]]:
+    db = SessionLocal()
+    try:
+        return [(i.id, i.status, i.message)
+                for i in db.execute(select(Image)).scalars().all()]
+    finally:
+        db.close()
+
+
 @router.get("/images/events")
-async def images_sse(request: Request, user: User = Depends(require_user)):
+async def images_sse(request: Request, user: User = Depends(require_user),
+                     db: Session = Depends(get_db)):
     """SSE stream that pushes status updates while images are processing.
 
     The client connects when it lands on the images page with pending/processing
@@ -106,30 +122,46 @@ async def images_sse(request: Request, user: User = Depends(require_user)):
     image status changes. The connection is automatically closed (and the
     generator exits) when the client disconnects.
     """
+    # The sign-in check's session would otherwise stay checked out of the
+    # connection pool for as long as the stream is open; a handful of open
+    # streams then starved every other request.
+    uid = user.id
+    db.close()
+    if _sse_open.get(uid, 0) >= SSE_MAX_PER_USER:
+        return Response("Too many open status streams.", status_code=429)
+
     async def generate():
+        # Counted here, not in the route: only a generator that has started is
+        # sure to reach its finally, so the count can't leak.
+        if _sse_open.get(uid, 0) >= SSE_MAX_PER_USER:
+            return
+        _sse_open[uid] = _sse_open.get(uid, 0) + 1
         seen: dict[int, str] = {}
-        while True:
-            if await request.is_disconnected():
-                break
-            db = SessionLocal()
-            try:
-                items = db.execute(select(Image)).scalars().all()
+        try:
+            while True:
+                if await request.is_disconnected():
+                    break
+                # In a worker thread: a blocking query here would stall every
+                # other request on the event loop.
+                items = await run_in_threadpool(_status_snapshot)
                 updates = []
-                for img in items:
-                    if img.id in seen and seen[img.id] != img.status:
+                for img_id, img_status, message in items:
+                    if img_id in seen and seen[img_id] != img_status:
                         updates.append({
-                            "id": img.id,
-                            "status": img.status,
-                            "message": img.message,
+                            "id": img_id,
+                            "status": img_status,
+                            "message": message,
                         })
-                    seen[img.id] = img.status
+                    seen[img_id] = img_status
                 if updates:
                     yield f"data: {json.dumps(updates)}\n\n"
                 else:
                     yield ": heartbeat\n\n"
-            finally:
-                db.close()
-            await asyncio.sleep(1)
+                await asyncio.sleep(1)
+        finally:
+            _sse_open[uid] -= 1
+            if not _sse_open[uid]:
+                del _sse_open[uid]
 
     return StreamingResponse(
         generate(),

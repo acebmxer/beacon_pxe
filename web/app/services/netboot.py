@@ -995,7 +995,8 @@ def download(url: str, dest: Path, max_bytes: int = ARCHIVE_MAX_BYTES) -> None:
     A connection that stalls or drops part-way is resumed where it stopped
     (an HTTP Range request), up to DOWNLOAD_ATTEMPTS tries in all, so one hiccup
     does not throw away a multi-GB live ISO. A server that ignores the range is
-    read again from the start.
+    read again from the start, and one that resumes at the wrong offset is
+    asked again for the whole file.
 
     Separate from services.drivers._download on purpose: that one is https-only
     and pinned to a hash, while a netboot mirror is often plain http.
@@ -1011,8 +1012,14 @@ def download(url: str, dest: Path, max_bytes: int = ARCHIVE_MAX_BYTES) -> None:
             req = urllib.request.Request(url, headers=headers)
             try:
                 with urllib.request.urlopen(req, timeout=30) as resp:
-                    if size and resp.status != 206:
+                    start = _range_start(resp) if resp.status == 206 else 0
+                    if size and start != size:
+                        # Appending would corrupt the file. A reply from byte 0
+                        # (or a 200) is the whole file: keep it. Any other
+                        # offset is useless: drop what we have and try again.
                         size = 0
+                        if start != 0:
+                            raise ConnectionError("the server resumed at the wrong offset")
                     expected = _expected_size(resp, size)
                     with open(part, "ab" if size else "wb") as out:
                         while chunk := resp.read(1024 * 1024):
@@ -1047,6 +1054,12 @@ def download(url: str, dest: Path, max_bytes: int = ARCHIVE_MAX_BYTES) -> None:
                 time.sleep(_RETRY_PAUSE)
     finally:
         part.unlink(missing_ok=True)
+
+
+def _range_start(resp) -> int | None:
+    """The first byte a 206 reply carries (Content-Range: bytes <start>-...)."""
+    m = re.match(r"\s*bytes\s+([0-9]+)-", resp.headers.get("Content-Range", ""))
+    return int(m.group(1)) if m else None
 
 
 def _expected_size(resp, offset: int) -> int | None:

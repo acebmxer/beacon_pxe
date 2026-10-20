@@ -1508,6 +1508,25 @@ class TestDownloadResume:
         netboot.download("https://m/x.iso", tmp_path / "x.iso")
         assert calls == [0, 4000] and (tmp_path / "x.iso").read_bytes() == d
 
+    def test_resume_answered_from_byte_zero_keeps_the_whole_file(self, tmp_path,
+                                                                 monkeypatch):
+        d, n = self.DATA, len(self.DATA)
+        self._server(monkeypatch, [
+            lambda o: _Stream(d, headers={"Content-Length": str(n)}, cut=3000),
+            lambda o: _Stream(d, 206, {"Content-Range": f"bytes 0-{n - 1}/{n}"})])
+        netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert (tmp_path / "x.iso").read_bytes() == d
+
+    def test_resume_at_the_wrong_offset_starts_over(self, tmp_path, monkeypatch):
+        d, n = self.DATA, len(self.DATA)
+        calls = self._server(monkeypatch, [
+            lambda o: _Stream(d, headers={"Content-Length": str(n)}, cut=3000),
+            lambda o: _Stream(d[100:], 206, {"Content-Range": f"bytes 100-{n - 1}/{n}"}),
+            lambda o: _Stream(d, headers={"Content-Length": str(n)})])
+        netboot.download("https://m/x.iso", tmp_path / "x.iso")
+        assert calls == [0, 3000, 0]
+        assert (tmp_path / "x.iso").read_bytes() == d
+
     def test_gives_up_after_the_last_try(self, tmp_path, monkeypatch):
         d = self.DATA
         calls = self._server(monkeypatch, [lambda o: _Stream(d, cut=0)] * 4)

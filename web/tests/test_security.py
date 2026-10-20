@@ -2,24 +2,30 @@
 
 Each test pins one hole that was reproduced before it was fixed: ISO member
 names read as bsdtar options, form posts from another port of the same host,
-upload bodies read before the login check, and unchecked text from a restored
-backup or an image name reaching dnsmasq.conf and boot.ipxe.
+upload bodies read before the login check, unchecked text from a restored
+backup or an image name reaching dnsmasq.conf and boot.ipxe, a two-factor
+code that could be guessed without limit, symlinks in an unpacked ISO that
+nginx followed out of the boot root, and image status streams that held a
+database connection each until a few of them froze the console.
 """
+import asyncio
 import io
+import os
 import sqlite3
 import subprocess
 from pathlib import Path
 
+import pyotp
 import pytest
 import starlette.formparsers as formparsers
 from sqlalchemy import select
 
 import app.config as app_config
-from app.models import Image, User
+from app.models import Image, LoginLockout, User
 from app.services import dnsmasq, ipxe, restore
 from app.services import images as image_svc
 from tests.test_restore import _make_backup
-from tests.test_routes import _login, _seed_image, _session
+from tests.test_routes import _login, _seed_admin, _seed_image, _session
 
 
 # ---------------------------------------------------------------------------
@@ -201,3 +207,131 @@ def test_deleting_a_restored_image_cannot_remove_other_files(client, tmp_path,
         db.close()
     assert victim.exists()
     assert Path(victim).read_text() == "keep me"
+
+
+# ---------------------------------------------------------------------------
+# The two-factor code can't be guessed without limit
+# ---------------------------------------------------------------------------
+def _seed_totp_admin():
+    _seed_admin()
+    secret = pyotp.random_base32()
+    db = _session()
+    try:
+        user = db.execute(select(User).where(User.username == "testadmin")).scalar_one()
+        user.totp_secret = secret
+        user.totp_enabled = 1
+        db.commit()
+    finally:
+        db.close()
+    return pyotp.TOTP(secret)
+
+
+def _wrong_code(totp):
+    # A code that isn't valid in any window the server accepts right now.
+    return next(c for c in ("000000", "111111", "222222", "333333")
+                if not totp.verify(c, valid_window=2))
+
+
+def test_two_factor_step_locks_after_five_wrong_codes(client):
+    totp = _seed_totp_admin()
+    r = client.post("/login", data={"username": "testadmin",
+                                    "password": "AdminPass123!"})
+    assert r.status_code == 200  # followed to the code page
+    wrong = _wrong_code(totp)
+    for _ in range(5):
+        r = client.post("/login/totp", data={"code": wrong})
+        assert "Invalid code" in r.text
+    # Locked now: even the right code is refused without being checked.
+    r = client.post("/login/totp", data={"code": totp.now()})
+    assert "Too many failed attempts" in r.text
+    assert client.get("/", follow_redirects=False).status_code == 303
+
+
+def test_right_code_still_signs_in_and_clears_failures(client):
+    totp = _seed_totp_admin()
+    client.post("/login", data={"username": "testadmin", "password": "AdminPass123!"})
+    wrong = _wrong_code(totp)
+    for _ in range(4):
+        client.post("/login/totp", data={"code": wrong})
+    r = client.post("/login/totp", data={"code": totp.now()}, follow_redirects=False)
+    assert r.status_code == 303 and r.headers["location"] == "/"
+    db = _session()
+    try:
+        user = db.execute(select(User).where(User.username == "testadmin")).scalar_one()
+        assert db.get(LoginLockout, f"totp:{user.id}") is None
+    finally:
+        db.close()
+
+
+# ---------------------------------------------------------------------------
+# Symlinks in an unpacked ISO can't reach outside it
+# ---------------------------------------------------------------------------
+def test_unpacked_tree_drops_links_that_leave_it(tmp_path, monkeypatch):
+    dest = tmp_path / "os" / "1" / "tree"
+
+    def fake_bsdtar(args, **kw):
+        (dest / "images").mkdir(parents=True)
+        (dest / "images" / "install.img").write_bytes(b"img")
+        os.symlink("/etc/passwd", dest / "images" / "abs")
+        os.symlink("../../../../../etc/hostname", dest / "images" / "rel")
+        os.symlink("/", dest / "rootdir")
+        # Debian and Ubuntu ISOs link their name to the ISO root; those stay.
+        os.symlink(".", dest / "debian")
+        os.symlink("install.img", dest / "images" / "alias")
+    monkeypatch.setattr(subprocess, "run", fake_bsdtar)
+    image_svc._extract_tree(tmp_path / "a.iso", dest)
+    assert not os.path.lexists(dest / "images" / "abs")
+    assert not os.path.lexists(dest / "images" / "rel")
+    assert not os.path.lexists(dest / "rootdir")
+    assert os.path.islink(dest / "debian")
+    assert (dest / "images" / "alias").read_bytes() == b"img"
+
+
+# ---------------------------------------------------------------------------
+# Open status streams don't hold database connections
+# ---------------------------------------------------------------------------
+class _FakeDB:
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeRequest:
+    def __init__(self, ticks):
+        self.ticks = ticks
+
+    async def is_disconnected(self):
+        self.ticks -= 1
+        return self.ticks < 0
+
+
+def _user(uid=1):
+    return User(id=uid, username="u", password_hash="x", role="user")
+
+
+def test_status_stream_returns_its_connection_before_streaming(monkeypatch):
+    from app.routers import images as images_router
+    monkeypatch.setattr(images_router, "_status_snapshot", lambda: [(1, "ready", None)])
+    real_sleep = asyncio.sleep
+    monkeypatch.setattr(asyncio, "sleep", lambda s: real_sleep(0))
+    db = _FakeDB()
+
+    async def run():
+        resp = await images_router.images_sse(_FakeRequest(1), _user(), db)
+        assert db.closed, "the sign-in session is still checked out"
+        chunks = [c async for c in resp.body_iterator]
+        return chunks
+    chunks = asyncio.run(run())
+    assert chunks == [": heartbeat\n\n"]
+    assert images_router._sse_open == {}
+
+
+def test_status_streams_per_user_are_capped(monkeypatch):
+    from app.routers import images as images_router
+    monkeypatch.setattr(images_router, "_sse_open",
+                        {1: images_router.SSE_MAX_PER_USER})
+    resp = asyncio.run(images_router.images_sse(_FakeRequest(1), _user(1), _FakeDB()))
+    assert resp.status_code == 429
+    resp = asyncio.run(images_router.images_sse(_FakeRequest(0), _user(2), _FakeDB()))
+    assert resp.status_code == 200

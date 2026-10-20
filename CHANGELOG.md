@@ -12,6 +12,25 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Security
 
+- **The two-factor code can no longer be guessed by trying them all.** After
+  the password, the 6-digit code could be entered wrong any number of times, so
+  anyone with a password could keep trying until a code was accepted. Five wrong
+  codes in a row now lock that account's two-factor step for 15 minutes. Someone
+  who already has the password can use this to keep the account's owner out for
+  those 15 minutes.
+
+- **A few open Images pages can no longer freeze the console.** Each live status
+  stream on the Images page kept a database connection for as long as it was
+  open, so about 14 of them, from any signed-in user, stopped every page from
+  loading until they were closed. A stream now holds no connection, and each
+  user can have six open at once; past that the page falls back to checking
+  every few seconds.
+
+- **Links inside an unpacked ISO can't point the boot server elsewhere.** An
+  installer ISO unpacked for HTTP could carry a link such as `x -> /etc/passwd`,
+  and nginx served the file it pointed to. Links that lead outside the unpacked
+  ISO are now removed; links inside it (Debian and Ubuntu ISOs have one) stay.
+
 - **An uploaded ISO can no longer run commands on the Beacon host.** A file
   inside the ISO whose name began with `-` was read by bsdtar as an option, and
   one option runs a program. With the web container's Docker access that meant
@@ -97,7 +116,9 @@ to do differently. Internal refactors that change nothing observable are omitted
 
   A catalog download that stalls or drops part-way is resumed where it stopped,
   up to four tries, instead of failing with "Download timed out" and starting
-  the whole multi-GB ISO again on Retry.
+  the whole multi-GB ISO again on Retry. A mirror that answers the resume from
+  the wrong place in the file is asked for the whole file again, instead of the
+  two pieces being joined into a broken ISO.
 
 - **Custom netboot catalog entries add installers for other distros.** **Custom
   catalog entries** on the Images page takes a name, a default mirror, the boot

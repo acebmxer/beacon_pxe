@@ -5,6 +5,7 @@ image — no privileged loop mount, so it works in an unprivileged container.
 """
 import gzip
 import logging
+import os
 import re
 import shutil
 import subprocess
@@ -175,6 +176,28 @@ def _extract_gunzip(iso: Path, member: str, dest: Path) -> None:
             extract.returncode or gunzip.returncode, "bsdtar|gzip")
 
 
+def _drop_escaping_links(dest: Path) -> None:
+    """Delete symlinks in an unpacked tree that point outside it.
+
+    nginx follows symlinks, so a link in an ISO such as `x -> /etc/passwd`
+    would otherwise be served from the boot server's own file system. Links
+    that stay inside the tree (Debian and Ubuntu ISOs carry `debian -> .`)
+    are kept.
+    """
+    root = os.path.realpath(dest)
+    for top, dirs, files in os.walk(dest):
+        for name in dirs + files:
+            path = os.path.join(top, name)
+            if not os.path.islink(path):
+                continue
+            target = os.path.realpath(path)
+            if target != root and not target.startswith(root + os.sep):
+                link = os.readlink(path)
+                os.unlink(path)
+                log.warning("Removed symlink %s -> %s: it points outside the "
+                            "unpacked ISO", path, link)
+
+
 def _extract_tree(iso: Path, dest: Path) -> None:
     """Unpack the whole ISO into dest (NFS export or HTTP installer repo).
 
@@ -183,6 +206,7 @@ def _extract_tree(iso: Path, dest: Path) -> None:
     shutil.rmtree(dest, ignore_errors=True)
     dest.mkdir(parents=True, exist_ok=True)
     subprocess.run(["bsdtar", "-xf", str(iso), "-C", str(dest)], check=True)
+    _drop_escaping_links(dest)
 
 
 def _extract_tree_7z(iso: Path, dest: Path) -> None:

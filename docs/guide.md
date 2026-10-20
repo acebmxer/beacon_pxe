@@ -296,7 +296,9 @@ Add it to `/etc/fstab` so it survives reboots. Database and settings live in
 generates a TOTP secret (RFC 6238, 30-second steps), shows it as a QR code and as
 text for manual entry, and only activates it once you enter a valid code — a
 mistyped secret can't lock you out. A code from the previous or next window is
-accepted, so reading one just as it rolls over still works. Losing the
+accepted, so reading one just as it rolls over still works. Five wrong codes
+in a row lock that account's 2FA step for 15 minutes, so the code can't be
+guessed by trying them all. Losing the
 authenticator means losing the account: another admin can delete and recreate the
 user, or clear `totp_enabled` in `data/pxe.db` directly.
 

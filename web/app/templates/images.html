@@ -299,7 +299,7 @@
       </div>
     </div>
     {% if user.is_admin and images %}
-    <form id="bulk-form" class="toolbar" method="post" action="/images/bulk">
+    <form id="bulk-form" class="toolbar" method="post" action="/images/bulk" data-submit-once>
       <span class="muted" id="bulk-count">None selected</span>
       <button class="btn ghost sm" type="submit" name="action" value="reprocess" disabled>Reprocess selected</button>
       <button class="btn danger sm" type="submit" name="action" value="delete" disabled>Delete selected</button>
@@ -705,7 +705,9 @@
   // --- SSE: toast when processing completes (or fall back to polling) ------
   var rows = Array.prototype.slice.call(
     document.querySelectorAll("tr[data-image-id]"));
-  var transient = function (s) { return s === "pending" || s === "processing"; };
+  var transient = function (s) {
+    return s === "pending" || s === "processing" || s === "deleting";
+  };
   var hasTransient = rows.some(function (r) { return transient(r.dataset.status); });
   if (!hasTransient) return;
 
@@ -751,7 +753,15 @@
       fetch("/images/status", { headers: { "Accept": "application/json" } })
         .then(function (res) { return res.ok ? res.json() : null; })
         .then(function (items) {
-          if (items) handleUpdate(items);
+          if (items) {
+            // A deleted image is missing from the list rather than changed.
+            var present = {};
+            items.forEach(function (it) { present[String(it.id)] = true; });
+            Object.keys(initial).forEach(function (id) {
+              if (!present[id]) items.push({ id: id, status: "deleted" });
+            });
+            handleUpdate(items);
+          }
           setTimeout(tick, 2500);
         })
         .catch(function () { setTimeout(tick, 2500); });

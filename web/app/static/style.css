@@ -220,6 +220,7 @@ tr:last-child td { border-bottom: none; }
 }
 .badge.ready { background: rgba(6, 214, 160, 0.15); color: var(--ok); }
 .badge.pending { background: rgba(255, 209, 102, 0.15); color: var(--warn); }
+.badge.deleting { background: rgba(239, 71, 111, 0.15); color: var(--danger); }
 .badge.processing { background: rgba(0, 180, 216, 0.15); color: var(--accent); }
 .badge.processing::before {
   content: ""; display: inline-block; width: 7px; height: 7px;

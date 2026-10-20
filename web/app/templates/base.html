@@ -80,14 +80,35 @@
 <script nonce="{{ csp_nonce }}">
 // Unobtrusive replacements for the inline handlers a nonce-based CSP forbids:
 //   <form data-confirm="…">   -> confirm() before submit (cancel blocks it)
+//   <form data-submit-once>   -> asks in its own handler; sent once, as above
 //   <select data-autosubmit>  -> submit the form when the value changes
 //   <input data-select-on-click> -> select the field's text on click
 (function () {
+  var asks = function (f) {
+    return f && f.dataset && (f.dataset.confirm || "submitOnce" in f.dataset);
+  };
+  // A double click on a confirmed button would ask, and send, a second time
+  // while the first submission is still loading. Captured, so it also runs
+  // before a form's own confirm handler.
+  document.addEventListener("submit", function (e) {
+    if (asks(e.target) && e.target.dataset.submitting) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }, true);
   document.addEventListener("submit", function (e) {
     var f = e.target;
-    if (f && f.dataset && f.dataset.confirm && !window.confirm(f.dataset.confirm)) {
+    if (!asks(f) || e.defaultPrevented) return;
+    if (f.dataset.confirm && !window.confirm(f.dataset.confirm)) {
       e.preventDefault();
+      return;
     }
+    f.dataset.submitting = "1";
+  });
+  // A page restored by the Back button keeps the flag; let its forms send again.
+  window.addEventListener("pageshow", function () {
+    Array.prototype.forEach.call(document.querySelectorAll("form[data-submitting]"),
+      function (f) { delete f.dataset.submitting; });
   });
   document.addEventListener("change", function (e) {
     var el = e.target;

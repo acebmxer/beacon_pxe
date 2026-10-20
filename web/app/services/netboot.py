@@ -20,6 +20,7 @@ import secrets
 import ssl
 import string
 import tarfile
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -46,6 +47,27 @@ _RELEASE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 
 class NetbootError(Exception):
     """A user-facing problem with a netboot image request."""
+
+
+class Cancelled(Exception):
+    """The image being built was deleted, so its run stops where it is."""
+
+
+# The stop flag of the image run on this thread (services.images sets it), so a
+# multi-GB download notices a Delete within a second rather than at its end.
+_run = threading.local()
+
+
+def watch_for_stop(event: threading.Event | None) -> None:
+    """Set (or clear, with None) the stop flag checked on this thread."""
+    _run.stop = event
+
+
+def check_stop() -> None:
+    """Raise Cancelled if this thread's image run has been told to stop."""
+    event = getattr(_run, "stop", None)
+    if event is not None and event.is_set():
+        raise Cancelled()
 
 
 def load_catalog() -> list[dict]:
@@ -1023,6 +1045,7 @@ def download(url: str, dest: Path, max_bytes: int = ARCHIVE_MAX_BYTES) -> None:
                     expected = _expected_size(resp, size)
                     with open(part, "ab" if size else "wb") as out:
                         while chunk := resp.read(1024 * 1024):
+                            check_stop()
                             size += len(chunk)
                             if size > max_bytes:
                                 raise NetbootError("Download exceeded the size limit; "

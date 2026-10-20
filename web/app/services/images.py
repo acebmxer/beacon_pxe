@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 
 from ..db import SessionLocal
@@ -32,6 +33,20 @@ NEEDS_REPROCESS = "needs_reprocess"
 # leaves these alone, and startup clears them, as no background task survives a
 # restart.
 IN_FLIGHT = ("pending", "processing")
+
+# Status of an image deleted while its run was still going. The run stops at
+# its next step and removes the image then; until it does, the row keeps its id
+# so a new image can't be given the same folders. A second Delete removes it
+# straight away (a run that hangs), and startup removes any left behind.
+DELETING = "deleting"
+
+# Statuses Reprocess leaves alone.
+BUSY = IN_FLIGHT + (DELETING,)
+
+# The stop flag of each image whose run is under way, by image id. Runs are
+# background tasks in this one process, so this is the whole picture.
+_runs: dict[int, threading.Event] = {}
+_runs_lock = threading.Lock()
 
 # Candidate (kernel, initrd) path patterns by distro family, checked in order.
 # Patterns are matched case-insensitively against the ISO's file listing.
@@ -896,9 +911,11 @@ def _process_netboot(db, img: Image) -> None:
             if not archive.exists():
                 raise netboot.NetbootError(
                     "The uploaded archive is gone; add the image again.")
+            netboot.check_stop()
             if img.variant == "live":
                 _extract_live_files(archive, live, dest_dir)
                 if live.get("root") == "nfs":
+                    netboot.check_stop()
                     try:
                         _extract_tree(archive, config.NFS_DIR / str(img.id))
                     except subprocess.CalledProcessError as e:
@@ -1017,17 +1034,28 @@ def _extract_live_files(iso: Path, live: dict, dest_dir: Path) -> None:
 
 def process_image(image_id: int) -> None:
     """Run extraction for one image. Intended to run as a background task."""
+    stop = threading.Event()
+    with _runs_lock:
+        if image_id in _runs:
+            return  # this image's run is already under way
+        _runs[image_id] = stop
+    netboot.watch_for_stop(stop)
     db = SessionLocal()
+    filename = None
     try:
         img = db.get(Image, image_id)
-        if img is None:
+        # Only a queued image is run: one deleted while it waited, or already
+        # built by an earlier run of the same queue, is left alone.
+        if img is None or img.status != "pending":
             return
+        filename = img.filename
         # Mark active extraction so the UI can distinguish "queued" from "working".
         img.status = "processing"
         db.commit()
         # Wipe any artifacts from a previous run before re-extracting, so a
         # changed family/netboot method can't leave stale (possibly huge) data.
         _clean_derived_data(image_id)
+        netboot.check_stop()
         if img.source == "netboot":
             _process_netboot(db, img)
             ipxe.render(db)
@@ -1045,6 +1073,7 @@ def process_image(image_id: int) -> None:
             db.commit()
             return
 
+        netboot.check_stop()
         family = _detect_family(entries)
         img.os_family = family
         if family == "windows":
@@ -1084,6 +1113,7 @@ def process_image(image_id: int) -> None:
         needs_nfs, http_files, guessed_args, needs_repo_tree = _netboot_plan(
             entries, img.filename, img.id)
 
+        netboot.check_stop()
         if needs_repo_tree:
             try:
                 _extract_tree(iso, dest_dir / "tree")
@@ -1093,6 +1123,7 @@ def process_image(image_id: int) -> None:
                 db.commit()
                 return
 
+        netboot.check_stop()
         if needs_nfs:
             # Unpack the live filesystem so the nfs service can export it.
             try:
@@ -1127,20 +1158,55 @@ def process_image(image_id: int) -> None:
 
         ipxe.render(db)
         log.info("Image %s ready (%s)", img.name, family)
+    except netboot.Cancelled:
+        # Deleted part-way: the finally below removes the image.
+        db.rollback()
+        log.info("Processing image %s stopped: the image was deleted", image_id)
     except Exception as exc:
         # Anything the steps above don't turn into an error message (a full
         # disk, a truncated archive, a missing tool) would otherwise leave the
         # image on "processing" until a restart, and Reprocess skips it.
         log.exception("Processing image %s failed", image_id)
         db.rollback()
-        img = db.get(Image, image_id)
+        # Read the row afresh: a second Delete may have removed it meanwhile.
+        img = None if stop.is_set() else db.get(Image, image_id,
+                                                 populate_existing=True)
         if img is not None:
             img.status = "error"
             img.message = f"Processing failed: {exc}"
             db.commit()
             ipxe.render(db)
     finally:
-        db.close()
+        netboot.watch_for_stop(None)
+        with _runs_lock:
+            _runs.pop(image_id, None)
+            deleted = stop.is_set()
+        try:
+            if deleted:
+                _finish_delete(db, image_id, filename)
+        finally:
+            db.close()
+
+
+def _finish_delete(db, image_id: int, filename: str | None) -> None:
+    """Remove an image that was deleted while its run was going, now the run
+    has stopped, together with anything the run wrote after the Delete."""
+    try:
+        db.rollback()
+        # Read the row afresh: the session may still hold it after a second
+        # Delete removed it.
+        img = db.get(Image, image_id, populate_existing=True)
+        if img is not None and img.filename == filename:
+            _remove_image(db, img)
+        elif img is None:
+            # Already removed by a second Delete: clear what the run wrote
+            # since. No image has this id now, so these folders were its own.
+            _clean_derived_data(image_id)
+            if filename and not db.query(Image).filter(
+                    Image.filename == filename).first():
+                iso_path(filename).unlink(missing_ok=True)
+    except Exception:
+        log.exception("Removing deleted image %s failed", image_id)
 
 
 def _exists_nonempty(path: Path) -> bool:
@@ -1226,7 +1292,8 @@ def _missing_message(db, img: Image, missing: list[Path]) -> str:
 
 
 def reconcile_statuses(db) -> int:
-    """Flag images whose extracted files are gone. Returns the number changed.
+    """Flag images whose extracted files are gone, and finish deletes a restart
+    interrupted. Returns the number of images changed or removed.
 
     `status` records how the last extraction went; it says nothing about whether
     what that extraction produced still exists. `docker compose down -v` destroys
@@ -1238,8 +1305,17 @@ def reconcile_statuses(db) -> int:
     Runs at startup, which is the only moment the volumes can have changed
     without Beacon doing it, and is when the boot menu is regenerated anyway.
     """
-    changed = 0
+    changed = removed = 0
     for img in db.query(Image).all():
+        # Deleted while its run was going, and the restart ended the run
+        # before it could remove the image.
+        if img.status == DELETING:
+            _remove_files(img)
+            db.delete(img)
+            log.info("Removed image %s (id=%s), deleted before the restart",
+                     img.name, img.id)
+            removed += 1
+            continue
         # No background task survives a restart, so a row still queued or
         # in-flight was interrupted and will never finish on its own.
         if img.status in IN_FLIGHT:
@@ -1260,21 +1336,42 @@ def reconcile_statuses(db) -> int:
                     NEEDS_REPROCESS)
         changed += 1
 
-    if changed:
+    if changed or removed:
         db.commit()
+    if changed:
         log.warning("%d image(s) need reprocessing; they are held out of the "
                     "boot menu until their files are rebuilt", changed)
-    return changed
+    return changed + removed
 
 
-def delete_image(db, img: Image) -> None:
-    """Remove the ISO, extracted files, DB row, and regenerate the menu."""
-    iso = iso_path(img.filename)
-    iso.unlink(missing_ok=True)
-    extracted = config.BOOTROOT_DIR / EXTRACT_SUBDIR / str(img.id)
-    shutil.rmtree(extracted, ignore_errors=True)
-    shutil.rmtree(config.NFS_DIR / str(img.id), ignore_errors=True)
-    shutil.rmtree(config.SMB_DIR / str(img.id), ignore_errors=True)
+def delete_image(db, img: Image) -> bool:
+    """Remove the ISO, extracted files, DB row, and regenerate the menu.
+
+    An image whose run is still going is only marked "deleting" and told to
+    stop: removing its files under it would leave the run writing new ones
+    (and a re-downloaded ISO) that nothing owns. The run removes the image at
+    its next step. Pressing Delete again removes it at once, for a run that
+    hangs. Returns False when the removal was left to the run.
+    """
+    with _runs_lock:
+        stop = _runs.get(img.id)
+        if stop is not None and not stop.is_set():
+            stop.set()
+            img.status = DELETING
+            img.message = "Deleting: waiting for the current step to stop."
+            db.commit()
+            return False
+    _remove_image(db, img)
+    return True
+
+
+def _remove_files(img: Image) -> None:
+    iso_path(img.filename).unlink(missing_ok=True)
+    _clean_derived_data(img.id)
+
+
+def _remove_image(db, img: Image) -> None:
+    _remove_files(img)
     db.delete(img)
     db.commit()
     ipxe.render(db)

@@ -89,6 +89,11 @@ selected**; both ask first. The images are reprocessed one after another, and an
 image still processing, or waiting for its turn, is left alone, by a row's own
 **Reprocess** too.
 
+**Delete** works on any image. One still processing shows **deleting** until
+its current step stops (a download stops within a second, an unpack when it
+finishes), then it goes with all its files. If it stays on **deleting**, press
+**Delete** again to remove it at once.
+
 ### Netboot installers (no ISO)
 
 **Add from a netboot catalog** on the Images page creates an image without an

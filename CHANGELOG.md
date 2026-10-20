@@ -183,6 +183,17 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **Deleting an image that is still processing no longer leaves files
+  behind.** The run carried on after the Delete, writing boot files (and
+  downloading the live ISO again) that no image owned. The image now shows
+  "deleting" until the run stops at its next step, then it goes with all its
+  files. Pressing Delete again removes an image that stays on "deleting".
+
+- **A double click on a button that asks first no longer asks twice.** Delete,
+  Delete selected, Reprocess selected and the other buttons with an "Are you
+  sure?" question asked again on the second click, and sent the request
+  twice.
+
 - **Importing a badly nested catalog file shows an error instead of crashing.**
   A JSON file nested thousands of levels deep made **Import from a file** fail
   with a server error; it now says the file is not valid JSON. The import's

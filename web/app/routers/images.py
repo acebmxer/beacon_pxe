@@ -168,6 +168,11 @@ async def images_sse(request: Request, user: User = Depends(require_user),
                             "message": message,
                         })
                     seen[img_id] = img_status
+                # A deleted image's row is gone rather than changed.
+                present = {img_id for img_id, _, _ in items}
+                for img_id in [i for i in seen if i not in present]:
+                    updates.append({"id": img_id, "status": "deleted", "message": ""})
+                    del seen[img_id]
                 if updates:
                     yield f"data: {json.dumps(updates)}\n\n"
                 else:
@@ -448,7 +453,9 @@ def retry(request: Request, image_id: int, background: BackgroundTasks,
     # Same rule as bulk Reprocess: a second run would wipe the files the
     # running one is still writing. "pending" counts too: the run is queued
     # but not started yet, as when Reprocess is clicked twice in a row.
-    if img and img.status in image_svc.IN_FLIGHT:
+    if img and img.status == image_svc.DELETING:
+        request.session["image_notice"] = f"{img.name} is being deleted."
+    elif img and img.status in image_svc.BUSY:
         request.session["image_notice"] = (
             f"{img.name} is still processing, so it was left alone.")
     elif img:
@@ -459,11 +466,13 @@ def retry(request: Request, image_id: int, background: BackgroundTasks,
 
 
 @router.post("/images/{image_id}/delete")
-def delete(image_id: int, user: User = Depends(require_admin),
+def delete(request: Request, image_id: int, user: User = Depends(require_admin),
            db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
-    if img:
-        image_svc.delete_image(db, img)
+    if img and not image_svc.delete_image(db, img):
+        request.session["image_notice"] = (
+            f"{img.name} is still processing; it is deleted as soon as the "
+            "current step stops. Press Delete again if it doesn't go away.")
     return RedirectResponse("/images", status_code=303)
 
 
@@ -476,11 +485,12 @@ def bulk(request: Request, background: BackgroundTasks,
     Reprocess queues each one as the row's own Reprocess does; the background
     tasks run one after another, so several downloads do not compete. An image
     still processing or queued is left alone, as a second run would wipe its
-    files mid-way.
+    files mid-way. Delete stops a running image at its next step, as the row's
+    own Delete does.
     """
     images = [img for img in (db.get(Image, i) for i in dict.fromkeys(ids)) if img]
     if action == "reprocess":
-        queued = [img for img in images if img.status not in image_svc.IN_FLIGHT]
+        queued = [img for img in images if img.status not in image_svc.BUSY]
         for img in queued:
             img.status = "pending"
         db.commit()
@@ -491,9 +501,11 @@ def bulk(request: Request, background: BackgroundTasks,
                   + (f"; {skipped} still processing {'was' if skipped == 1 else 'were'} "
                      "left alone." if skipped else "."))
     elif action == "delete":
-        for img in images:
-            image_svc.delete_image(db, img)
-        notice = f"Deleted {len(images)} image{'s' if len(images) != 1 else ''}."
+        waiting = sum(not image_svc.delete_image(db, img) for img in images)
+        done = len(images) - waiting
+        notice = f"Deleted {done} image{'s' if done != 1 else ''}" + (
+            f"; {waiting} still processing {'is' if waiting == 1 else 'are'} deleted "
+            "as soon as the current step stops." if waiting else ".")
     else:
         return RedirectResponse("/images", status_code=303)
     if images:

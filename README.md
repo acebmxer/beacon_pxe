@@ -154,5 +154,7 @@ factor.
 
 Beacon's code is [MIT](LICENSE). Bundled components (dnsmasq, samba, iPXE,
 wimboot, …) keep their own licenses — see
-[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Contributions welcome; add
-user-facing changes to the **Unreleased** section of [CHANGELOG.md](CHANGELOG.md).
+[THIRD_PARTY_LICENSES.md](THIRD_PARTY_LICENSES.md). Contributions welcome: open
+pull requests against the `dev` branch, not `main`, and add user-facing changes
+to the **Unreleased** section of [CHANGELOG.md](CHANGELOG.md). See
+[CONTRIBUTING.md](CONTRIBUTING.md).

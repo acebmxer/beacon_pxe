@@ -10,6 +10,16 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-20
+
+**A netboot catalog adds installers and live desktops for the main distros
+without uploading an ISO, plus a round of security and reliability fixes.**
+Replace `docker-compose.yml` with the current one so NFS and SMB answer only
+the boot network (an older file keeps working as before, and the `reload`
+service it lists can be removed). Behind a reverse proxy, the proxy must pass
+on the original Host header, or saving a form returns 403. **Reprocess**
+Fedora/RHEL installer images to move them to NFS.
+
 ### Security
 
 - **NFS and SMB only answer the boot network.** The NFS server exported the
@@ -867,7 +877,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.6.0...v0.7.0

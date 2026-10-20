@@ -183,6 +183,12 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **`setup.sh` finishes a fresh install again.** It stopped straight after
+  creating `.env`, leaving the admin password and session secret blank and the
+  stack not started; running it again kept the blank values. It now fills both
+  in and starts the stack, and `.env` is readable only by its owner, since it
+  holds those secrets.
+
 - **Top deployed images keeps the newest images when counts tie.** The list
   shows five, and images booted the same number of times were cut in no fixed
   order, so a just-booted image could be missing while an older one stayed.

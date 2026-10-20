@@ -55,7 +55,8 @@ async def settings_save(request: Request, user: User = Depends(require_admin),
     for key in BOOL_KEYS:
         set_setting(db, key, "1" if key in form else "0")
 
-    # Regenerate boot configs; the reload sidecar restarts dnsmasq.
+    # Regenerate boot configs; the dnsmasq container restarts dnsmasq when its
+    # config changes, and nfs/smb follow a changed boot interface.
     dnsmasq.render(db)
     ipxe.render(db)
     # XCP-NG GRUB chainloaders bake in the server IP, so rebuild them in case it

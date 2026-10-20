@@ -12,6 +12,21 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Security
 
+- **NFS and SMB only answer the boot network.** The NFS server exported the
+  unpacked images to every address and Samba listened on every interface. NFS
+  now exports only to the subnet of the **Boot interface** in Server Settings,
+  and Samba listens only on that interface; both follow a change to it within
+  seconds. This needs the current `docker-compose.yml`, which shares the
+  dnsmasq config with `nfs` and `smb`; with an older one both work as before
+  and say so in their logs.
+
+- **One fewer container holds the Docker socket.** The `reload` container had
+  full Docker access only to restart dnsmasq after a settings change; dnsmasq
+  now restarts itself, and `reload` is gone from `docker-compose.yml`. A
+  compose file that still lists it keeps working. `web` keeps the socket for
+  self-update and restore, and the compose file now says why a socket proxy
+  wouldn't make that safer.
+
 - **The Windows boot helper is checked before it goes into the image.** Every
   Windows PXE client runs wimboot, which the web image downloads when it is
   built, and nothing checked that the file was the real release. Its SHA-256 is
@@ -186,6 +201,12 @@ to do differently. Internal refactors that change nothing observable are omitted
   Live desktop then fetches its ISO from Debian's current, archive or weekly
   testing folder. Installer also takes any other release name the mirror carries.
   A live image is named after its release, e.g. "Debian 12 Live KDE Plasma".
+
+### Changed
+
+- **Passwords are checked with bcrypt directly.** passlib, which did this
+  before, is no longer maintained and held back bcrypt and Python updates.
+  Existing passwords keep working; nothing to do.
 
 ### Fixed
 

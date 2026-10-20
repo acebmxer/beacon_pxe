@@ -4,7 +4,9 @@ FROM alpine:3.24
 # networking (see docker-compose.yml) because nfsd needs /proc/fs/nfsd and the
 # host's nfsd kernel module.
 RUN apk add --no-cache nfs-utils
-COPY exports /etc/exports
+# A template: entrypoint.sh writes /etc/exports from it, with `*` replaced by
+# the boot interface's subnet(s).
+COPY exports /etc/beacon/exports.template
 COPY entrypoint.sh /entrypoint.sh
 RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
 ENTRYPOINT ["/entrypoint.sh"]

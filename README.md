@@ -13,7 +13,7 @@
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-362%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-366%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -143,9 +143,10 @@ time. See **[docs/guide.md](docs/guide.md)** for the API endpoints.
 ## Security
 
 The UI is HTTP on port 8080 — put it behind a TLS reverse proxy for anything past
-a trusted LAN. The `web` and `reload` containers mount the Docker socket (for
-self-update and the dnsmasq reload), which is **root-equivalent on the host** —
-an accepted trade-off; remove the mounts to opt out. Passwords must be ≥ 12
+a trusted LAN. The `web` container mounts the Docker socket (for self-update and
+the restart after a restore), which is **root-equivalent on the host** — an
+accepted trade-off; remove the mount to opt out. NFS exports only to the boot
+interface's subnet, and Samba listens only on the boot interface. Passwords must be ≥ 12
 characters, login is rate-limited per client IP (the lockout is persisted, so
 restarting the stack doesn't clear it), and accounts can require a TOTP second
 factor.

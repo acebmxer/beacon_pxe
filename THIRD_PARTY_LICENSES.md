@@ -21,7 +21,6 @@ Installed from PyPI per [`web/requirements.txt`](web/requirements.txt):
 | uvicorn          | BSD-3-Clause   |
 | jinja2           | BSD-3-Clause   |
 | sqlalchemy       | MIT            |
-| passlib          | BSD-2-Clause   |
 | bcrypt           | Apache-2.0     |
 | python-multipart | Apache-2.0     |
 | itsdangerous     | BSD-3-Clause   |

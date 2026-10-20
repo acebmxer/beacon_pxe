@@ -8,4 +8,7 @@
 #   no_root_squash     the live OS expects to read files owned by root
 #   insecure           the klibc initramfs mounter uses source ports >1023
 #   no_subtree_check   standard for whole-directory exports
+#
+# This is a template: nfs/entrypoint.sh replaces `*` with the subnet(s) of the
+# boot interface set in Server Settings, so only the boot LAN can mount /nfs.
 /nfs *(ro,sync,no_subtree_check,no_root_squash,insecure)

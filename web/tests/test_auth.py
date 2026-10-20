@@ -31,6 +31,30 @@ class TestHashAndVerify:
         h = hash_password("correct-horse-battery")
         assert not verify_password("wrong-password", h)
 
+    # Made by the passlib CryptContext Beacon used before (passlib 1.7.4,
+    # bcrypt 4.0.1). Existing accounts hold hashes like these and must keep
+    # signing in after the switch to calling bcrypt directly.
+    PASSLIB_HASH = "$2b$12$8uF2terSP4dxadkp4O1bbuwqzbAgkwWFIpMw4/FY8IVLVFg81M9pG"
+    # passlib's hash of "x" * 72 + "tail": it used only the first 72 bytes.
+    PASSLIB_LONG_HASH = "$2b$12$iOEqkitz3rBwS.dNgb8MZ.Cb0kGU1NtX94p2sQrCj9vt3uj5e8NJm"
+
+    def test_passlib_hash_still_verifies(self):
+        assert verify_password("OldPassword-from-passlib", self.PASSLIB_HASH)
+        assert not verify_password("OldPassword-from-passlib!", self.PASSLIB_HASH)
+
+    def test_passlib_long_password_matches_on_first_72_bytes(self):
+        assert verify_password("x" * 72 + "tail", self.PASSLIB_LONG_HASH)
+        assert verify_password("x" * 72 + "other", self.PASSLIB_LONG_HASH)
+        assert not verify_password("x" * 71, self.PASSLIB_LONG_HASH)
+
+    def test_new_hash_has_passlib_format(self):
+        h = hash_password("correct-horse-battery")
+        assert h.startswith("$2b$12$") and len(h) == 60
+
+    def test_damaged_hash_is_a_failed_login_not_an_error(self):
+        assert not verify_password("anything", "not-a-hash")
+        assert not verify_password("anything", "")
+
 
 class TestAuthenticate:
     def test_valid_credentials(self, db):

@@ -13,10 +13,9 @@ failure cases.
 | `dnsmasq` | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
 | `nfs`     | Exports each Linux image's live filesystem or Fedora/RHEL installer tree so clients mount it instead of copying it to RAM | **host**, privileged |
 | `smb`     | Exports each Windows image's unpacked install media so WinPE can run `setup.exe` | **host** |
-| `reload`  | Restarts dnsmasq when its config is regenerated | host |
 
 Images publish to `ghcr.io/acebmxer/beacon-<service>`. iPXE binaries, the nginx
-and samba configs, and the reload script are baked into the images — nothing is
+and samba configs, and the service scripts are baked into the images — nothing is
 bind-mounted — which is why the stack runs from just `docker-compose.yml` +
 `.env`. A consequence: **some fixes ship inside a service image, not `web`** (the
 iPXE chain script in `dnsmasq`, the samba tuning in `smb`), so the supported
@@ -26,6 +25,14 @@ update is a whole-stack `docker compose pull && docker compose up -d`.
 that don't cross Docker's bridge. `nfs` is **host + privileged** because it runs
 the in-kernel NFS server (`nfsd` — `modprobe nfsd` if the host hasn't loaded it).
 `smb` is **host** so WinPE reaches the share at the server's LAN address.
+
+`dnsmasq` restarts itself when the web app rewrites its config (older versions
+used a separate `reload` container with the Docker socket for this). `nfs` and
+`smb` read the **Boot interface** from that same config: NFS exports only to
+that interface's subnet(s) and Samba listens only on it, so a client on another
+network can't mount them. Both follow a changed boot interface within seconds.
+A `docker-compose.yml` from before this doesn't give them the config; they then
+serve every address as before, and their logs say so.
 
 ## DHCP modes
 

@@ -66,7 +66,9 @@ The image is still using the old copy-the-whole-ISO-to-RAM boot method. Hit
 
 ## NFS mount fails / live filesystem not found
 
-`docker compose logs nfs` should show `current exports: /nfs`. The host needs the
+`docker compose logs nfs` should show `exporting /nfs to <subnet>` and the
+client must have an address in that subnet (the **Boot interface**'s network in
+Server Settings; clients on other routed networks are refused). The host needs the
 NFS kernel module (`sudo modprobe nfsd`), the `nfs` container runs privileged with
 host networking, and the client uses NFSv3 (ports 111 + 2049 must be open on the
 LAN).

@@ -78,5 +78,7 @@ COPY --from=ipxe /ipxe/src/bin/ipxe.pxe             /tftp/undionly.kpxe
 COPY --from=ipxe /ipxe/src/bin-x86_64-efi/ipxe.efi  /tftp/ipxe.efi
 # log-facility is set in the generated conf (a file on the shared volume) so the
 # web app can read recent clients off it; don't override it to stderr here.
-ENTRYPOINT ["dnsmasq", "--keep-in-foreground", \
-            "--conf-file=/dnsmasq/dnsmasq.conf"]
+# The entrypoint runs dnsmasq and restarts it when the web app rewrites the conf.
+COPY entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r//' /entrypoint.sh && chmod +x /entrypoint.sh
+ENTRYPOINT ["/entrypoint.sh"]

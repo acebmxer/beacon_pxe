@@ -201,6 +201,10 @@ to do differently. Internal refactors that change nothing observable are omitted
   a second run that wiped the files the first one was writing; the image's own
   Reprocess now follows the same rule as Reprocess selected and says so.
 
+  The same goes for an image waiting for its run to start, so pressing
+  Reprocess twice in a row queues one run, not two. An image left waiting by a
+  restart is marked "needs reprocess" at startup, as one left processing is.
+
 - **Uploading an ISO with a name already in use keeps both.** The second upload
   replaced the first image's ISO, and deleting either image removed the other's.
   The new one is now saved as `name-2.iso`, `name-3.iso`, and so on.

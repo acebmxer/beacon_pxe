@@ -28,6 +28,11 @@ EXTRACT_SUBDIR = "os"
 # with the ISO, the derived data just has to be rebuilt.
 NEEDS_REPROCESS = "needs_reprocess"
 
+# Statuses of an image whose run is queued ("pending") or under way. Reprocess
+# leaves these alone, and startup clears them, as no background task survives a
+# restart.
+IN_FLIGHT = ("pending", "processing")
+
 # Candidate (kernel, initrd) path patterns by distro family, checked in order.
 # Patterns are matched case-insensitively against the ISO's file listing.
 KERNEL_PATTERNS = [
@@ -1235,9 +1240,9 @@ def reconcile_statuses(db) -> int:
     """
     changed = 0
     for img in db.query(Image).all():
-        # No background task survives a restart, so a row still marked in-flight
-        # was interrupted and will never finish on its own.
-        if img.status == "processing":
+        # No background task survives a restart, so a row still queued or
+        # in-flight was interrupted and will never finish on its own.
+        if img.status in IN_FLIGHT:
             img.status = NEEDS_REPROCESS
             img.message = ("Extraction was interrupted by a restart and never "
                            "finished. Reprocess to run it again.")

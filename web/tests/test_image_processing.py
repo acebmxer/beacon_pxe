@@ -92,6 +92,37 @@ def test_reprocess_leaves_an_image_that_is_still_processing_alone(client,
     assert "still processing" in client.get("/images").text
 
 
+def test_reprocess_clicked_twice_queues_one_run(client, no_processing):
+    # The first click leaves the image "pending" until its background run
+    # starts; a second click in that gap queued a second run.
+    _login(client)
+    img = _seed_image(status="ready")
+    client.post(f"/images/{img.id}/retry", follow_redirects=False)
+    client.post(f"/images/{img.id}/retry", follow_redirects=False)
+    assert no_processing == [img.id]
+    assert "still processing" in client.get("/images").text
+
+
+def test_reprocess_selected_skips_a_queued_image(client, no_processing):
+    _login(client)
+    queued = _seed_image(name="Queued", status="pending")
+    done = _seed_image(name="Done", status="ready")
+    client.post("/images/bulk", follow_redirects=False,
+                data={"action": "reprocess", "ids": [queued.id, done.id]})
+    assert no_processing == [done.id]
+
+
+def test_restart_clears_an_image_left_queued(client):
+    from app.db import SessionLocal
+    img = _seed_image(status="pending")
+    db = SessionLocal()
+    try:
+        assert image_svc.reconcile_statuses(db) == 1
+    finally:
+        db.close()
+    assert _image(img.id).status == image_svc.NEEDS_REPROCESS
+
+
 def test_reprocess_still_runs_for_a_finished_image(client, no_processing):
     _login(client)
     img = _seed_image(status="error")

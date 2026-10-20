@@ -86,7 +86,8 @@ a tweak (a **Reprocess** re-derives them and overwrites your edit).
 To reprocess or delete several images at once, tick them in the Images table (the
 box in the header ticks every image) and press **Reprocess selected** or **Delete
 selected**; both ask first. The images are reprocessed one after another, and an
-image still processing is left alone, by a row's own **Reprocess** too.
+image still processing, or waiting for its turn, is left alone, by a row's own
+**Reprocess** too.
 
 ### Netboot installers (no ISO)
 

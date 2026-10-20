@@ -446,8 +446,9 @@ def retry(request: Request, image_id: int, background: BackgroundTasks,
           user: User = Depends(require_admin), db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
     # Same rule as bulk Reprocess: a second run would wipe the files the
-    # running one is still writing.
-    if img and img.status == "processing":
+    # running one is still writing. "pending" counts too: the run is queued
+    # but not started yet, as when Reprocess is clicked twice in a row.
+    if img and img.status in image_svc.IN_FLIGHT:
         request.session["image_notice"] = (
             f"{img.name} is still processing, so it was left alone.")
     elif img:
@@ -474,11 +475,12 @@ def bulk(request: Request, background: BackgroundTasks,
 
     Reprocess queues each one as the row's own Reprocess does; the background
     tasks run one after another, so several downloads do not compete. An image
-    still processing is left alone, as a second run would wipe its files mid-way.
+    still processing or queued is left alone, as a second run would wipe its
+    files mid-way.
     """
     images = [img for img in (db.get(Image, i) for i in dict.fromkeys(ids)) if img]
     if action == "reprocess":
-        queued = [img for img in images if img.status != "processing"]
+        queued = [img for img in images if img.status not in image_svc.IN_FLIGHT]
         for img in queued:
             img.status = "pending"
         db.commit()

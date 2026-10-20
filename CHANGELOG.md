@@ -12,6 +12,12 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Security
 
+- **The Windows boot helper is checked before it goes into the image.** Every
+  Windows PXE client runs wimboot, which the web image downloads when it is
+  built, and nothing checked that the file was the real release. Its SHA-256 is
+  now pinned, so a different file stops the build. The web image also no longer
+  carries the test suite.
+
 - **The two-factor code can no longer be guessed by trying them all.** After
   the password, the 6-digit code could be entered wrong any number of times, so
   anyone with a password could keep trying until a code was accepted. Five wrong

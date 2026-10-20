@@ -8,6 +8,3 @@ select = ["E4", "E7", "E9", "F"]
 [lint.per-file-ignores]
 # Tests call helpers for their side effects and keep the handle for readability.
 "tests/*" = ["F401", "F841"]
-# routers/dashboard.py defines the dashboard/stats/reset routes twice; the first
-# definitions win. Remove the duplicate block, then drop this ignore.
-"app/routers/dashboard.py" = ["F811"]

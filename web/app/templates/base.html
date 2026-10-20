@@ -81,6 +81,7 @@
 // Unobtrusive replacements for the inline handlers a nonce-based CSP forbids:
 //   <form data-confirm="…">   -> confirm() before submit (cancel blocks it)
 //   <select data-autosubmit>  -> submit the form when the value changes
+//   <input data-select-on-click> -> select the field's text on click
 (function () {
   document.addEventListener("submit", function (e) {
     var f = e.target;
@@ -92,6 +93,12 @@
     var el = e.target;
     if (el && el.hasAttribute && el.hasAttribute("data-autosubmit") && el.form) {
       el.form.submit();
+    }
+  });
+  document.addEventListener("click", function (e) {
+    var el = e.target;
+    if (el && el.hasAttribute && el.hasAttribute("data-select-on-click")) {
+      el.select();
     }
   });
   // Close the mobile nav when a link inside it is clicked.

@@ -183,6 +183,19 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **Fedora and RHEL installer ISOs no longer need a lot of client RAM.** Over
+  HTTP the installer copied `images/install.img` into memory, which needs about
+  twice its size: Fedora Kinoite's 3.8 GB one powered off a 6 GB client part-way.
+  These ISOs are now unpacked into the NFS share and the installer reads the file
+  from it, as from a disc. Clients need the NFS ports (111, 2049, 20048) open, as
+  for the live desktops. Installer images added before this keep booting over
+  HTTP; **Reprocess** moves them to NFS.
+
+  A restart no longer takes Fedora 44 installer images out of the boot menu
+  as "Boot files are missing". The startup check looked for a `.treeinfo`
+  file, which the Fedora 44 netinstall and Kinoite ISOs don't have; it now
+  checks for `images/install.img`, the file the installer loads.
+
 - **Deleting an image that is still processing no longer leaves files
   behind.** The run carried on after the Delete, writing boot files (and
   downloading the live ISO again) that no image owned. The image now shows

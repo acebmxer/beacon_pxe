@@ -13,7 +13,7 @@ only opens published ports.
 Ports: **69/udp** (TFTP), **67 + 4011/udp** (DHCP/proxyDHCP), **80/tcp** (boot
 menu, kernels, `boot.wim`), **139 + 445/tcp** (SMB, Windows only), and
 **111 tcp+udp / 2049 tcp / 20048 tcp+udp** (NFS + rpcbind + mountd, live Linux
-only).
+and Fedora/RHEL installers only).
 
 ```bash
 # firewalld — use the zone your boot interface is in

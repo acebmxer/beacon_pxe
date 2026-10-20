@@ -1,6 +1,7 @@
 """Regression tests for image processing: same-name uploads, Reprocess on an
 image that is still processing, images left on "processing" by an
-unexpected error, and Delete on an image whose run is still going."""
+unexpected error, Delete on an image whose run is still going, and Fedora/RHEL
+installer ISOs served over NFS."""
 import threading
 
 import pytest
@@ -319,3 +320,102 @@ def test_download_stops_when_its_image_is_deleted(tmp_path, monkeypatch):
         netboot.watch_for_stop(None)
     assert not dest.exists()
     assert not dest.with_name("live.iso.part").exists()
+
+
+# --- Fedora/RHEL installer ISOs over NFS -----------------------------------
+
+# Fedora 44's layout: .discinfo but no .treeinfo.
+_FEDORA_NETINSTALL = [
+    "./.discinfo", "./EFI/BOOT/grubx64.efi", "./images/install.img",
+    "./images/pxeboot/vmlinuz", "./images/pxeboot/initrd.img",
+]
+_FEDORA_DVD = _FEDORA_NETINSTALL + ["./repodata/repomd.xml", "./Packages/a/a.rpm"]
+
+
+@pytest.fixture
+def fake_iso(client, image_dir, tmp_path, monkeypatch):
+    """Run process_image on an ISO with the given member list, with bsdtar
+    stubbed: single members become small files and the whole-ISO unpack
+    writes the tree's .discinfo and install.img."""
+    import app.db as app_db
+    monkeypatch.setattr(image_svc, "SessionLocal", app_db.SessionLocal)
+    monkeypatch.setattr(app_config, "NFS_DIR", tmp_path / "nfs")
+    monkeypatch.setattr(app_config, "SMB_DIR", tmp_path / "smb")
+
+    def unpack(iso, dest):
+        dest.mkdir(parents=True, exist_ok=True)
+        (dest / ".discinfo").write_text("44\n")
+        (dest / "images").mkdir()
+        (dest / "images" / "install.img").write_bytes(b"stage2")
+
+    def extract_one(iso, member, dest):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(b"x")
+
+    monkeypatch.setattr(image_svc, "_extract_tree", unpack)
+    monkeypatch.setattr(image_svc, "_extract_one", extract_one)
+
+    def run(entries):
+        (image_dir / "fedora.iso").write_bytes(b"iso")
+        monkeypatch.setattr(image_svc, "_list_iso", lambda iso: entries)
+        img = _seed_image(status="pending", filename="fedora.iso",
+                          kernel_path=None, initrd_path=None)
+        image_svc.process_image(img.id)
+        return _image(img.id)
+    return run
+
+
+def test_fedora_netinstall_iso_reads_its_installer_over_nfs(fake_iso, tmp_path):
+    """Over HTTP the installer copies install.img into RAM; a 3.8 GB one needed
+    10 GB of client RAM. Over NFS it reads the file from the share."""
+    img = fake_iso(_FEDORA_NETINSTALL)
+    assert img.status == "ready", img.message
+    assert img.boot_args == f"inst.stage2=nfs:${{server-ip}}:/nfs/{img.id} ip=dhcp"
+    assert (tmp_path / "nfs" / str(img.id) / "images" / "install.img").is_file()
+    os_dir = app_config.BOOTROOT_DIR / image_svc.EXTRACT_SUBDIR / str(img.id)
+    assert (os_dir / "vmlinuz").is_file() and (os_dir / "initrd").is_file()
+    assert not (os_dir / "tree").exists()  # no second copy over HTTP
+    menu = (app_config.BOOTROOT_DIR / "boot.ipxe").read_text()
+    assert f"inst.stage2=nfs:${{server-ip}}:/nfs/{img.id}" in menu
+
+
+def test_fedora_dvd_iso_is_its_own_repo_over_nfs(fake_iso):
+    img = fake_iso(_FEDORA_DVD)
+    assert img.status == "ready", img.message
+    assert img.boot_args == f"inst.repo=nfs:${{server-ip}}:/nfs/{img.id} ip=dhcp"
+
+
+def test_restart_keeps_an_nfs_installer_ready_while_its_tree_is_there(fake_iso,
+                                                                      tmp_path):
+    from app.db import SessionLocal
+    img = fake_iso(_FEDORA_NETINSTALL)
+    db = SessionLocal()
+    try:
+        assert image_svc.reconcile_statuses(db) == 0
+        assert _image(img.id).status == "ready"
+        # A destroyed nfsroot volume leaves the row pointing at nothing.
+        (tmp_path / "nfs" / str(img.id) / "images" / "install.img").unlink()
+        assert image_svc.reconcile_statuses(db) == 1
+    finally:
+        db.close()
+    assert _image(img.id).status == image_svc.NEEDS_REPROCESS
+
+
+def test_restart_keeps_an_installer_made_before_nfs_ready(client, tmp_path,
+                                                         monkeypatch):
+    """An installer unpacked for HTTP by an older Beacon still boots as it
+    is until it is reprocessed."""
+    from app.db import SessionLocal
+    monkeypatch.setattr(app_config, "NFS_DIR", tmp_path / "nfs")
+    img = _seed_image(boot_args="inst.stage2=${boot-url}/os/1/tree ip=dhcp")
+    os_dir = app_config.BOOTROOT_DIR / image_svc.EXTRACT_SUBDIR / str(img.id)
+    (os_dir / "tree" / "images").mkdir(parents=True)
+    for name in ("vmlinuz", "initrd"):
+        (os_dir / name).write_bytes(b"x")
+    (os_dir / "tree" / "images" / "install.img").write_bytes(b"stage2")
+    db = SessionLocal()
+    try:
+        assert image_svc.reconcile_statuses(db) == 0
+    finally:
+        db.close()
+    assert _image(img.id).status == "ready"

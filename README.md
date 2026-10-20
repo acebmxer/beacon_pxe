@@ -13,7 +13,7 @@
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-358%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-362%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -115,7 +115,7 @@ unauthenticated liveness probe for monitoring.
   the host firewall is dropping it. Beacon's services listen below port 1025,
   which firewalld/ufw block by default. Open **69/udp** (TFTP), **67 + 4011/udp**
   (DHCP), **80/tcp** (HTTP), **139 + 445/tcp** (SMB, Windows), and
-  **111 / 2049 / 20048** (NFS, live Linux).
+  **111 / 2049 / 20048** (NFS, live Linux and Fedora/RHEL installers).
 - **Windows Setup fails partway (`0x80070035`) on a disk with old partitions** —
   delete them at Setup's disk screen. Standard dirty-disk behaviour, not a Beacon
   bug.

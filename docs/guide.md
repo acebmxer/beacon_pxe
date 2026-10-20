@@ -11,7 +11,7 @@ failure cases.
 | `web`     | Management UI + API (FastAPI); renders boot configs | port 8080 |
 | `nginx`   | Serves boot files to iPXE (`/boot.ipxe`, kernels, initrds, ISOs) | port 80 |
 | `dnsmasq` | proxyDHCP/DHCP + TFTP; BIOS/UEFI arch detection | **host** |
-| `nfs`     | Exports each Linux image's live filesystem so clients mount it instead of copying the whole ISO to RAM | **host**, privileged |
+| `nfs`     | Exports each Linux image's live filesystem or Fedora/RHEL installer tree so clients mount it instead of copying it to RAM | **host**, privileged |
 | `smb`     | Exports each Windows image's unpacked install media so WinPE can run `setup.exe` | **host** |
 | `reload`  | Restarts dnsmasq when its config is regenerated | host |
 
@@ -222,8 +222,8 @@ booting, but they cannot be reprocessed until an entry with the same ID is back.
 |--------|-----------|
 | Ubuntu live | `boot=casper netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
 | Debian live | `boot=live netboot=nfs nfsroot=${server-ip}:/nfs/<id> ip=dhcp` |
-| Fedora/RHEL netinstall | `inst.stage2=${boot-url}/os/<id>/tree ip=dhcp` (packages come from the online mirrors; the client needs internet) |
-| Fedora/RHEL full DVD | `inst.repo=${boot-url}/os/<id>/tree ip=dhcp` |
+| Fedora/RHEL netinstall | `inst.stage2=nfs:${server-ip}:/nfs/<id> ip=dhcp` (packages come from the online mirrors; the client needs internet) |
+| Fedora/RHEL full DVD | `inst.repo=nfs:${server-ip}:/nfs/<id> ip=dhcp` |
 | Fedora 42+ live | `root=live:${boot-url}/os/<id>/squashfs.img rd.live.image ip=dhcp` |
 | Archiso (Arch/EndeavourOS/CachyOS) | `archiso_http_srv=${boot-url}/os/<id>/ archisobasedir=arch BOOTIF=01-${net0/mac:hexhyp} ip=dhcp` |
 
@@ -231,6 +231,10 @@ booting, but they cannot be reprocessed until an entry with the same ID is back.
 volume and mounted over NFS on demand, so client RAM use stays low regardless of
 image size (the old `url=`/`fetch=` methods copied the whole ISO into a RAM disk
 and failed on large images — hit **Reprocess** to switch an old image to NFS).
+Fedora/RHEL installer ISOs are unpacked there too: over HTTP the installer copies
+`images/install.img` into RAM, which needs about twice its size (a 3.8 GB one
+needed a 10 GB client); over NFS it reads it from the share. Installer images
+added before this still boot over HTTP; **Reprocess** moves them to NFS.
 Fedora 42+ live and Archiso instead stream just their root filesystem over HTTP;
 Archiso pulls the whole `airootfs.sfs` into RAM, so its live desktop needs
 **~8 GB** of client RAM.

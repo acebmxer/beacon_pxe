@@ -18,7 +18,7 @@ from . import config
 _UNKNOWN = "unknown"
 
 
-def _peer_is_trusted(peer: str) -> bool:
+def peer_is_trusted(peer: str) -> bool:
     if not config.TRUSTED_PROXIES:
         return False
     try:
@@ -38,7 +38,7 @@ def client_ip(request: Request) -> str:
     the socket peer itself. Returns "unknown" when neither is available.
     """
     peer = request.client.host if request.client else ""
-    if peer and _peer_is_trusted(peer):
+    if peer and peer_is_trusted(peer):
         xff = request.headers.get("x-forwarded-for", "")
         # The proxy appends the address it saw as the rightmost entry.
         hops = [h.strip() for h in xff.split(",") if h.strip()]

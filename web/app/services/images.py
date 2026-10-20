@@ -59,7 +59,13 @@ INITRD_PATTERNS = [
 
 
 def iso_path(filename: str) -> Path:
-    return config.IMAGE_DIR / filename
+    # Only the last path component: filename comes from the database, which a
+    # restored backup can fill with "/elsewhere" or "../x", and the result is
+    # read, overwritten and deleted.
+    name = Path(filename).name
+    if name in ("", ".", ".."):
+        name = "invalid-name"
+    return config.IMAGE_DIR / name
 
 
 def _list_7z(path: Path) -> list[str]:
@@ -135,7 +141,10 @@ def _extract_one(iso: Path, member: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as fh:
         subprocess.run(
-            ["bsdtar", "-xOf", str(iso), member],
+            # "--" ends option parsing: member names come from the ISO, and one
+            # starting with "-" would otherwise be read as a bsdtar option
+            # (--use-compress-program runs a command).
+            ["bsdtar", "-xOf", str(iso), "--", member],
             stdout=fh, check=True,
         )
 
@@ -145,7 +154,7 @@ def _extract_one_7z(iso: Path, member: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
     with open(dest, "wb") as fh:
         subprocess.run(
-            ["7z", "e", "-so", str(iso), member],
+            ["7z", "e", "-so", str(iso), "--", member],
             stdout=fh, stderr=subprocess.DEVNULL, check=True,
         )
 
@@ -154,7 +163,7 @@ def _extract_gunzip(iso: Path, member: str, dest: Path) -> None:
     """Extract a gzip member and write it decompressed (for xen.gz -> xen)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     extract = subprocess.Popen(
-        ["bsdtar", "-xOf", str(iso), member], stdout=subprocess.PIPE)
+        ["bsdtar", "-xOf", str(iso), "--", member], stdout=subprocess.PIPE)
     with open(dest, "wb") as fh:
         gunzip = subprocess.Popen(
             ["gzip", "-dc"], stdin=extract.stdout, stdout=fh)

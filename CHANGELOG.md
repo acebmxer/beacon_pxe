@@ -10,6 +10,40 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Security
+
+- **An uploaded ISO can no longer run commands on the Beacon host.** A file
+  inside the ISO whose name began with `-` was read by bsdtar as an option, and
+  one option runs a program. With the web container's Docker access that meant
+  control of the host. File names from an ISO are now always treated as names.
+
+- **Pages on other ports of the same machine can no longer act as you.** The
+  session cookie stops other websites, but not another service on the same host
+  (nginx on port 80, or anything else on the box). A form there could create an
+  admin account in Beacon while you were signed in. Beacon now refuses form
+  posts that don't come from its own page; scripts using an API token are
+  unaffected. Behind a reverse proxy, the proxy must pass on the original Host
+  header (or send X-Forwarded-Host from an address in `TRUSTED_PROXIES`), or
+  saving a form returns 403; see `.env.example`.
+
+- **Anonymous uploads are refused before they are read.** An upload sent without
+  signing in was saved to disk before the sign-in check ran, so anyone who could
+  reach the console could fill its disk.
+
+- **A doctored backup can no longer slip settings past Beacon's checks.**
+  Restoring a backup took its settings and image records as they were: a line
+  break could add directives to dnsmasq's config or commands to the boot menu,
+  an image's file name could point Delete at any file, and database triggers in
+  the file stayed in the live database. Values written to dnsmasq.conf and
+  boot.ipxe are cleaned every time, image files are only ever looked for in the
+  images folder, and a backup containing triggers or views is refused.
+
+- **Image names and boot arguments can't add boot menu commands.** iPXE treats
+  the words `;`, `&&` and `||` as the start of a new command, so a name such as
+  `Foo ; chain http://…` (typed, or from an imported catalog entry) ran when
+  the menu loaded. Those words are left out of the menu now, `${…}` in a name
+  or the menu title is shown as text, and a word starting with `#` loses the `#`.
+
 ### Added
 
 - **The netboot catalog shows each release's newest build.** The **Release** list

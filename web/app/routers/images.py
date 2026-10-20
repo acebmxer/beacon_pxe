@@ -28,6 +28,21 @@ def _safe_filename(name: str) -> str:
     return _SAFE.sub("_", name).strip("_") or "image.iso"
 
 
+def _unused_filename(db: Session, filename: str) -> str:
+    """filename, or filename-2.iso, -3, ... if another image already owns it.
+
+    Two images sharing one ISO file means the second upload overwrites the
+    first one's ISO and deleting either removes the other's.
+    """
+    stem, dot, ext = filename.rpartition(".")
+    candidate, n = filename, 1
+    while (image_svc.iso_path(candidate).exists()
+           or db.scalar(select(Image.id).where(Image.filename == candidate))):
+        n += 1
+        candidate = f"{stem}-{n}{dot}{ext}"
+    return candidate
+
+
 def _ordered_images(db: Session) -> list[Image]:
     """All images sorted by display_order (NULLs last), then name."""
     return db.execute(
@@ -180,6 +195,7 @@ async def upload(request: Request, background: BackgroundTasks,
         return _page(request, db,
                      error="Only .iso files are supported. See the README for why.")
 
+    filename = _unused_filename(db, filename)
     dest = image_svc.iso_path(filename)
     # Stream to disk in chunks so large ISOs don't load into memory.
     size = 0
@@ -426,10 +442,15 @@ def update_args(image_id: int, boot_args: str = Form(""),
 
 
 @router.post("/images/{image_id}/retry")
-def retry(image_id: int, background: BackgroundTasks,
+def retry(request: Request, image_id: int, background: BackgroundTasks,
           user: User = Depends(require_admin), db: Session = Depends(get_db)):
     img = db.get(Image, image_id)
-    if img:
+    # Same rule as bulk Reprocess: a second run would wipe the files the
+    # running one is still writing.
+    if img and img.status == "processing":
+        request.session["image_notice"] = (
+            f"{img.name} is still processing, so it was left alone.")
+    elif img:
         img.status = "pending"
         db.commit()
         background.add_task(image_svc.process_image, img.id)

@@ -77,14 +77,16 @@ host still uses `BEACON_TAG` from `.env`.
 
 Upload format is `.iso` only. On upload the kernel + initrd are extracted (via
 `bsdtar`; `7z` for the UDF ISOs modern Windows uses) and served over HTTP; the
-raw ISO is kept at `/images/<file>.iso`. A best-effort kernel command line is
+raw ISO is kept at `/images/<file>.iso`; uploading a second ISO with a name
+already in use saves it as `<file>-2.iso`, `<file>-3.iso`, and so on. A
+best-effort kernel command line is
 filled in per distro — edit **boot args** on the Images page if a live ISO needs
 a tweak (a **Reprocess** re-derives them and overwrites your edit).
 
 To reprocess or delete several images at once, tick them in the Images table (the
 box in the header ticks every image) and press **Reprocess selected** or **Delete
 selected**; both ask first. The images are reprocessed one after another, and an
-image still processing is left alone.
+image still processing is left alone, by a row's own **Reprocess** too.
 
 ### Netboot installers (no ISO)
 

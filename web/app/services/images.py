@@ -1122,6 +1122,18 @@ def process_image(image_id: int) -> None:
 
         ipxe.render(db)
         log.info("Image %s ready (%s)", img.name, family)
+    except Exception as exc:
+        # Anything the steps above don't turn into an error message (a full
+        # disk, a truncated archive, a missing tool) would otherwise leave the
+        # image on "processing" until a restart, and Reprocess skips it.
+        log.exception("Processing image %s failed", image_id)
+        db.rollback()
+        img = db.get(Image, image_id)
+        if img is not None:
+            img.status = "error"
+            img.message = f"Processing failed: {exc}"
+            db.commit()
+            ipxe.render(db)
     finally:
         db.close()
 

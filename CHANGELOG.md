@@ -183,6 +183,19 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **Images no longer get stuck on "processing" until a restart.** An
+  unexpected failure while unpacking, such as a truncated download, a full disk
+  or a missing tool, left the image on "processing", where Reprocess skips it.
+  The image is now marked failed with the reason, so it can be retried.
+
+- **Reprocess on an image that is still processing leaves it alone.** It started
+  a second run that wiped the files the first one was writing; the image's own
+  Reprocess now follows the same rule as Reprocess selected and says so.
+
+- **Uploading an ISO with a name already in use keeps both.** The second upload
+  replaced the first image's ISO, and deleting either image removed the other's.
+  The new one is now saved as `name-2.iso`, `name-3.iso`, and so on.
+
 - **`setup.sh` finishes a fresh install again.** It stopped straight after
   creating `.env`, leaving the admin password and session secret blank and the
   stack not started; running it again kept the blank values. It now fills both

@@ -2,6 +2,10 @@
 /data/
 .env
 
+# Local working notes, kept off GitHub
+/docs/review-plan.md
+/docs/review-plan-fixes.patch
+
 # Python
 __pycache__/
 *.pyc

@@ -25,8 +25,11 @@ def update_status(user: User = Depends(require_admin), db: Session = Depends(get
     # behind this code's back; retract a stale "update available" before
     # reporting it. Local docker calls only — no network on the status path.
     update_svc.refresh_available(db)
+    available = get_setting(db, "update_available", "0") == "1"
     return {
-        "available": get_setting(db, "update_available", "0") == "1",
+        "available": available,
+        # The version offered, when the check compared versions ("0.8.0").
+        "available_version": get_setting(db, "update_available_version", "") if available else "",
         "in_progress": get_setting(db, "update_in_progress", "0") == "1",
         "last_checked": get_setting(db, "update_last_checked", ""),
         "last_result": update_svc.current_result(db),

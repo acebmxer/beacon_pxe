@@ -10,6 +10,20 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Fixed
+
+- **Beta updates offer only a newer version.** With **Include beta versions**
+  on, a stable install was told an update was available and would have
+  installed the last beta, which was older (v0.8.0 was offered
+  v0.8.0-beta.6), and a beta install was never offered the newer stable
+  release. The update check now compares version numbers from the GitHub
+  releases, a release counting as newer than its own betas, and moves to
+  whichever of the latest beta and the latest release is newer; the
+  **Update available** badge names that version. The same comparison covers
+  the stable channel, so turning beta updates off on a beta newer than the
+  latest release no longer offers the older release. `latest` (main-branch)
+  installs are compared as before.
+
 ## [0.8.0] - 2026-10-20
 
 **A netboot catalog adds installers and live desktops for the main distros

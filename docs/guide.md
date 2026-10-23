@@ -63,14 +63,19 @@ what `docker compose pull` installs and what the UI's update check watches:
 | --- | --- | --- |
 | `stable` | tagged releases | a new version is released |
 | `latest` | rolling `main` | any commit merged to `main` |
-| `beta` | `dev` builds published by hand | a beta is published — pre-release, may be broken |
+| `beta` | `dev` builds published by hand | a beta is published, or a release newer than the latest beta — pre-release, may be broken |
 
 New installs default to `stable`. Switching channels takes effect on the next
 update.
 
 Rather than editing `.env`, an admin can turn on **Include beta versions** under
-**Settings → Updates**. Updates then move to `beta` whatever `BEACON_TAG` says;
-turning it off returns to the `.env` channel at the next update (an older build).
+**Settings → Updates**. Updates then move to the newest published build, beta or
+release, whatever `BEACON_TAG` says: `beta` while a beta is ahead of the latest
+release, `stable` once a release has caught up. Released builds are compared by
+version number (a release counts as newer than its own betas), so only a newer
+version is ever offered. Turning it off returns to the `.env` channel; on
+`stable`, a beta newer than the latest release stays installed until a newer
+release is out.
 It applies to updates started from the UI: a plain `docker compose up -d` on the
 host still uses `BEACON_TAG` from `.env`.
 

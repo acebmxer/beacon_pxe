@@ -130,7 +130,7 @@
   <div class="checkbox" style="align-items:flex-start;">
     <input type="checkbox" id="upd-beta" style="margin-top:3px;">
     <label for="upd-beta">Include beta versions
-      <span class="muted" style="display:block;font-size:0.83rem;">Updates move to test builds published by hand from the <span class="mono">dev</span> branch, ahead of the stable release. Turn it off to return to <span id="upd-base-channel"></span>; that installs an older build at the next update.</span>
+      <span class="muted" style="display:block;font-size:0.83rem;">Updates move to test builds published by hand from the <span class="mono">dev</span> branch, ahead of the stable release; once a stable release is newer than the latest beta, they move to it. Only a newer version is offered. Turn it off to return to <span id="upd-base-channel"></span>; on the stable channel, a beta newer than the latest release stays until a newer release is out.</span>
     </label>
   </div>
   <div id="upd-status" class="muted">Checking…</div>
@@ -226,7 +226,8 @@
     }
 
     if (d.available) {
-      statusEl.innerHTML = '<span class="badge pending">Update available</span>';
+      statusEl.innerHTML = '<span class="badge pending">Update available' +
+        (d.available_version ? ': v' + esc(d.available_version) : '') + '</span>';
       applyBtn.style.display = "";
     } else {
       var checked = d.last_checked ? " · last checked " + fmt(d.last_checked) : "";

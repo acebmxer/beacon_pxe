@@ -12,6 +12,14 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **README: the Quick start sets `PROJECT_DIR`.** The steps left it empty in
+  `.env`, so the in-app **Update** button could pull new images but not
+  restart the stack ("PROJECT_DIR is not set", or, with a wrong folder, the
+  `beacon_updater` container failing with "no configuration file provided").
+  The Quick start now sets it to the install folder, as `setup.sh` does.
+  Existing installs: make sure `PROJECT_DIR` in `.env` is the folder holding
+  `docker-compose.yml`, then run `docker compose up -d` once.
+
 - **The SMB container starts on a fresh install.** On a new server with no
   existing Docker volumes, `docker compose up -d` could fail to start
   `beacon_smb` with "make mountpoint /srv/install/drivers: read-only file

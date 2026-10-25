@@ -142,6 +142,13 @@ services:
     container_name: beacon_smb
     restart: unless-stopped
     network_mode: host
+    # Start after web. smbroot is mounted read-only below, so Docker can't
+    # create the drivers folder inside it for the ./data/drivers mount; web's
+    # writable mount of the same volume creates it when web starts. Without
+    # this, a fresh install (empty volume) can fail to start smb with "make
+    # mountpoint /srv/install/drivers: read-only file system".
+    depends_on:
+      - web
     security_opt:
       - no-new-privileges:true
     environment:

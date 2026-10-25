@@ -1,11 +1,21 @@
-"""Update checking: compares deployed image digest against GHCR.
+"""Update checking: is a newer build published than the one running?
 
 Which tag is watched depends on the update channel: BEACON_TAG in .env ("latest"
 follows the main branch, "stable" follows tagged releases), unless the admin has
-turned on beta updates in Settings, which targets "beta" (builds triggered by hand
-from the dev branch) instead. docker-compose.yml interpolates the same variable and
-the update passes the chosen tag to compose, so the tag checked here is always the
+turned on beta updates in Settings (or BEACON_TAG is "beta"). Then the newest of
+the latest beta and the latest release is the target: "beta" (builds triggered by
+hand from the dev branch) while a beta is ahead, "stable" once a release has
+caught up with it. docker-compose.yml interpolates the same variable and the
+update passes the chosen tag to compose, so the tag checked here is always the
 tag `docker compose pull` installs.
+
+Released builds (stable and beta) are compared by version, from the GitHub
+releases, the same way linux_util_desktop's updater does it: version numbers
+first, then the beta number, a release ranking above every beta of its version.
+Only a newer version is offered. A digest only says "different", which offered
+stable v0.8.0 the older v0.8.0-beta.6 still sitting on :beta. Builds without a
+release version (main-branch "latest" builds, local dev builds) keep the digest
+comparison below.
 
 What is *deployed* is read from the running web container itself (through the
 docker socket) rather than remembered in the database. Bookkeeping desyncs the
@@ -16,6 +26,7 @@ then keeps advertising an update that is already installed.
 import json
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -61,6 +72,12 @@ _WEB_CONTAINER = "beacon_web"
 # Settings key for the "Include beta versions" switch in Settings -> Updates.
 _BETA_KEY = "update_beta"
 _BETA_TAG = "beta"
+_STABLE_TAG = "stable"
+# With betas included: which tag ("beta" or "stable") holds the newest release,
+# as found by the last check. Kept so the status page needs no network call.
+_BETA_TARGET_KEY = "update_beta_target"
+# The version the last check offered ("0.8.0", "0.8.1-beta.1"), or "".
+_AVAILABLE_VERSION_KEY = "update_available_version"
 
 
 def beta_enabled(db) -> bool:
@@ -71,15 +88,92 @@ def set_beta(db, enabled: bool) -> None:
     set_setting(db, _BETA_KEY, "1" if enabled else "0")
 
 
+def _include_betas(db) -> bool:
+    """Whether betas are offered: the Settings switch, or BEACON_TAG=beta."""
+    return beta_enabled(db) or config.BEACON_TAG == _BETA_TAG
+
+
 def target_channel(db=None) -> str:
-    """The image tag updates move to: beta when switched on, else BEACON_TAG."""
+    """The image tag updates move to.
+
+    With betas included, the tag of the newest release the last check found:
+    "beta" while a beta is ahead of the latest release, "stable" once a release
+    is at least as new. Otherwise BEACON_TAG.
+    """
     if db is None:
         db = SessionLocal()
         try:
             return target_channel(db)
         finally:
             db.close()
-    return _BETA_TAG if beta_enabled(db) else config.BEACON_TAG
+    if not _include_betas(db):
+        return config.BEACON_TAG
+    pick = get_setting(db, _BETA_TARGET_KEY, _BETA_TAG)
+    return pick if pick in (_BETA_TAG, _STABLE_TAG) else _BETA_TAG
+
+
+# GitHub releases name every published build: v0.8.0 (whose images are also
+# :stable) and pre-releases v0.8.0-beta.6 (also :beta), both made by
+# .github/workflows/publish.yml. Ranked like linux_util_desktop's updater
+# (src-tauri/src/update.rs): version numbers, then the beta number, with a
+# release above every beta of its version.
+_REPO = "acebmxer/beacon_pxe"
+_RELEASE_RANK = 1 << 62  # beta number of a release: above any real beta
+_VERSION_RE = re.compile(
+    r"v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?", re.ASCII)
+_BETA_RE = re.compile(r"beta\.(\d+)", re.ASCII)
+_MAX_RELEASES_JSON = 2_000_000
+
+Rank = tuple[tuple[int, int, int], int]
+
+
+def _parse_release(tag: str) -> Rank | None:
+    """`v0.8.0` -> release; `0.8.0-beta.6` -> beta 6; any other pre-release
+    suffix sorts below every beta. None for anything else ("main", "dev")."""
+    m = _VERSION_RE.fullmatch(tag.strip())
+    if not m:
+        return None
+    version = (int(m[1]), int(m[2]), int(m[3]))
+    if m[4] is None:
+        return version, _RELEASE_RANK
+    beta = _BETA_RE.fullmatch(m[4])
+    return version, int(beta[1]) if beta else 0
+
+
+def _running_rank() -> Rank | None:
+    """The running build's rank from BEACON_VERSION ("0.8.0", "0.8.0-beta.6"),
+    or None for a main-branch or local build."""
+    return _parse_release(config.BEACON_VERSION)
+
+
+def _newest_release(include_betas: bool) -> tuple[Rank, str] | None:
+    """The newest published release as (rank, version without the "v"): the
+    latest release, or the newest of all, betas included. None on any error,
+    which leaves the recorded state alone like a failed GHCR check."""
+    url = f"https://api.github.com/repos/{_REPO}/releases"
+    # `latest` never returns a pre-release; the list does, newest first.
+    url += "?per_page=30" if include_betas else "/latest"
+    try:
+        req = urllib.request.Request(url, headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": "beacon-pxe-update-check",
+        })
+        with urllib.request.urlopen(req, timeout=15) as r:
+            doc = json.loads(r.read(_MAX_RELEASES_JSON))
+    except Exception as exc:
+        log.debug("GitHub release check failed: %s", exc)
+        return None
+    best: tuple[Rank, str] | None = None
+    for rel in doc if isinstance(doc, list) else [doc]:
+        if not isinstance(rel, dict) or rel.get("draft"):
+            continue
+        tag = rel.get("tag_name")
+        if not isinstance(tag, str):
+            continue
+        rank = _parse_release(tag)
+        if rank is not None and (best is None or rank > best[0]):
+            best = (rank, tag.strip().removeprefix("v"))
+    return best
 
 
 _running_channel: str | None = None
@@ -252,12 +346,42 @@ def _deployed_digests() -> set[str] | None:
 
 
 def check_for_updates() -> bool:
-    """Query GHCR and record result in DB. Returns True if an update is available."""
+    """Query GitHub/GHCR and record result in DB. Returns True if an update is available."""
     db = SessionLocal()
     try:
         now = datetime.now(timezone.utc).isoformat()
         set_setting(db, "update_last_checked", now)
 
+        include_betas = _include_betas(db)
+        running = _running_rank()
+        if include_betas or (running is not None and config.BEACON_TAG == _STABLE_TAG):
+            newest = _newest_release(include_betas)
+            if newest is None:
+                # Network unreachable or GitHub refusing: keep whatever state
+                # was last recorded rather than guessing.
+                return get_setting(db, "update_available", "0") == "1"
+            rank, version = newest
+            if include_betas:
+                # :stable holds the latest release and :beta the latest beta,
+                # so the newest release's kind names the tag to move to.
+                set_setting(db, _BETA_TARGET_KEY,
+                            _STABLE_TAG if rank[1] == _RELEASE_RANK else _BETA_TAG)
+            if running is not None:
+                # Only a newer version is an update, as in linux_util_desktop:
+                # a stable build is never offered an older beta, and a beta
+                # newer than the latest release is not moved back to it.
+                available = rank > running
+                set_setting(db, _AVAILABLE_VERSION_KEY, version if available else "")
+                # The digest refresh_available() matches on belongs to the
+                # digest comparison; a leftover one could retract this offer.
+                set_setting(db, "update_remote_digest", "")
+                set_setting(db, "update_available", "1" if available else "0")
+                return available
+            # A main-branch or local build with betas included has no version
+            # to compare: the digest comparison below, against the tag just
+            # picked, is all there is.
+
+        set_setting(db, _AVAILABLE_VERSION_KEY, "")
         digest = _ghcr_latest_digest(target_channel(db))
 
         if digest is None:
@@ -275,7 +399,7 @@ def check_for_updates() -> bool:
             # points at; no bookkeeping to go stale. A channel switch needs no
             # special case — the running digest belongs to the old channel, so
             # this reports an update even when the "update" is the older,
-            # released build. The action needed is the same.
+            # released build (latest -> stable). The action needed is the same.
             available = digest not in deployed
             if not available:
                 # Keep the fallback baseline in sync while the authoritative
@@ -323,6 +447,16 @@ def refresh_available(db) -> None:
         # that is busy recreating the stack.
         return
     if get_setting(db, "update_available", "0") != "1":
+        return
+    # Offered by version: retracted once this process runs that version or a
+    # newer one (a manual pull restarts it on the new image).
+    offered = _parse_release(get_setting(db, _AVAILABLE_VERSION_KEY, ""))
+    running = _running_rank()
+    if offered is not None and running is not None and running >= offered:
+        set_setting(db, "update_available", "0")
+        set_setting(db, _AVAILABLE_VERSION_KEY, "")
+        log.info("Running version now matches the offered update; "
+                 "clearing stale update flag")
         return
     remote = get_setting(db, "update_remote_digest", "")
     if not remote:

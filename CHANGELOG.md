@@ -10,6 +10,44 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-25
+
+**Update checks now offer only newer versions, and fresh installs start and
+update cleanly.** Upgrading needs no changes, but check that `PROJECT_DIR`
+in `.env` is the folder holding `docker-compose.yml`, or the **Update**
+button cannot restart the stack. New installs should use this release's
+`docker-compose.yml`.
+
+### Fixed
+
+- **README: the Quick start sets `PROJECT_DIR`.** The steps left it empty in
+  `.env`, so the in-app **Update** button could pull new images but not
+  restart the stack ("PROJECT_DIR is not set", or, with a wrong folder, the
+  `beacon_updater` container failing with "no configuration file provided").
+  The Quick start now sets it to the install folder, as `setup.sh` does.
+  Existing installs: make sure `PROJECT_DIR` in `.env` is the folder holding
+  `docker-compose.yml`, then run `docker compose up -d` once.
+
+- **The SMB container starts on a fresh install.** On a new server with no
+  existing Docker volumes, `docker compose up -d` could fail to start
+  `beacon_smb` with "make mountpoint /srv/install/drivers: read-only file
+  system", depending on which container started first; running it again
+  worked. `docker-compose.yml` now starts `smb` after `web`. Existing installs
+  were not affected and need nothing; new installs should use this release's
+  `docker-compose.yml`.
+
+- **Beta updates offer only a newer version.** With **Include beta versions**
+  on, a stable install was told an update was available and would have
+  installed the last beta, which was older (v0.8.0 was offered
+  v0.8.0-beta.6), and a beta install was never offered the newer stable
+  release. The update check now compares version numbers from the GitHub
+  releases, a release counting as newer than its own betas, and moves to
+  whichever of the latest beta and the latest release is newer; the
+  **Update available** badge names that version. The same comparison covers
+  the stable channel, so turning beta updates off on a beta newer than the
+  latest release no longer offers the older release. `latest` (main-branch)
+  installs are compared as before.
+
 ## [0.8.0] - 2026-10-20
 
 **A netboot catalog adds installers and live desktops for the main distros
@@ -877,7 +915,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1

@@ -8,12 +8,12 @@
 [![Issues](https://img.shields.io/github/issues/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/issues)
 [![Stars](https://img.shields.io/github/stars/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/stargazers)
 [![Forks](https://img.shields.io/github/forks/acebmxer/beacon_pxe)](https://github.com/acebmxer/beacon_pxe/forks)
-[![Unique cloners](https://img.shields.io/badge/unique%20cloners-125-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
+[![Unique cloners](https://img.shields.io/badge/unique%20cloners-205-brightgreen)](https://github.com/acebmxer/beacon_pxe/graphs/traffic)
 [![Python](https://img.shields.io/badge/python-3.12-3776AB?logo=python&logoColor=white)](web/Dockerfile)
 [![FastAPI](https://img.shields.io/badge/fastapi-web%20console-009688?logo=fastapi&logoColor=white)](web/requirements.txt)
 [![Docker](https://img.shields.io/badge/docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
 [![Platform: Linux](https://img.shields.io/badge/platform-linux-333333?logo=linux&logoColor=white)](#quick-start)
-[![Tests](https://img.shields.io/badge/tests-366%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
+[![Tests](https://img.shields.io/badge/tests-373%20unit-informational)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![Lint: Ruff](https://img.shields.io/badge/lint-ruff-D7FF64?logo=ruff&logoColor=black)](web/ruff.toml)
 [![Security: Trivy](https://img.shields.io/badge/security-trivy%20scanned-1904DA?logo=aqua&logoColor=white)](https://github.com/acebmxer/beacon_pxe/actions/workflows/ci.yml)
 [![PXE: BIOS + UEFI](https://img.shields.io/badge/pxe-BIOS%20%2B%20UEFI-informational)](#dhcp-modes)
@@ -31,6 +31,7 @@ Prebuilt images are on GHCR, so you only need the compose file and an `.env`:
 mkdir beacon && cd beacon
 curl -O https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/docker-compose.yml
 curl -o .env https://raw.githubusercontent.com/acebmxer/beacon_pxe/main/.env.example
+sed -i "s|^PROJECT_DIR=.*|PROJECT_DIR=$(pwd)|" .env  # this folder; the Update button restarts the stack from it
 sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(openssl rand -hex 32)|" .env  # else everyone is signed out on each restart
 # edit .env: SERVER_IP, BOOT_INTERFACE, ADMIN_PASSWORD (leave blank to auto-generate)
 mkdir -p data/drivers
@@ -93,8 +94,9 @@ docker compose down -v                        # stop + drop unpacked-image volum
 
 The admin UI can self-update too (**Settings → Updates**). `BEACON_TAG` in `.env`
 selects the channel: `stable` (releases) or `latest` (rolling `main`). Turn on
-**Include beta versions** under **Settings → Updates** to be offered the beta
-builds published by hand from `dev` (pre-release) instead.
+**Include beta versions** under **Settings → Updates** to also be offered the beta
+builds published by hand from `dev` (pre-release): whichever of the latest beta
+and the latest release is newer.
 
 **Server Settings → Backup & restore** downloads the database (users, settings,
 image metadata) as `beacon-backup.db`, and restores one. It is a configuration

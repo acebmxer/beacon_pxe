@@ -2,6 +2,11 @@
 
 Thanks for helping. A few rules keep pull requests easy to merge.
 
+## Reporting a bug or asking for a feature
+
+Open an issue and pick **Bug report** or **Feature request**. Fill in the
+version and logs sections; they are usually what a fix depends on.
+
 ## Open pull requests against `dev`, not `main`
 
 All work lands on `dev` first. `main` only receives `dev` when a release is

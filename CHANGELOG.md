@@ -10,6 +10,14 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-10-25
+
+**Update checks now offer only newer versions, and fresh installs start and
+update cleanly.** Upgrading needs no changes, but check that `PROJECT_DIR`
+in `.env` is the folder holding `docker-compose.yml`, or the **Update**
+button cannot restart the stack. New installs should use this release's
+`docker-compose.yml`.
+
 ### Fixed
 
 - **README: the Quick start sets `PROJECT_DIR`.** The steps left it empty in
@@ -907,7 +915,8 @@ Once 0.2.1 is running, the in-app update button works as intended.
 - Distribution as prebuilt GHCR images, so a deployment needs only the compose
   file and a `.env` — no repo checkout or local build.
 
-[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.2...v0.8.0
 [0.7.2]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/acebmxer/beacon_pxe/compare/v0.7.0...v0.7.1

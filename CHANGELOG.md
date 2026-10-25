@@ -12,6 +12,14 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ### Fixed
 
+- **The SMB container starts on a fresh install.** On a new server with no
+  existing Docker volumes, `docker compose up -d` could fail to start
+  `beacon_smb` with "make mountpoint /srv/install/drivers: read-only file
+  system", depending on which container started first; running it again
+  worked. `docker-compose.yml` now starts `smb` after `web`. Existing installs
+  were not affected and need nothing; new installs should use this release's
+  `docker-compose.yml`.
+
 - **Beta updates offer only a newer version.** With **Include beta versions**
   on, a stable install was told an update was available and would have
   installed the last beta, which was older (v0.8.0 was offered

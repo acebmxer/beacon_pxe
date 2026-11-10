@@ -11,7 +11,7 @@ sqlalchemy==2.1.6
 # unmaintained and held bcrypt at 4.0.x; hashes passlib made still verify.
 bcrypt==5.0.0
 # 0.0.32 fixes the multipart/urlencoded parser DoS and path-traversal advisories.
-python-multipart==0.0.32
+python-multipart==0.0.33
 itsdangerous==2.2.0
 # TOTP second-factor authentication (RFC 6238).
 pyotp==2.10.0

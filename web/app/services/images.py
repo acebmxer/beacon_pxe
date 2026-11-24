@@ -170,6 +170,16 @@ def _extract_one(iso: Path, member: str, dest: Path) -> None:
         )
 
 
+def _read_text(iso: Path, member: str, limit: int = 65536) -> str:
+    """A small text member of the ISO (a boot loader's config), at most limit
+    bytes of it, without writing it to disk."""
+    out = subprocess.run(
+        ["bsdtar", "-xOf", str(iso), "--", member],
+        capture_output=True, check=True,
+    ).stdout
+    return out[:limit].decode("utf-8", "replace")
+
+
 def _extract_one_7z(iso: Path, member: str, dest: Path) -> None:
     """Extract one member to dest via 7z (for UDF ISOs bsdtar can't read)."""
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -244,12 +254,20 @@ def _extract_tree_7z(iso: Path, dest: Path) -> None:
     )
 
 
+# FreeLoader, the ReactOS boot loader, at its fixed place on ReactOS-family
+# ISOs: freeldr.sys starts a live disc, setupldr.sys an install disc.
+REACTOS_LOADERS = frozenset({"loader/freeldr.sys", "loader/setupldr.sys"})
+
+
 def _detect_family(entries: list[str]) -> str:
     """Windows install ISOs carry sources/*.wim and a root-level bootmgr.
 
     XCP-NG / XenServer ISOs carry the Xen hypervisor (boot/xen.gz) plus a
     root-level install.img — these boot via Xen multiboot, not a plain Linux
     kernel+initrd, so they need their own handling.
+
+    ReactOS-family ISOs (ReactOS, LiberNT) carry FreeLoader in loader/ and are
+    booted whole (see _process_reactos).
 
     Match precisely: a loose endswith("bootmgr") wrongly flags Ubuntu, whose
     pool contains the 'efibootmgr' package path.
@@ -258,6 +276,11 @@ def _detect_family(entries: list[str]) -> str:
     # XCP-NG: Xen multiboot installer.
     if any(p in norm for p in ("boot/xen.gz", "boot/xen.gz.")) and "install.img" in norm:
         return "xcpng"
+    # ReactOS and its forks (LiberNT): FreeLoader in loader/ (freeldr.sys on
+    # live discs, setupldr.sys on install discs). No Linux kernel to extract;
+    # the whole ISO is booted instead.
+    if norm & REACTOS_LOADERS:
+        return "reactos"
     for el in norm:
         base = el.rsplit("/", 1)[-1]
         # Definitive Windows markers.
@@ -787,6 +810,62 @@ def _process_windows(db, img: Image, iso: Path, entries: list[str]) -> None:
     db.commit()
 
 
+def _freeldr_boots_from_ram(ini: str) -> bool | None:
+    """Whether FreeLoader's default entry runs the system from a RAM disk.
+
+    True: SystemPath is ramdisk(...), so FreeLoader copies the whole disc into
+    memory and the system never looks for the CD again. False: it runs from
+    the CD, which a client booting the ISO over HTTP has only until the
+    system's own drivers take over. None: no default entry to read.
+    """
+    sections: dict[str, dict[str, str]] = {}
+    current = None
+    for raw in ini.splitlines():
+        line = raw.split(";", 1)[0].strip()
+        if line.startswith("[") and line.endswith("]"):
+            current = sections.setdefault(line[1:-1].strip().lower(), {})
+        elif current is not None and "=" in line:
+            key, value = line.split("=", 1)
+            current[key.strip().lower()] = value.strip().strip('"')
+    default = sections.get("freeloader", {}).get("defaultos", "").lower()
+    path = sections.get(default, {}).get("systempath")
+    if not path:
+        return None
+    return path.lower().startswith("ramdisk(")
+
+
+def _process_reactos(db, img: Image, iso: Path, entries: list[str]) -> None:
+    """Prepare a ReactOS-family ISO (ReactOS, LiberNT): nothing to extract.
+
+    FreeLoader boots these from the disc itself, so the menu entry hands the
+    whole ISO to iPXE's sanboot (services.ipxe), which nginx serves from
+    /images/. The client sees it as a CD. The ISO is kept as the only boot file.
+    """
+    from_ram = None
+    ini = _match(entries, [r"freeldr\.ini"])
+    if ini is not None:
+        try:
+            from_ram = _freeldr_boots_from_ram(_read_text(iso, ini))
+        except subprocess.CalledProcessError:
+            log.warning("Image %s: could not read %s", img.name, ini)
+    img.kernel_path = ""
+    img.initrd_path = ""
+    img.boot_args = ""
+    img.status = "ready"
+    if from_ram:
+        img.message = ("ReactOS-family ISO, booted whole over HTTP; it loads "
+                       "itself into the client's memory, so the client needs "
+                       "more RAM than the ISO's size")
+    elif from_ram is False:
+        img.message = ("ReactOS-family ISO, booted whole over HTTP. Its default "
+                       "boot entry runs from the CD, which a network-booted "
+                       "client loses once the system starts, so it may stop "
+                       "there")
+    else:
+        img.message = "ReactOS-family ISO, booted whole over HTTP"
+    db.commit()
+
+
 def _netboot_plan(
     entries: list[str], filename: str, image_id: int
 ) -> tuple[bool, list[tuple[str, str]], str]:
@@ -1092,12 +1171,19 @@ def process_image(image_id: int) -> None:
             log.info("Image %s ready (%s)", img.name, family)
             return
 
+        if family == "reactos":
+            _process_reactos(db, img, iso, entries)
+            ipxe.render(db)
+            log.info("Image %s ready (%s)", img.name, family)
+            return
+
         kernel = _match(entries, KERNEL_PATTERNS)
         initrd = _match(entries, INITRD_PATTERNS)
         if not kernel or not initrd:
             img.status = "error"
-            img.message = ("Could not locate kernel/initrd in ISO. You may set "
-                           "paths manually after checking the ISO layout.")
+            img.message = ("No Linux kernel and initrd found in this ISO, and it "
+                           "is not a Windows, XCP-NG or ReactOS-family ISO, so "
+                           "Beacon cannot boot it.")
             db.commit()
             return
         # Keep the initrd on the same kernel flavour (multi-kernel Arch ISOs).
@@ -1239,6 +1325,9 @@ def _required_paths(img: Image) -> list[Path]:
         # serves — WinPE starts without it and then fails to find setup.exe.
         paths += [dest_dir / "bcd", dest_dir / "boot.sdi"]
         paths.append(config.SMB_DIR / str(img.id))
+    elif img.os_family == "reactos":
+        # Booted whole: the uploaded ISO is the only boot file.
+        paths.append(iso_path(img.filename))
     else:
         # Linux: whatever the boot args send the client to beyond kernel+initrd.
         args = img.boot_args or ""

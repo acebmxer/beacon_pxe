@@ -10,6 +10,20 @@ to do differently. Internal refactors that change nothing observable are omitted
 
 ## [Unreleased]
 
+### Added
+
+- **ReactOS-family ISOs boot (#66).** Uploading a ReactOS or LiberNT ISO used to
+  end in "Could not locate kernel/initrd in ISO". Beacon now recognises these
+  ISOs and boots the whole ISO over HTTP from the boot menu. The client needs
+  more RAM than the ISO's size, and an ISO whose default boot entry runs from
+  the CD is marked as one that may stop once the system starts. An image that
+  failed this way only needs **Reprocess**.
+
+### Changed
+
+- **Clearer message for an ISO Beacon cannot boot.** It no longer tells you to
+  set the kernel paths by hand, which no page lets you do.
+
 ## [0.8.1] - 2026-10-25
 
 **Update checks now offer only newer versions, and fresh installs start and

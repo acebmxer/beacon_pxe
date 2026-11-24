@@ -100,6 +100,21 @@ class TestRenderWithImages:
         assert "chain" in text
         assert "bootx64.efi" in text
 
+    def test_reactos_sanboots_the_whole_iso(self, db):
+        img = _add_image(db, os_family="reactos", filename="LiberNT10.0-045.iso",
+                         kernel_path="", initrd_path="")
+        text = ipxe.render(db)
+        assert ("sanboot ${boot-url}/images/LiberNT10.0-045.iso || goto start"
+                in text)
+        assert "kernel ${boot-url}/ " not in text
+
+    def test_reactos_file_name_cannot_break_the_command(self, db):
+        # A restored backup can carry any file name.
+        _add_image(db, os_family="reactos", filename="../a b;${x}#.iso",
+                   kernel_path="", initrd_path="")
+        text = ipxe.render(db)
+        assert "sanboot ${boot-url}/images/a%20b%3B%24%7Bx%7D%23.iso || goto start" in text
+
 
 class TestDefaultAndTimeout:
     def test_default_image_sets_timeout(self, db):

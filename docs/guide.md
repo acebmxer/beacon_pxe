@@ -88,7 +88,9 @@ host still uses `BEACON_TAG` from `.env`.
 ## How images boot
 
 Upload format is `.iso` only. On upload the kernel + initrd are extracted (via
-`bsdtar`; `7z` for the UDF ISOs modern Windows uses) and served over HTTP; the
+`bsdtar`; `7z` for the UDF ISOs modern Windows uses) and served over HTTP
+(ReactOS-family ISOs are booted whole instead, see
+[ReactOS and LiberNT](#reactos-and-libernt)); the
 raw ISO is kept at `/images/<file>.iso`; uploading a second ISO with a name
 already in use saves it as `<file>-2.iso`, `<file>-3.iso`, and so on. A
 best-effort kernel command line is
@@ -300,6 +302,20 @@ EFI binary per image (`grub-mkstandalone`) and chainloads it; GRUB fetches
 `xen.gz`, `vmlinuz`, and `install.img` over HTTP. The server IP is baked into that
 binary, so changing **Server IP** rebuilds it. Pass an answerfile via boot args
 for unattended installs (`answerfile=http://.../answerfile.xml install`).
+
+## ReactOS and LiberNT
+
+ISOs with ReactOS's boot loader (FreeLoader, `loader/freeldr.sys` or
+`loader/setupldr.sys`), such as ReactOS and LiberNT, have no kernel to extract.
+Beacon keeps the ISO and its menu entry boots the whole ISO with iPXE's `sanboot`,
+read over HTTP from `/images/<file>.iso`; the client sees it as a CD. Nothing is
+unpacked, and **boot args** are not used.
+
+The client only gets past startup if the ISO's default boot entry loads the disc
+into memory (LiberNT's does). Once the system's own drivers start, a client booted
+over the network has no CD to read from. The Images page says which kind the ISO is
+after it is processed. A client running from memory needs more RAM than the ISO's
+size.
 
 ## Image storage on NFS/SMB
 

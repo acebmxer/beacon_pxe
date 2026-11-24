@@ -419,3 +419,90 @@ def test_restart_keeps_an_installer_made_before_nfs_ready(client, tmp_path,
     finally:
         db.close()
     assert _image(img.id).status == "ready"
+
+
+# ReactOS-family ISOs (#66): members as bsdtar lists them on LiberNT10.0-045.iso,
+# and its freeldr.ini, whose default entry runs from a RAM disk.
+_LIBERNT = [
+    "./freeldr.ini", "./loader/", "./loader/freeldr.sys", "./loader/isoboot.bin",
+    "./efi/boot/bootx64.efi", "./Windows/system32/ntoskrnl.exe", "./setup.exe",
+]
+_LIBERNT_INI = """[FREELOADER]
+DefaultOS=LiveImg_RamDisk_Normal
+TimeOut=5
+
+[Operating Systems]
+LiveImg_RamDisk_Normal="LiberNT"
+
+[LiveImg_RamDisk_Normal]
+BootType=Windows2003
+SystemPath=ramdisk(0)\\Windows
+Options=/FASTDETECT /MININT /RDPATH= /RDRAMSIZE=64M
+"""
+_FROM_CD_INI = """[FREELOADER]
+DefaultOS=LiveCD
+
+[LiveCD]
+BootType=Windows2003
+SystemPath=multi(0)disk(0)cdrom(0)\\reactos ; the disc itself
+"""
+
+
+@pytest.fixture
+def reactos_iso(fake_iso, monkeypatch):
+    def run(entries, ini=_LIBERNT_INI):
+        monkeypatch.setattr(image_svc, "_read_text", lambda iso, member: ini)
+        return fake_iso(entries)
+    return run
+
+
+def test_libernt_iso_boots_whole_with_sanboot(reactos_iso):
+    img = reactos_iso(_LIBERNT)
+    assert img.status == "ready", img.message
+    assert img.os_family == "reactos"
+    assert (img.kernel_path, img.initrd_path, img.boot_args) == ("", "", "")
+    assert "memory" in img.message
+    menu = (app_config.BOOTROOT_DIR / "boot.ipxe").read_text()
+    assert "sanboot ${boot-url}/images/fedora.iso || goto start" in menu
+    # Nothing is extracted for it.
+    assert not (app_config.BOOTROOT_DIR / image_svc.EXTRACT_SUBDIR
+                / str(img.id)).exists()
+
+
+def test_reactos_install_disc_is_recognised(reactos_iso):
+    img = reactos_iso(["./loader/setupldr.sys", "./reactos/txtsetup.sif"],
+                      ini=None)
+    assert img.status == "ready", img.message
+    assert img.os_family == "reactos"
+
+
+def test_reactos_iso_running_from_the_cd_is_flagged(reactos_iso):
+    img = reactos_iso(_LIBERNT, ini=_FROM_CD_INI)
+    assert img.status == "ready", img.message
+    assert "may stop" in img.message
+
+
+def test_iso_with_nothing_bootable_says_beacon_cannot_boot_it(fake_iso):
+    img = fake_iso(["./readme.txt", "./data/file.bin"])
+    assert img.status == "error"
+    assert img.os_family == "linux"
+    assert "cannot boot it" in img.message
+    # There is no page to set kernel paths by hand.
+    assert "manually" not in img.message
+
+
+def test_restart_keeps_a_reactos_iso_ready_while_the_iso_is_there(reactos_iso,
+                                                                  image_dir):
+    from app.db import SessionLocal
+    img = reactos_iso(_LIBERNT)
+    db = SessionLocal()
+    try:
+        assert image_svc.reconcile_statuses(db) == 0
+        assert _image(img.id).status == "ready"
+        (image_dir / "fedora.iso").unlink()
+        assert image_svc.reconcile_statuses(db) == 1
+    finally:
+        db.close()
+    img = _image(img.id)
+    assert img.status == image_svc.NEEDS_REPROCESS
+    assert "upload the ISO again" in img.message

@@ -109,7 +109,7 @@ class Image(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(128))
     filename: Mapped[str] = mapped_column(String(255))          # ISO file on disk
-    os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows|xcpng
+    os_family: Mapped[str] = mapped_column(String(32), default="linux")  # linux|windows|xcpng|reactos
     # Extraction lifecycle: pending|processing|ready|error|needs_reprocess
     # (needs_reprocess is set at startup when a ready image's extracted files
     # are gone -- see services.images.reconcile_statuses), plus deleting for an

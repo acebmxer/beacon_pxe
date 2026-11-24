@@ -6,6 +6,8 @@ CONSOLE_FRAMEBUFFER (see dnsmasq/Dockerfile) so the menu runs in plain VGA text
 mode, where the arrow keys decode correctly for navigating the choices.
 """
 import logging
+from pathlib import Path
+from urllib.parse import quote
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -172,6 +174,23 @@ def _windows_label(tag: str, img: Image, base_url: str) -> str:
     )
 
 
+def _reactos_label(tag: str, img: Image, base_url: str) -> str:
+    """Boot a ReactOS-family ISO (ReactOS, LiberNT) whole with sanboot.
+
+    iPXE presents the ISO, read over HTTP from nginx's /images/, as a CD;
+    FreeLoader starts from it as from a real disc. The file name is
+    percent-encoded so no character in it can end the command or expand an
+    iPXE setting.
+    """
+    name = quote(Path(img.filename or "").name)
+    return (
+        f":{tag}\n"
+        + _track(tag, img, base_url)
+        + f"echo Booting {_text(img.name)} (whole ISO) ...\n"
+        f"sanboot {base_url}/images/{name} || goto start\n"
+    )
+
+
 def _image_entries(images: list[Image]) -> tuple[str, str]:
     """Return (menu items, boot labels) for ready, enabled images."""
     items = []
@@ -187,6 +206,9 @@ def _image_entries(images: list[Image]) -> tuple[str, str]:
             continue
         if img.os_family == "windows":
             labels.append(_windows_label(tag, img, base_url))
+            continue
+        if img.os_family == "reactos":
+            labels.append(_reactos_label(tag, img, base_url))
             continue
         kernel = f"{base_url}/{_ipxe_safe(img.kernel_path, allow_settings=True)}"
         initrd = f"{base_url}/{_ipxe_safe(img.initrd_path, allow_settings=True)}"

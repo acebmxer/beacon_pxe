@@ -20,7 +20,7 @@
 
 A self-hosted PXE/iPXE boot server with a login-protected web console. It
 netboots **BIOS and UEFI** clients from a single menu, turns uploaded **ISOs**
-into boot entries (Linux, Windows, XCP-NG), and runs as a small Docker Compose
+into boot entries (Linux, Windows, XCP-NG, ReactOS/LiberNT), and runs as a small Docker Compose
 stack.
 
 ## Quick start
@@ -63,7 +63,8 @@ Chosen in the wizard, changeable under **Server Settings**:
 
 Upload an `.iso` in the web UI and it becomes a boot-menu entry — the kernel and
 initrd are extracted automatically. Linux, **Windows** (installer via WinPE),
-and **XCP-NG** are supported. Entries can be enabled/disabled and have their boot
+**XCP-NG** and **ReactOS-family** ISOs such as LiberNT (booted whole) are
+supported. Entries can be enabled/disabled and have their boot
 args edited, and several can be ticked to reprocess or delete together. For an installer or live desktop without keeping an ISO, **Add from a
 netboot catalog** keeps just the boot files (and, for a live desktop, its root
 filesystem) for Debian, Ubuntu and its flavours, Fedora and its spins, Rocky Linux,
@@ -81,7 +82,7 @@ highlighted, flagged with a ★, and is the only thing that starts the countdown
 (timeout set under **Server Settings**, `0` disables it). With nothing marked,
 the menu waits for a human instead of booting anything on its own.
 
-Details — per-distro boot args, how Windows/XCP-NG boot, driver staging, the
+Details — per-distro boot args, how Windows/XCP-NG/ReactOS boot, driver staging, the
 service architecture — are in **[docs/guide.md](docs/guide.md)**.
 
 ## Updating
